@@ -40,10 +40,8 @@ fn test_start_stop() {
 fn test_prefix_match_suggestions() {
     ghost_suggestor::stop();
     let config = GhostSuggestorConfig {
-        enabled: true,
         debounce_ms: 0,
-        offset_x: 0,
-        offset_y: 20,
+        ..Default::default()
     };
     ghost_suggestor::start(config, make_library());
 
@@ -62,10 +60,8 @@ fn test_prefix_match_suggestions() {
 fn test_prefix_match_partial_trigger() {
     ghost_suggestor::stop();
     let config = GhostSuggestorConfig {
-        enabled: true,
         debounce_ms: 0,
-        offset_x: 0,
-        offset_y: 20,
+        ..Default::default()
     };
     ghost_suggestor::start(config, make_library());
 
@@ -85,10 +81,8 @@ fn test_prefix_match_partial_trigger() {
 fn test_prefix_match_case_insensitive() {
     ghost_suggestor::stop();
     let config = GhostSuggestorConfig {
-        enabled: true,
         debounce_ms: 0,
-        offset_x: 0,
-        offset_y: 20,
+        ..Default::default()
     };
     ghost_suggestor::start(config, make_library());
 
@@ -107,10 +101,8 @@ fn test_prefix_match_case_insensitive() {
 fn test_empty_buffer_no_suggestions() {
     ghost_suggestor::stop();
     let config = GhostSuggestorConfig {
-        enabled: true,
         debounce_ms: 0,
-        offset_x: 0,
-        offset_y: 20,
+        ..Default::default()
     };
     ghost_suggestor::start(config, make_library());
 
@@ -127,10 +119,8 @@ fn test_empty_buffer_no_suggestions() {
 fn test_no_match_suggestions() {
     ghost_suggestor::stop();
     let config = GhostSuggestorConfig {
-        enabled: true,
         debounce_ms: 0,
-        offset_x: 0,
-        offset_y: 20,
+        ..Default::default()
     };
     ghost_suggestor::start(config, make_library());
 
@@ -148,10 +138,8 @@ fn test_no_match_suggestions() {
 fn test_update_library_refreshes_suggestions() {
     ghost_suggestor::stop();
     let config = GhostSuggestorConfig {
-        enabled: true,
         debounce_ms: 0,
-        offset_x: 0,
-        offset_y: 20,
+        ..Default::default()
     };
     let mut lib = HashMap::new();
     lib.insert("Cat".to_string(), vec![Snippet::new("old", "Old content")]);
@@ -182,10 +170,8 @@ fn test_update_library_refreshes_suggestions() {
 fn test_cycle_selection_forward() {
     ghost_suggestor::stop();
     let config = GhostSuggestorConfig {
-        enabled: true,
         debounce_ms: 0,
-        offset_x: 0,
-        offset_y: 20,
+        ..Default::default()
     };
     ghost_suggestor::start(config, make_library());
 
@@ -205,8 +191,7 @@ fn test_disabled_returns_no_suggestions() {
     let config = GhostSuggestorConfig {
         enabled: false,
         debounce_ms: 0,
-        offset_x: 0,
-        offset_y: 20,
+        ..Default::default()
     };
     ghost_suggestor::start(config, make_library());
 

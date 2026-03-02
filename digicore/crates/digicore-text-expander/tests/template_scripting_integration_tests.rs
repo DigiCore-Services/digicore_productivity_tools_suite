@@ -3,7 +3,7 @@
 //! End-to-end tests: template with {js:}, {http:}, {clipboard}, {uuid}, {random:N}, {run:}; assert output.
 
 use digicore_text_expander::application::scripting::{
-    get_scripting_config, set_scripting_config, BoaScriptEngine, MockHttpFetcher, ScriptingConfig,
+    set_scripting_config, BoaScriptEngine, MockHttpFetcher, ScriptingConfig,
     ScriptingRegistry, set_registry,
 };
 use digicore_text_expander::application::template_processor::{
@@ -98,10 +98,10 @@ fn integration_uuid_random() {
 #[serial_test::serial]
 #[cfg(target_os = "windows")]
 fn integration_run_allowed() {
-    let mut cfg = get_scripting_config();
+    let mut cfg = ScriptingConfig::default();
     cfg.run.disabled = false;
     cfg.run.allowlist = "cmd".to_string();
-    set_scripting_config(cfg);
+    set_scripting_config(cfg.clone());
 
     let config = default_config();
     let template = "{run:cmd /c echo OK}";

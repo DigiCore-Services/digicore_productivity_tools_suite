@@ -226,6 +226,51 @@ pub fn process_with_user_vars(
     )
 }
 
+/// Substitute {key:...} and {wait:...} with [KEY:...] and [WAIT:...ms] for preview display (AHK-style).
+fn substitute_key_wait_for_preview(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut i = 0;
+    let bytes = s.as_bytes();
+    while i < bytes.len() {
+        if bytes[i] == b'{' {
+            let rest = &s[i..];
+            if let Some(inner) = rest.strip_prefix("{key:") {
+                if let Some(end) = inner.find('}') {
+                    let key_name = inner[..end].trim();
+                    result.push_str(&format!("[KEY:{}]", key_name));
+                    i += 5 + end + 1;
+                    continue;
+                }
+            }
+            if let Some(inner) = rest.strip_prefix("{wait:") {
+                if let Some(end) = inner.find('}') {
+                    let ms = inner[..end].trim();
+                    result.push_str(&format!("[WAIT:{}ms]", ms));
+                    i += 6 + end + 1;
+                    continue;
+                }
+            }
+        }
+        let ch = s[i..].chars().next().unwrap_or('\0');
+        let ch_len = ch.len_utf8();
+        result.push(ch);
+        i += ch_len;
+    }
+    result
+}
+
+/// Process content for Preview Expansion: resolves placeholders, then substitutes {key:}/{wait:} as [KEY:...]/[WAIT:...ms].
+/// {run:} executes with allowlist (same as expansion).
+pub fn process_for_preview(
+    content: &str,
+    current_clipboard: Option<&str>,
+    clip_history: &[String],
+    user_vars: Option<&std::collections::HashMap<String, String>>,
+) -> String {
+    let processed = process_with_user_vars(content, current_clipboard, clip_history, user_vars);
+    substitute_key_wait_for_preview(&processed)
+}
+
 /// Process with explicit config (for tests).
 pub fn process_with_config(
     content: &str,
@@ -509,6 +554,12 @@ mod tests {
         let config = TemplateConfig::default();
         let out = process_with_config("Hello {var:name} world", &config, None, &[]);
         assert_eq!(out, "Hello {var:name} world");
+    }
+
+    #[test]
+    fn test_process_for_preview_key_wait_substitution() {
+        let out = process_for_preview("Hello {key:Enter} world {wait:500} done", None, &[], None);
+        assert_eq!(out, "Hello [KEY:Enter] world [WAIT:500ms] done");
     }
 
     #[test]

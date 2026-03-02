@@ -43,6 +43,8 @@ static CLIP_ENABLED: AtomicBool = AtomicBool::new(false);
 static CLIP_THREAD: Mutex<Option<thread::JoinHandle<()>>> = Mutex::new(None);
 
 /// Start clipboard history monitoring (F38).
+/// On Windows: uses WM_CLIPBOARDUPDATE listener (AHK parity - captures App/Window Title).
+/// On other platforms: uses poll loop.
 pub fn start(config: ClipboardHistoryConfig) {
     CLIP_ENABLED.store(config.enabled, Ordering::SeqCst);
     *CLIP_STATE.lock().unwrap() = Some(Arc::new(Mutex::new(ClipboardHistoryState {
@@ -52,9 +54,27 @@ pub fn start(config: ClipboardHistoryConfig) {
     })));
 
     if config.enabled {
-        let state = CLIP_STATE.lock().unwrap().clone().unwrap();
-        let handle = thread::spawn(move || run_poll_loop(state));
-        *CLIP_THREAD.lock().unwrap() = Some(handle);
+        #[cfg(target_os = "windows")]
+        {
+            if let Err(_) = crate::platform::windows_clipboard_listener::start_clipboard_listener(
+                move |text, process_name, window_title| {
+                    if !is_suppressed() {
+                        add_entry(text, &process_name, &window_title);
+                    }
+                },
+            ) {
+                // Fallback to poll loop if listener fails
+                let state = CLIP_STATE.lock().unwrap().clone().unwrap();
+                let handle = thread::spawn(move || run_poll_loop(state));
+                *CLIP_THREAD.lock().unwrap() = Some(handle);
+            }
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let state = CLIP_STATE.lock().unwrap().clone().unwrap();
+            let handle = thread::spawn(move || run_poll_loop(state));
+            *CLIP_THREAD.lock().unwrap() = Some(handle);
+        }
     }
 }
 
@@ -217,6 +237,31 @@ pub fn request_promote(content: String) {
     }
 }
 
+/// Remove entry at index (0-based; matches get_entries() order).
+pub fn delete_entry_at(index: usize) {
+    if let Ok(guard) = CLIP_STATE.lock() {
+        if let Some(ref state) = *guard {
+            if let Ok(mut s) = state.lock() {
+                if index < s.entries.len() {
+                    s.entries.remove(index);
+                }
+            }
+        }
+    }
+}
+
+/// Clear all clipboard history entries.
+pub fn clear_all() {
+    if let Ok(guard) = CLIP_STATE.lock() {
+        if let Some(ref state) = *guard {
+            if let Ok(mut s) = state.lock() {
+                s.entries.clear();
+                s.last_content = None;
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -317,5 +362,162 @@ mod tests {
         stop();
         let entries = get_entries();
         assert!(entries.is_empty());
+    }
+
+    #[test]
+    #[serial]
+    fn test_delete_entry_at() {
+        stop();
+        start(ClipboardHistoryConfig {
+            enabled: true,
+            max_depth: 10,
+        });
+        add_entry("a".to_string(), "app", "win");
+        add_entry("b".to_string(), "app", "win");
+        add_entry("c".to_string(), "app", "win");
+        let entries = get_entries();
+        assert_eq!(entries.len(), 3);
+
+        delete_entry_at(1);
+        let entries = get_entries();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].content, "c");
+        assert_eq!(entries[1].content, "a");
+
+        delete_entry_at(0);
+        let entries = get_entries();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].content, "a");
+
+        delete_entry_at(0);
+        let entries = get_entries();
+        assert!(entries.is_empty());
+
+        stop();
+    }
+
+    #[test]
+    #[serial]
+    fn test_delete_entry_at_out_of_bounds() {
+        stop();
+        start(ClipboardHistoryConfig {
+            enabled: true,
+            max_depth: 5,
+        });
+        add_entry("x".to_string(), "app", "win");
+        delete_entry_at(99);
+        let entries = get_entries();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].content, "x");
+        stop();
+    }
+
+    #[test]
+    #[serial]
+    fn test_clear_all() {
+        stop();
+        start(ClipboardHistoryConfig {
+            enabled: true,
+            max_depth: 10,
+        });
+        add_entry("a".to_string(), "app", "win");
+        add_entry("b".to_string(), "app", "win");
+        add_entry("c".to_string(), "app", "win");
+        let entries = get_entries();
+        assert_eq!(entries.len(), 3);
+
+        clear_all();
+        let entries = get_entries();
+        assert!(entries.is_empty());
+
+        add_entry("new".to_string(), "app", "win");
+        let entries = get_entries();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].content, "new");
+
+        stop();
+    }
+
+    #[test]
+    #[serial]
+    fn test_add_entry_with_metadata() {
+        stop();
+        start(ClipboardHistoryConfig {
+            enabled: true,
+            max_depth: 10,
+        });
+        add_entry("content from notepad".to_string(), "notepad.exe", "Untitled - Notepad");
+        add_entry("content from terminal".to_string(), "WindowsTerminal.exe", "PowerShell");
+        let entries = get_entries();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].content, "content from terminal");
+        assert_eq!(entries[0].process_name, "WindowsTerminal.exe");
+        assert_eq!(entries[0].window_title, "PowerShell");
+        assert_eq!(entries[1].content, "content from notepad");
+        assert_eq!(entries[1].process_name, "notepad.exe");
+        assert_eq!(entries[1].window_title, "Untitled - Notepad");
+        stop();
+    }
+
+    #[test]
+    #[serial]
+    fn test_update_config_max_depth_trims() {
+        stop();
+        start(ClipboardHistoryConfig {
+            enabled: true,
+            max_depth: 10,
+        });
+        add_entry("a".to_string(), "app", "win");
+        add_entry("b".to_string(), "app", "win");
+        add_entry("c".to_string(), "app", "win");
+        add_entry("d".to_string(), "app", "win");
+        add_entry("e".to_string(), "app", "win");
+        let entries = get_entries();
+        assert_eq!(entries.len(), 5);
+
+        update_config(ClipboardHistoryConfig {
+            enabled: true,
+            max_depth: 2,
+        });
+        let entries = get_entries();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].content, "e");
+        assert_eq!(entries[1].content, "d");
+        stop();
+    }
+
+    #[test]
+    #[serial]
+    fn test_update_config_disabled() {
+        stop();
+        start(ClipboardHistoryConfig {
+            enabled: true,
+            max_depth: 5,
+        });
+        assert!(is_enabled());
+        update_config(ClipboardHistoryConfig {
+            enabled: false,
+            max_depth: 5,
+        });
+        assert!(!is_enabled());
+        add_entry("should not add".to_string(), "app", "win");
+        let entries = get_entries();
+        assert!(entries.is_empty());
+        stop();
+    }
+
+    #[test]
+    #[serial]
+    fn test_suppress_for_duration_no_panic() {
+        stop();
+        start(ClipboardHistoryConfig {
+            enabled: true,
+            max_depth: 5,
+        });
+        suppress_for_duration(Duration::from_millis(10));
+        add_entry("entry".to_string(), "app", "win");
+        let entries = get_entries();
+        assert_eq!(entries.len(), 1);
+        stop();
     }
 }

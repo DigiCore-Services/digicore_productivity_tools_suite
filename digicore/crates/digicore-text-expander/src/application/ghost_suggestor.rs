@@ -16,6 +16,8 @@ pub struct GhostSuggestorConfig {
     pub enabled: bool,
     /// Debounce delay in ms (F44, default 50).
     pub debounce_ms: u64,
+    /// Display duration in seconds (0 = no auto-hide). AHK parity: configurable.
+    pub display_duration_secs: u64,
     /// Offset X from caret (F46).
     pub offset_x: i32,
     /// Offset Y from caret (F46).
@@ -27,6 +29,7 @@ impl Default for GhostSuggestorConfig {
         Self {
             enabled: true,
             debounce_ms: 50,
+            display_duration_secs: 10,
             offset_x: 0,
             offset_y: 20,
         }
@@ -50,7 +53,12 @@ struct SuggestorState {
     selected_index: usize,
     last_buffer_change: Instant,
     debounce_timer: Option<Instant>,
+    /// When overlay was first shown (for display_duration auto-hide).
+    overlay_shown_at: Option<Instant>,
 }
+
+/// Pending action from overlay buttons (Create Snippet, Ignore).
+static PENDING_CREATE_SNIPPET: Mutex<Option<(String, String)>> = Mutex::new(None);
 
 static SUGGESTOR_STATE: Mutex<Option<Arc<Mutex<SuggestorState>>>> = Mutex::new(None);
 static SUGGESTOR_ENABLED: AtomicBool = AtomicBool::new(false);
@@ -67,6 +75,7 @@ pub fn start(config: GhostSuggestorConfig, library: HashMap<String, Vec<Snippet>
         selected_index: 0,
         last_buffer_change: Instant::now(),
         debounce_timer: None,
+        overlay_shown_at: None,
     })));
 }
 
@@ -349,9 +358,73 @@ pub fn dismiss() {
                 s.suggestions.clear();
                 s.selected_index = 0;
                 s.debounce_timer = None;
+                s.overlay_shown_at = None;
             }
         }
     }
+}
+
+/// Check if overlay should auto-hide (display_duration elapsed). Call when showing overlay.
+/// Returns true if should hide.
+pub fn should_auto_hide() -> bool {
+    let guard = match SUGGESTOR_STATE.lock() {
+        Ok(g) => g,
+        Err(_) => return false,
+    };
+    let state = match guard.as_ref() {
+        Some(s) => s.clone(),
+        None => return false,
+    };
+    drop(guard);
+
+    let mut s = match state.lock() {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+
+    let duration_secs = s.config.display_duration_secs;
+    if duration_secs == 0 {
+        return false;
+    }
+    let shown_at = match s.overlay_shown_at {
+        Some(t) => t,
+        None => {
+            s.overlay_shown_at = Some(Instant::now());
+            return false;
+        }
+    };
+    shown_at.elapsed() >= Duration::from_secs(duration_secs)
+}
+
+/// Mark overlay as shown (call when overlay is first displayed).
+pub fn set_overlay_shown() {
+    if let Ok(guard) = SUGGESTOR_STATE.lock() {
+        if let Some(ref state) = *guard {
+            if let Ok(mut s) = state.lock() {
+                if s.overlay_shown_at.is_none() {
+                    s.overlay_shown_at = Some(Instant::now());
+                }
+            }
+        }
+    }
+}
+
+/// Request Create Snippet (from overlay button). Call with selected content.
+pub fn request_create_snippet(trigger: String, content: String) {
+    if let Ok(mut g) = PENDING_CREATE_SNIPPET.lock() {
+        *g = Some((trigger, content));
+    }
+}
+
+/// Take pending Create Snippet request. Returns (trigger, content) if any.
+pub fn take_pending_create_snippet() -> Option<(String, String)> {
+    let mut g = PENDING_CREATE_SNIPPET.lock().ok()?;
+    g.take()
+}
+
+/// Ignore/Snooze (dismiss for now; same as Cancel).
+pub fn ignore() {
+    dismiss();
 }
 
 /// Check if suggestor has active suggestions (Tab should be consumed).
@@ -376,6 +449,7 @@ mod tests {
         let config = GhostSuggestorConfig::default();
         assert!(config.enabled);
         assert_eq!(config.debounce_ms, 50);
+        assert_eq!(config.display_duration_secs, 10);
     }
 
     #[test]
