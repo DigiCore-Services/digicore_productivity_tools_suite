@@ -684,4 +684,10 @@ Nested placeholders are resolved recursively (e.g. `{js:{var:x} + 1}`).
 
 ---
 
+## Related Documentation
+
+- [Clipboard History](CLIPBOARD_HISTORY.md) - Clipboard History tab, context menu, and `{clip:N}` usage
+
+---
+
 *End of Scripting User Guide*

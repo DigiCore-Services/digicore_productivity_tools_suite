@@ -10,6 +10,9 @@ Cross-platform application ecosystem (Text Expander, Copy-to-Clipboard, Appearan
 - [x] digicore-core crate (domain, ports, JsonLibraryAdapter)
 - [x] CLI proof-of-concept
 - [x] digicore-text-expander: Scripting Engine ({js:}, {http:}), template processor, VariableInputModal
+- [x] egui GUI (Library, Configuration, Clipboard History, Script Library tabs)
+- [x] Clipboard History tab with right-click context menu (Copy, View Full Content, Delete, Promote to Snippet, Clear All)
+- [x] Modals: Promote to Snippet, Snippet Editor, Delete/Clear confirmations, View Full Content
 
 ## Prerequisites
 
@@ -19,6 +22,12 @@ Cross-platform application ecosystem (Text Expander, Copy-to-Clipboard, Appearan
 
 ```bash
 cargo build
+```
+
+## Run GUI (Text Expander)
+
+```bash
+cargo run -p digicore-text-expander
 ```
 
 ## Run CLI (proof-of-concept)
@@ -33,6 +42,21 @@ Or from the workspace root:
 cargo run -p digicore-core --bin cli -- "C:\Users\pinea\Scripts\AHK_AutoHotKey\AHK_-_PROD-MAIN_STARTUP-SCRIPTZ\ACTIVE-Prod-LIVE-Apps\Text-Expansion\text_expansion_library.json"
 ```
 
+## Testing
+
+```bash
+cargo test --workspace
+```
+
+**Test coverage (as of 2026-02-28):**
+
+| Crate | Unit Tests | Integration Tests | Status |
+|-------|------------|-------------------|--------|
+| digicore-core | 0 | 48 | Pass |
+| digicore-text-expander | 90 | 30 | Pass |
+
+**Recent test additions:** Clipboard history (`add_entry_with_metadata`, `update_config_max_depth_trims`, `update_config_disabled`, `suppress_for_duration_no_panic`, `delete_entry_at`, `clear_all`), `truncate_for_display` utils, doc-tests for utils. See [Implementation Plan](docs/digicore-text-expander/IMPLEMENTATION_PLAN.md).
+
 ## Scripting Engine
 
 The Text Expander uses a port-based Scripting Engine (`ScriptEnginePort`, `HttpFetcherPort`) for `{js:...}` (Boa) and `{http:url|path}` (reqwest). Placeholders: `{date}`, `{time}`, `{clipboard}`, `{clip:N}`, `{env:VAR}`, `{var:}`, `{choice:}`, `{checkbox:}`, `{date_picker:}`, `{file_picker:}`.
@@ -40,6 +64,17 @@ The Text Expander uses a port-based Scripting Engine (`ScriptEnginePort`, `HttpF
 **Config:** `%APPDATA%/DigiCore/config/scripting.json` (HttpConfig, JsConfig, RunConfig). JS timeout, HTTP timeout, run allowlist configurable.
 
 **Recent (Section 11):** Script config externalization, ScriptEnginePort/HttpFetcherPort DI, ScriptContext builder, JS execution timeout, MockScriptEngine, run persistence. See [Dynamic Templates Plan](../AHK_-_PROD-MAIN_STARTUP-SCRIPTZ/features_new_and_updated/TE_Pro_DYNAMIC_TEMPLATES_IMPLEMENTATION_PLAN_2026-02-28.md) Section 11.8 for next remaining steps.
+
+## Clipboard History
+
+Real-time clipboard monitoring (F38-F42 parity). Configurable depth (5-100). Right-click context menu: Copy to Clipboard, View Full Content, Delete Item, Promote to Snippet, Clear All History. See [Clipboard History Guide](docs/digicore-text-expander/CLIPBOARD_HISTORY.md).
+
+## Documentation
+
+- [Scripting User Guide](docs/digicore-text-expander/SCRIPTING_USER_GUIDE.md) - JavaScript, DSL, HTTP, Run, Script Library
+- [Clipboard History](docs/digicore-text-expander/CLIPBOARD_HISTORY.md) - Clipboard History tab and context menu
+- [Implementation Plan](docs/digicore-text-expander/IMPLEMENTATION_PLAN.md) - Implementation status, testing details
+- [Changelog](CHANGELOG.md) - Recent changes and test status
 
 ## Structure
 
