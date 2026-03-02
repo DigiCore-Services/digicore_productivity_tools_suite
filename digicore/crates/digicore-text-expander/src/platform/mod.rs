@@ -9,3 +9,5 @@ pub mod windows_monitor;
 pub mod windows_keyboard;
 #[cfg(target_os = "windows")]
 pub mod windows_window;
+#[cfg(target_os = "windows")]
+pub mod windows_clipboard_listener;
