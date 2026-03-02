@@ -1,0 +1,34 @@
+[package]
+name = "digicore-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+anyhow = "1.0"
+base64 = "0.22"
+
+# Sync + Crypto (Phase 3)
+reqwest = { version = "0.12", optional = true, default-features = false, features = ["blocking", "json", "rustls-tls"] }
+ring = { version = "0.17", optional = true }
+
+# Platform adapters (Phase 2)
+enigo = { version = "0.2", optional = true }
+arboard = { version = "3.3", optional = true }
+windows = { version = "0.58", optional = true, features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_System_Threading", "Win32_System_ProcessStatus", "Win32_System_SystemServices"] }
+
+[features]
+default = []
+platform-windows = ["enigo", "arboard", "windows"]
+sync = ["reqwest", "ring"]
+
+[dev-dependencies]
+tempfile = "3.10"
+
+[[bin]]
+name = "cli"
+path = "src/bin/cli.rs"

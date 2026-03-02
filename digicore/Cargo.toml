@@ -1,0 +1,14 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/digicore-core",
+    "crates/digicore-text-expander",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["DigiCore Services LLC"]
+description = "DigiCore Services - Cross-platform app ecosystem"
+license = "Proprietary"
+repository = ""

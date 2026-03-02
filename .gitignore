@@ -1,0 +1,20 @@
+# AHK production scripts - excluded from this repo
+AHK_-_PROD-MAIN_STARTUP-SCRIPTZ/
+
+# Rust
+/target/
+**/*.rs.bk
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Environment and secrets
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
