@@ -280,6 +280,7 @@ impl Default for RunConfig {
 static SCRIPTING_CONFIG: Mutex<Option<ScriptingConfig>> = Mutex::new(None);
 
 /// Load config from standard path. Called at startup. SE-3: Applies env overrides.
+/// Does not overwrite SCRIPTING_CONFIG if already set (e.g. by tests via set_config).
 pub fn load_config() -> ScriptingConfig {
     let path = config_path();
     let mut cfg = if let Some(p) = &path {
@@ -297,7 +298,11 @@ pub fn load_config() -> ScriptingConfig {
     };
     cfg.apply_env_overrides();
     if let Ok(mut g) = SCRIPTING_CONFIG.lock() {
-        *g = Some(cfg.clone());
+        if g.is_none() {
+            *g = Some(cfg.clone());
+        } else {
+            return g.as_ref().unwrap().clone();
+        }
     }
     cfg
 }
