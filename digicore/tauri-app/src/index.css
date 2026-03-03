@@ -1,0 +1,45 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --dc-bg: #ffffff;
+  --dc-bg-alt: #f9fafb;
+  --dc-bg-tertiary: #f3f4f6;
+  --dc-bg-elevated: #ffffff;
+  --dc-text: #111827;
+  --dc-text-muted: #6b7280;
+  --dc-border: #e5e7eb;
+  --dc-border-strong: #d1d5db;
+  --dc-accent: #2563eb;
+  --dc-accent-hover: #1d4ed8;
+  --dc-error: #dc2626;
+}
+
+[data-theme="dark"] {
+  --dc-bg: #1f2937;
+  --dc-bg-alt: #374151;
+  --dc-bg-tertiary: #4b5563;
+  --dc-bg-elevated: #374151;
+  --dc-text: #f9fafb;
+  --dc-text-muted: #9ca3af;
+  --dc-border: #4b5563;
+  --dc-border-strong: #6b7280;
+  --dc-accent: #2563eb;
+  --dc-accent-hover: #3b82f6;
+  --dc-error: #ef4444;
+}
+
+/* Transparent for Windows Mica/Acrylic; content uses bg-[var(--dc-bg)] */
+html, body {
+  background: transparent;
+}
+
+body {
+  font-family: "Inter", "Segoe UI", system-ui, sans-serif;
+  margin: 20px;
+  color: var(--dc-text);
+  -webkit-font-smoothing: antialiased;
+}

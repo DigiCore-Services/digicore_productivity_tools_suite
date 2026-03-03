@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ghost Follower</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; background: transparent; font-family: 'Segoe UI', sans-serif; font-size: 12px; }
+    body { padding: 8px; }
+    .card { background: rgba(255, 255, 255, 0.96); border-radius: 8px; padding: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); border: 1px solid rgba(0,0,0,0.06); }
+    h4 { margin: 0 0 8px 0; font-size: 11px; color: #374151; }
+    .search { margin-bottom: 6px; }
+    .search input { width: 100%; padding: 4px 8px; font-size: 12px; border-radius: 4px; border: 1px solid #d1d5db; }
+    .pinned { max-height: 400px; overflow-y: auto; border: 1px solid #e5e7eb; border-radius: 4px; background: #fff; }
+    .pinned-item { padding: 6px 10px; cursor: pointer; border-bottom: 1px solid #f3f4f6; }
+    .pinned-item:last-child { border-bottom: none; }
+    .pinned-item:hover { background: #f3f4f6; }
+    .pinned-item .trigger { font-weight: 600; color: #1f2937; }
+    .pinned-item .preview { font-size: 11px; color: #6b7280; margin-top: 2px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+  <h4>Pinned Snippets</h4>
+  <div class="search">
+    <input type="text" id="search-input" placeholder="Search..." />
+  </div>
+  <div id="pinned-list" class="pinned"></div>
+  </div>
+  <script type="module">
+    const { invoke } = window.__TAURI__.core;
+    const { listen } = window.__TAURI__.event;
+    const { getCurrentWebviewWindow } = window.__TAURI__.webviewWindow;
+
+    let fallbackInterval = null;
+    let lastSearch = '';
+
+    function escapeHtml(s) {
+      const div = document.createElement('div');
+      div.textContent = s || '';
+      return div.innerHTML;
+    }
+
+    function render(state) {
+      const list = document.getElementById('pinned-list');
+      if (!state || !state.enabled) {
+        list.innerHTML = '';
+        return;
+      }
+      let html = '';
+      const items = state.pinned;
+      items.forEach((p, i) => {
+        html += `<div class="pinned-item" data-idx="${i}">
+          <span class="trigger">${escapeHtml(p.trigger)}</span>
+          <div class="preview">${escapeHtml(p.content_preview)}</div>
+        </div>`;
+      });
+      list.innerHTML = html || '<div style="padding:8px;color:#6b7280">No pinned snippets</div>';
+      list.querySelectorAll('.pinned-item').forEach(el => {
+        el.addEventListener('dblclick', () => {
+          const idx = parseInt(el.dataset.idx, 10);
+          const p = items[idx];
+          if (p) invoke('ghost_follower_insert', { trigger: p.trigger, content: p.content });
+        });
+      });
+    }
+
+    async function refresh() {
+      try {
+        const search = document.getElementById('search-input').value || '';
+        if (search !== lastSearch) {
+          lastSearch = search;
+          await invoke('ghost_follower_set_search', { filter: search });
+        }
+        const state = await invoke('get_ghost_follower_state', { searchFilter: search || null });
+        render(state);
+        if (state && state.enabled) {
+          const w = getCurrentWebviewWindow();
+          if (w) {
+            const pos = state.position;
+            const x = pos ? pos[0] : null;
+            const y = pos ? pos[1] : null;
+            const sane = typeof x === 'number' && typeof y === 'number' &&
+              x >= -20000 && x <= 20000 && y >= -20000 && y <= 20000;
+            try {
+              if (sane) {
+                w.setPosition({ Physical: { x, y } });
+              } else {
+                w.center();
+              }
+            } catch (_) {
+              w.center();
+            }
+            w.show();
+            try { w.setFocus(); } catch (_) {}
+          }
+        } else if (state && !state.enabled) {
+          const w = getCurrentWebviewWindow();
+          if (w) w.hide();
+        }
+      } catch (_) {}
+    }
+
+    document.getElementById('search-input').addEventListener('input', () => { lastSearch = ''; refresh(); });
+
+    listen('ghost-follower-update', () => refresh());
+    refresh();
+    fallbackInterval = setInterval(refresh, 3000);
+  </script>
+</body>
+</html>

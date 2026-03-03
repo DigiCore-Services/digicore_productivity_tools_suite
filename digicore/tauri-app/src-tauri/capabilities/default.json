@@ -1,0 +1,18 @@
+{
+  "$schema": "https://schema.tauri.app/config/2/capability",
+  "identifier": "default",
+  "description": "Default capabilities for DigiCore Text Expander",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "shell:allow-open",
+    "global-shortcut:allow-register-all",
+    "core:tray:default",
+    "core:window:default",
+    "notification:default",
+    "updater:default",
+    "process:default",
+    "log:default",
+    "deep-link:default"
+  ]
+}
