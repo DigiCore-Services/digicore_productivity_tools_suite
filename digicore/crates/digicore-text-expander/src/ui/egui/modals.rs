@@ -9,7 +9,10 @@ use digicore_text_expander::application::variable_input;
 use egui;
 
 /// Render Variable Input viewport (F11: {var:}, {choice:}).
-pub fn variable_input_viewport(ctx: &egui::Context) {
+pub fn variable_input_viewport(
+    ctx: &egui::Context,
+    file_dialog: std::sync::Arc<dyn digicore_text_expander::ports::FileDialogPort>,
+) {
     let viewport_id = egui::ViewportId::from_hash_of("variable_input_modal");
     let builder = egui::ViewportBuilder::default()
         .with_title("Snippet Input Required (F11)")
@@ -26,7 +29,7 @@ pub fn variable_input_viewport(ctx: &egui::Context) {
             egui::WindowLevel::AlwaysOnTop,
         ));
         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
-        if let Some(r) = variable_input::render_viewport_modal(ctx) {
+        if let Some(r) = variable_input::render_viewport_modal(ctx, file_dialog.clone()) {
             *result_clone.lock().unwrap() = Some(r);
         }
     });
@@ -69,14 +72,13 @@ pub fn snippet_editor_modal(app: &mut TextExpanderApp, ctx: &egui::Context) {
         SnippetEditorMode::Promote { .. } => "Promote to Snippet",
     };
     let (profile_suggestions, options_suggestions) = collect_library_suggestions(&app.library);
-    let save_clicked = &mut app.snippet_editor_save_clicked;
+    let mut modal_open = app.snippet_editor_modal_open;
     let close_requested = std::sync::atomic::AtomicBool::new(false);
-    let close_requested_ref = &close_requested;
     egui::Window::new(title)
         .collapsible(false)
         .resizable(true)
         .default_width(400.0)
-        .open(&mut app.snippet_editor_modal_open)
+        .open(&mut modal_open)
         .show(ctx, |ui| {
             ui.label("Trigger (shortcut):");
             ui.add(egui::TextEdit::singleline(&mut app.snippet_editor_trigger).desired_width(300.0));
@@ -143,11 +145,11 @@ pub fn snippet_editor_modal(app: &mut TextExpanderApp, ctx: &egui::Context) {
             ui.checkbox(&mut app.snippet_editor_pinned, "Pinned (priority in search)");
             ui.horizontal(|ui| {
                 if ui.button("Save").clicked() {
-                    *save_clicked = true;
-                    close_requested_ref.store(true, std::sync::atomic::Ordering::SeqCst);
+                    app.snippet_editor_save_clicked = true;
+                    close_requested.store(true, std::sync::atomic::Ordering::SeqCst);
                 }
                 if ui.button("Cancel").clicked() {
-                    close_requested_ref.store(true, std::sync::atomic::Ordering::SeqCst);
+                    close_requested.store(true, std::sync::atomic::Ordering::SeqCst);
                 }
                 if ui.button("Preview Expansion").clicked() {
                     let content = app.snippet_editor_content.clone();
@@ -187,6 +189,7 @@ pub fn snippet_editor_modal(app: &mut TextExpanderApp, ctx: &egui::Context) {
                 }
             });
         });
+    app.snippet_editor_modal_open = modal_open;
     if close_requested.load(std::sync::atomic::Ordering::SeqCst) {
         app.snippet_editor_modal_open = false;
     }
@@ -411,20 +414,23 @@ pub fn clip_clear_confirm_dialog(app: &mut TextExpanderApp, ctx: &egui::Context)
 }
 
 /// Render Preview Expansion variable input modal (in-window, when content has {var:}, {choice:}, etc.).
-pub fn snippet_test_var_modal(app: &mut TextExpanderApp, ctx: &egui::Context) {
+pub fn snippet_test_var_modal(
+    app: &mut TextExpanderApp,
+    ctx: &egui::Context,
+    file_dialog: std::sync::Arc<dyn digicore_text_expander::ports::FileDialogPort>,
+) {
+    let mut modal_open = app.snippet_test_var_modal_open;
+    let ok_clicked = std::cell::Cell::new(false);
+    let cancel_clicked = std::cell::Cell::new(false);
     let state = match &mut app.snippet_test_var_pending {
         Some(s) => s,
         None => return,
     };
-    let ok_clicked = std::sync::atomic::AtomicBool::new(false);
-    let cancel_clicked = std::sync::atomic::AtomicBool::new(false);
-    let ok_ref = &ok_clicked;
-    let cancel_ref = &cancel_clicked;
     egui::Window::new("Enter Variable Values")
         .collapsible(false)
         .resizable(true)
         .default_width(360.0)
-        .open(&mut app.snippet_test_var_modal_open)
+        .open(&mut modal_open)
         .show(ctx, |ui| {
             ui.label("Enter values for placeholders:");
             ui.add_space(8.0);
@@ -485,17 +491,11 @@ pub fn snippet_test_var_modal(app: &mut TextExpanderApp, ctx: &egui::Context) {
                                     .hint_text("Path to file"),
                             );
                             if ui.button("Browse...").clicked() {
-                                let mut dialog = rfd::FileDialog::new();
-                                if filter_str != "All Files (*.*)" {
-                                    if let Some((name, exts)) = parse_file_filter_for_test(filter_str) {
-                                        if !exts.is_empty() && exts[0] != "*" {
-                                            dialog = dialog.add_filter(name, &exts);
-                                        }
+                                digicore_text_expander::utils::with_file_filters(filter_str, |filters| {
+                                    if let Some(path) = file_dialog.pick_file(filters) {
+                                        *val = path.display().to_string();
                                     }
-                                }
-                                if let Some(path) = dialog.pick_file() {
-                                    *val = path.display().to_string();
-                                }
+                                });
                             }
                         });
                     }
@@ -505,18 +505,19 @@ pub fn snippet_test_var_modal(app: &mut TextExpanderApp, ctx: &egui::Context) {
             ui.add_space(8.0);
             ui.horizontal(|ui| {
                 if ui.button("OK").clicked() {
-                    ok_ref.store(true, std::sync::atomic::Ordering::SeqCst);
+                    ok_clicked.set(true);
                 }
                 if ui.button("Cancel").clicked() {
-                    cancel_ref.store(true, std::sync::atomic::Ordering::SeqCst);
+                    cancel_clicked.set(true);
                 }
             });
         });
-    if cancel_clicked.load(std::sync::atomic::Ordering::SeqCst) {
+    app.snippet_test_var_modal_open = modal_open;
+    if cancel_clicked.get() {
         app.snippet_test_var_modal_open = false;
         app.snippet_test_var_pending = None;
     }
-    if ok_clicked.load(std::sync::atomic::Ordering::SeqCst) {
+    if ok_clicked.get() {
         if let Some(state) = app.snippet_test_var_pending.take() {
             let mut values = state.values;
             for v in &state.vars {
@@ -547,29 +548,6 @@ pub fn snippet_test_var_modal(app: &mut TextExpanderApp, ctx: &egui::Context) {
             app.snippet_test_result_modal_open = true;
         }
         app.snippet_test_var_modal_open = false;
-    }
-}
-
-fn parse_file_filter_for_test(s: &str) -> Option<(String, Vec<String>)> {
-    let s = s.trim();
-    let paren = s.find('(')?;
-    let name = s[..paren].trim().to_string();
-    let rest = s[paren..].trim_start_matches('(').trim_end_matches(')');
-    let exts: Vec<String> = rest
-        .split(';')
-        .filter_map(|p| {
-            let p = p.trim().trim_start_matches('*');
-            if p.is_empty() || p == "." {
-                Some("*".to_string())
-            } else {
-                Some(p.trim_start_matches('.').to_string())
-            }
-        })
-        .collect();
-    if exts.is_empty() {
-        None
-    } else {
-        Some((name, exts))
     }
 }
 

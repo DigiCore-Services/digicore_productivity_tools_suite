@@ -9,6 +9,24 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+/// Optional callback when suggestions change (for event-driven UI, e.g. Tauri emit).
+static ON_CHANGE: Mutex<Option<Arc<dyn Fn() + Send + Sync>>> = Mutex::new(None);
+
+/// Set callback invoked when suggestions may have changed. Used by Tauri to emit events.
+pub fn set_on_change_callback(cb: Option<Arc<dyn Fn() + Send + Sync>>) {
+    if let Ok(mut g) = ON_CHANGE.lock() {
+        *g = cb;
+    }
+}
+
+fn notify_change() {
+    if let Ok(guard) = ON_CHANGE.lock() {
+        if let Some(ref f) = *guard {
+            f();
+        }
+    }
+}
+
 /// Ghost Suggestor configuration (F46, F47).
 #[derive(Clone, Debug)]
 pub struct GhostSuggestorConfig {
@@ -184,7 +202,11 @@ pub fn tick_debounce() -> bool {
     s.debounce_timer = None;
     let had_suggestions = !s.suggestions.is_empty();
     recompute_suggestions(&mut s);
-    had_suggestions != !s.suggestions.is_empty()
+    let changed = had_suggestions != !s.suggestions.is_empty();
+    if changed {
+        notify_change();
+    }
+    changed
 }
 
 fn recompute_suggestions(s: &mut SuggestorState) {
@@ -345,6 +367,7 @@ pub fn accept_selected() -> Option<(String, String)> {
     s.buffer.clear();
     s.suggestions.clear();
     s.selected_index = 0;
+    notify_change();
 
     Some((suggestion.snippet.trigger, suggestion.snippet.content))
 }
@@ -362,6 +385,7 @@ pub fn dismiss() {
             }
         }
     }
+    notify_change();
 }
 
 /// Check if overlay should auto-hide (display_duration elapsed). Call when showing overlay.

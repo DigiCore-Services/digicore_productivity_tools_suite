@@ -1,0 +1,38 @@
+//! StoragePort - framework-agnostic key-value persistence for user preferences.
+//!
+//! Part of Phase 0/1 UI decoupling. Enables swapping GUI frameworks (egui, Tauri,
+//! Iced, Tauri) without changing persistence logic.
+//!
+//! Implementations:
+//! - EframeStorageAdapter: wraps eframe::Storage (egui)
+//! - JsonFileStorageAdapter: JSON file in config dir (Tauri, Iced, etc.)
+
+/// Storage keys for Text Expander user preferences.
+/// Used by adapters to read/write from backing store.
+pub mod keys {
+    pub const LIBRARY_PATH: &str = "library_path";
+    pub const SYNC_URL: &str = "sync_url";
+    pub const TEMPLATE_DATE_FORMAT: &str = "template_date_format";
+    pub const TEMPLATE_TIME_FORMAT: &str = "template_time_format";
+    pub const SCRIPT_LIBRARY_RUN_DISABLED: &str = "script_library_run_disabled";
+    pub const SCRIPT_LIBRARY_RUN_ALLOWLIST: &str = "script_library_run_allowlist";
+    pub const GHOST_SUGGESTOR_DISPLAY_SECS: &str = "ghost_suggestor_display_secs";
+    pub const CLIP_HISTORY_MAX_DEPTH: &str = "clip_history_max_depth";
+    pub const EXPANSION_PAUSED: &str = "expansion_paused";
+    /// Tauri UI: last active tab index (0-3).
+    pub const UI_LAST_TAB: &str = "ui_last_tab";
+    /// Tauri UI: column order for Library table (comma-separated: Profile,Category,Trigger,Content Preview,AppLock,Options,Last Modified).
+    pub const UI_COLUMN_ORDER: &str = "ui_column_order";
+}
+
+/// Port for key-value persistence (user preferences, window state).
+///
+/// Framework-agnostic: egui uses eframe::Storage; Tauri/Iced use JSON file.
+/// Adapters load from backing store at init and persist on save.
+pub trait StoragePort: Send + Sync {
+    /// Get a value by key. Returns None if key is absent.
+    fn get(&self, key: &str) -> Option<String>;
+
+    /// Set a value for key. Persisted when adapter's persist method is called.
+    fn set(&mut self, key: &str, value: &str);
+}

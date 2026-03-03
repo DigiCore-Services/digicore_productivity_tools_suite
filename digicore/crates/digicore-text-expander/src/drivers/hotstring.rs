@@ -8,6 +8,7 @@
 
 use crate::application::clipboard_history;
 use crate::application::discovery;
+use crate::application::expansion_diagnostics;
 use crate::application::expansion_engine::is_expansion_paused;
 use crate::application::ghost_follower;
 use crate::application::ghost_suggestor;
@@ -111,6 +112,11 @@ fn do_request_expansion(content: String) {
                         current_clip.as_deref(),
                         &clip_history,
                     );
+                    crate::application::expansion_stats::record_expansion(
+                        Some("ghost_follower"),
+                        content.len(),
+                        0,
+                    );
                     let saved = g.clipboard.get_text().ok();
                     if g.clipboard.set_text(&content).is_ok() {
                         if g.input.send_ctrl_v().is_ok() {
@@ -140,6 +146,67 @@ pub fn update_library(library: HashMap<String, Vec<Snippet>>) {
             }
         }
     }
+}
+
+/// Ghost config for sync from host (e.g. Tauri AppState).
+#[derive(Clone)]
+pub struct GhostConfig {
+    pub suggestor_enabled: bool,
+    pub suggestor_debounce_ms: u64,
+    pub suggestor_display_secs: u64,
+    pub suggestor_offset_x: i32,
+    pub suggestor_offset_y: i32,
+    pub follower_enabled: bool,
+    pub follower_edge_right: bool,
+    pub follower_monitor_anchor: usize,
+    pub follower_search: String,
+    pub follower_hover_preview: bool,
+    pub follower_collapse_delay_secs: u64,
+}
+
+impl Default for GhostConfig {
+    fn default() -> Self {
+        Self {
+            suggestor_enabled: true,
+            suggestor_debounce_ms: 50,
+            suggestor_display_secs: 10,
+            suggestor_offset_x: 0,
+            suggestor_offset_y: 20,
+            follower_enabled: true,
+            follower_edge_right: true,
+            follower_monitor_anchor: 0,
+            follower_search: String::new(),
+            follower_hover_preview: true,
+            follower_collapse_delay_secs: 5,
+        }
+    }
+}
+
+/// Sync Ghost Suggestor and Ghost Follower config from host state.
+pub fn sync_ghost_config(config: GhostConfig) {
+    ghost_suggestor::update_config(ghost_suggestor::GhostSuggestorConfig {
+        enabled: config.suggestor_enabled,
+        debounce_ms: config.suggestor_debounce_ms,
+        display_duration_secs: config.suggestor_display_secs,
+        offset_x: config.suggestor_offset_x,
+        offset_y: config.suggestor_offset_y,
+    });
+    ghost_follower::update_config(ghost_follower::GhostFollowerConfig {
+        enabled: config.follower_enabled,
+        edge: if config.follower_edge_right {
+            ghost_follower::FollowerEdge::Right
+        } else {
+            ghost_follower::FollowerEdge::Left
+        },
+        monitor_anchor: match config.follower_monitor_anchor {
+            1 => ghost_follower::MonitorAnchor::Secondary,
+            2 => ghost_follower::MonitorAnchor::Current,
+            _ => ghost_follower::MonitorAnchor::Primary,
+        },
+        search_filter: config.follower_search,
+        hover_preview: config.follower_hover_preview,
+        collapse_delay_secs: config.follower_collapse_delay_secs,
+    });
 }
 
 fn debug_log(msg: &str) {
@@ -216,7 +283,12 @@ fn on_key(state: Arc<Mutex<HotstringState>>, vk_code: u16, ch: Option<char>) -> 
         debug_log(&format!("key: vk={} ch={:?} buffer={:?}", vk_code, ch, guard.buffer));
 
         // Check for trigger match
+        let process_name = guard.window.get_active().map(|c| c.process_name.clone()).unwrap_or_default();
         if let Some((snippet, _)) = find_snippet(&guard.library, &guard.buffer, &guard.window) {
+            expansion_diagnostics::push(
+                "info",
+                format!("Expanded: trigger '{}' in process '{}'", snippet.trigger, process_name),
+            );
             debug_log(&format!("MATCH: trigger={} expanding", snippet.trigger));
             let trigger_len = snippet.trigger.len();
             let content = snippet.content.clone();
@@ -228,6 +300,7 @@ fn on_key(state: Arc<Mutex<HotstringState>>, vk_code: u16, ch: Option<char>) -> 
                 #[cfg(not(target_os = "windows"))]
                 let target_hwnd: Option<isize> = None;
 
+                let trigger = snippet.trigger.clone();
                 let (tx, rx) = std::sync::mpsc::channel();
                 variable_input::set_pending_from_hotstring(content, trigger_len, target_hwnd, tx);
                 drop(guard);
@@ -238,7 +311,7 @@ fn on_key(state: Arc<Mutex<HotstringState>>, vk_code: u16, ch: Option<char>) -> 
                         if let Some(hwnd) = target_hwnd {
                             crate::platform::windows_window::restore_foreground_window(hwnd);
                         }
-                        do_expand(state_clone, trigger_len, &expansion);
+                        do_expand(state_clone, trigger_len, &expansion, Some(&trigger));
                     }
                 });
                 return false;
@@ -254,13 +327,23 @@ fn on_key(state: Arc<Mutex<HotstringState>>, vk_code: u16, ch: Option<char>) -> 
                 current_clip.as_deref(),
                 &clip_history,
             );
+            let trigger = snippet.trigger.clone();
             drop(guard);
 
             let state_clone = state.clone();
             std::thread::spawn(move || {
                 crate::application::clipboard_history::suppress_for_duration(std::time::Duration::from_secs(2));
-                do_expand(state_clone, trigger_len, &expansion);
+                do_expand(state_clone, trigger_len, &expansion, Some(&trigger));
             });
+        } else {
+            expansion_diagnostics::push(
+                "debug",
+                format!(
+                    "No match for buffer suffix in process '{}' (buffer len={})",
+                    process_name,
+                    guard.buffer.len()
+                ),
+            );
         }
     } else {
         // Non-printable (space, enter, etc.) - clear buffer on word boundary
@@ -274,7 +357,17 @@ fn on_key(state: Arc<Mutex<HotstringState>>, vk_code: u16, ch: Option<char>) -> 
     false
 }
 
-fn do_expand(state: Arc<Mutex<HotstringState>>, trigger_len: usize, expansion: &str) {
+fn do_expand(
+    state: Arc<Mutex<HotstringState>>,
+    trigger_len: usize,
+    expansion: &str,
+    trigger: Option<&str>,
+) {
+    crate::application::expansion_stats::record_expansion(
+        trigger,
+        expansion.len(),
+        trigger_len,
+    );
     crate::application::clipboard_history::suppress_for_duration(std::time::Duration::from_secs(2));
     if let Ok(mut g) = state.lock() {
         g.buffer.clear();
@@ -313,7 +406,7 @@ fn expand_suggestion(state: Arc<Mutex<HotstringState>>, trigger_len: usize, cont
                 if let Some(hwnd) = target_hwnd {
                     crate::platform::windows_window::restore_foreground_window(hwnd);
                 }
-                do_expand(state, trigger_len, &expansion);
+                do_expand(state, trigger_len, &expansion, None);
             }
         });
         return;
@@ -328,7 +421,7 @@ fn expand_suggestion(state: Arc<Mutex<HotstringState>>, trigger_len: usize, cont
         .map(|e| e.content.clone())
         .collect();
     let expansion = template_processor::process(&content, current_clip.as_deref(), &clip_history);
-    std::thread::spawn(move || do_expand(state, trigger_len, &expansion));
+    std::thread::spawn(move || do_expand(state, trigger_len, &expansion, None));
 }
 
 fn find_snippet<'a>(
@@ -360,6 +453,15 @@ pub(crate) fn find_snippet_for_process<'a>(
                             .iter()
                             .any(|a| process.contains(&a.to_lowercase()))
                     {
+                        expansion_diagnostics::push(
+                            "warn",
+                            format!(
+                                "AppLock: trigger '{}' requires app in [{}], current process '{}'",
+                                snip.trigger,
+                                snip.app_lock,
+                                process_name
+                            ),
+                        );
                         continue;
                     }
                 }

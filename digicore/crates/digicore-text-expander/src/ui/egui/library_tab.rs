@@ -12,6 +12,7 @@ use egui;
 
 /// Render the Library tab content.
 pub fn render(app: &mut TextExpanderApp, _ctx: &egui::Context, ui: &mut egui::Ui) {
+    let file_dialog = app.file_dialog();
     ui.heading("DigiCore Text Expander");
     ui.add_space(8.0);
 
@@ -27,10 +28,7 @@ pub fn render(app: &mut TextExpanderApp, _ctx: &egui::Context, ui: &mut egui::Ui
     });
     ui.horizontal(|ui| {
         if ui.button("Export JSON").clicked() {
-            if let Some(path) = rfd::FileDialog::new()
-                .add_filter("JSON", &["json"])
-                .set_file_name("text_expansion_library.json")
-                .save_file()
+            if let Some(path) = file_dialog.save_file(&[("JSON", &["json"][..])], "text_expansion_library.json")
             {
                 if let Err(e) = app.export_library_json(&path) {
                     app.status = format!("Export failed: {}", e);
@@ -40,10 +38,7 @@ pub fn render(app: &mut TextExpanderApp, _ctx: &egui::Context, ui: &mut egui::Ui
             }
         }
         if ui.button("Export CSV").clicked() {
-            if let Some(path) = rfd::FileDialog::new()
-                .add_filter("CSV", &["csv"])
-                .set_file_name("snippets.csv")
-                .save_file()
+            if let Some(path) = file_dialog.save_file(&[("CSV", &["csv"][..])], "snippets.csv")
             {
                 if let Err(e) = app.export_library_csv(&path) {
                     app.status = format!("Export failed: {}", e);
@@ -53,9 +48,7 @@ pub fn render(app: &mut TextExpanderApp, _ctx: &egui::Context, ui: &mut egui::Ui
             }
         }
         if ui.button("Import (Replace)").clicked() {
-            if let Some(path) = rfd::FileDialog::new()
-                .add_filter("JSON", &["json"])
-                .pick_file()
+            if let Some(path) = file_dialog.pick_file(&[("JSON", &["json"][..])])
             {
                 if let Err(e) = app.import_library(&path, true) {
                     app.status = format!("Import failed: {}", e);
@@ -65,9 +58,7 @@ pub fn render(app: &mut TextExpanderApp, _ctx: &egui::Context, ui: &mut egui::Ui
             }
         }
         if ui.button("Import (Merge)").clicked() {
-            if let Some(path) = rfd::FileDialog::new()
-                .add_filter("JSON", &["json"])
-                .pick_file()
+            if let Some(path) = file_dialog.pick_file(&[("JSON", &["json"][..])])
             {
                 if let Err(e) = app.import_library(&path, false) {
                     app.status = format!("Import failed: {}", e);
@@ -89,9 +80,7 @@ pub fn render(app: &mut TextExpanderApp, _ctx: &egui::Context, ui: &mut egui::Ui
             }
         }
         if ui.button("Import CSV (Merge)").clicked() {
-            if let Some(path) = rfd::FileDialog::new()
-                .add_filter("CSV", &["csv"])
-                .pick_file()
+            if let Some(path) = file_dialog.pick_file(&[("CSV", &["csv"][..])])
             {
                 if let Err(e) = app.import_library_csv(&path, false) {
                     app.status = format!("Import CSV failed: {}", e);
@@ -112,15 +101,15 @@ pub fn render(app: &mut TextExpanderApp, _ctx: &egui::Context, ui: &mut egui::Ui
         ui.text_edit_singleline(&mut app.library_search);
     });
     ui.add_space(4.0);
-    // (snippet, category, idx_in_category) for Edit/Delete
-    let snippets_with_meta: Vec<(&Snippet, String, usize)> = if let Some(idx) = app.selected_category {
+    // (snippet, category, idx_in_category) for Edit/Delete - owned to avoid borrow conflict with ui closure
+    let snippets_with_meta: Vec<(Snippet, String, usize)> = if let Some(idx) = app.selected_category {
         if let Some(cat) = app.categories.get(idx) {
             app.library
                 .get(cat)
                 .map(|v| {
                     v.iter()
                         .enumerate()
-                        .map(|(i, s)| (s, cat.clone(), i))
+                        .map(|(i, s)| (s.clone(), cat.clone(), i))
                         .collect()
                 })
                 .unwrap_or_default()
@@ -135,16 +124,17 @@ pub fn render(app: &mut TextExpanderApp, _ctx: &egui::Context, ui: &mut egui::Ui
                 snips
                     .iter()
                     .enumerate()
-                    .map(move |(i, s)| (s, cat.clone(), i))
+                    .map(move |(i, s)| (s.clone(), cat.clone(), i))
             })
             .collect()
     };
-    let search_words: Vec<&str> = app
+    let search_words: Vec<String> = app
         .library_search
         .split_whitespace()
         .filter(|w| !w.is_empty())
+        .map(|w| w.to_string())
         .collect();
-    let mut filtered: Vec<&(&Snippet, String, usize)> = snippets_with_meta
+    let mut filtered: Vec<&(Snippet, String, usize)> = snippets_with_meta
         .iter()
         .filter(|(snip, _, _)| {
             if search_words.is_empty() {
@@ -164,8 +154,8 @@ pub fn render(app: &mut TextExpanderApp, _ctx: &egui::Context, ui: &mut egui::Ui
         let cat_label = app
             .selected_category
             .and_then(|i| app.categories.get(i))
-            .map(String::as_str)
-            .unwrap_or("All");
+            .cloned()
+            .unwrap_or_else(|| "All".to_string());
         let add_cat = app
             .selected_category
             .and_then(|i| app.categories.get(i))
@@ -174,7 +164,7 @@ pub fn render(app: &mut TextExpanderApp, _ctx: &egui::Context, ui: &mut egui::Ui
         ui.horizontal(|ui| {
             ui.label(format!(
                 "Category: {} ({} snippets)",
-                cat_label,
+                &cat_label,
                 if search_words.is_empty() {
                     snippets_with_meta.len()
                 } else {

@@ -23,6 +23,7 @@ fn make_library_with_pinned() -> HashMap<String, Vec<Snippet>> {
 }
 
 #[test]
+#[serial]
 fn test_start_stop() {
     ghost_follower::stop();
     assert!(!ghost_follower::is_enabled());
