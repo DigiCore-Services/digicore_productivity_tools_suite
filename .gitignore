@@ -18,3 +18,10 @@ AHK_-_PROD-MAIN_STARTUP-SCRIPTZ/
 
 # Logs
 *.log
+
+# Node / frontend
+node_modules/
+**/dist/
+
+# Binary DLLs (azul build artifacts)
+digicore/azul-dll/
