@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { getTaurpc } from "@/lib/taurpc";
 import { showNativeContextMenu } from "@/lib/nativeContextMenu";
 import type { AppState, ClipEntry } from "../types";
 
@@ -30,7 +30,7 @@ export function ClipboardTab({
   const loadEntries = useCallback(async () => {
     setLoading(true);
     try {
-      const data = (await invoke("get_clipboard_entries")) as ClipEntry[];
+      const data = await getTaurpc().get_clipboard_entries();
       setEntries(data);
     } catch (e) {
       setStatus("Error: " + String(e));
@@ -47,7 +47,7 @@ export function ClipboardTab({
     const entry = entries[idx];
     if (!entry) return;
     try {
-      await invoke("copy_to_clipboard", { text: entry.content });
+      await getTaurpc().copy_to_clipboard(entry.content);
       setStatus("Copied to clipboard!");
     } catch (e) {
       setStatus("Error: " + String(e));
@@ -61,7 +61,7 @@ export function ClipboardTab({
 
   const handleDelete = async (idx: number) => {
     try {
-      await invoke("delete_clip_entry", { index: idx });
+      await getTaurpc().delete_clip_entry(idx);
       await loadEntries();
       setStatus("Entry deleted.");
     } catch (e) {

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { getTaurpc } from "@/lib/taurpc";
 import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import type { AppState } from "../types";
@@ -107,8 +107,8 @@ export function ConfigTab({ appState, onConfigLoaded }: ConfigTabProps) {
 
   const applyConfig = async (partial: Record<string, unknown>) => {
     try {
-      await invoke("update_config", { config: partial });
-      await invoke("save_settings");
+      await getTaurpc().update_config(partial as Parameters<ReturnType<typeof getTaurpc>["update_config"]>[0]);
+      await getTaurpc().save_settings();
       setStatus("Settings saved.");
       setStatusError(false);
     } catch (e) {

@@ -5,7 +5,7 @@ import React, {
   useRef,
   useState,
 } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { getTaurpc } from "@/lib/taurpc";
 import { Search } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useFuzzySearch, type SnippetWithCategory } from "@/lib/useFuzzySearch";
@@ -54,7 +54,7 @@ export function CommandPalette({
 
   const copyToClipboard = useCallback(async (content: string) => {
     try {
-      await invoke("copy_to_clipboard", { text: content });
+      await getTaurpc().copy_to_clipboard(content);
     } catch {
       /* ignore */
     }

@@ -3,11 +3,19 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { LibraryTab } from "./LibraryTab";
 
-const mockInvoke = vi.fn();
+const mockTaurpc = {
+  get_app_state: vi.fn(),
+  set_library_path: vi.fn(),
+  load_library: vi.fn(),
+  save_library: vi.fn(),
+  save_settings: vi.fn(),
+  update_snippet: vi.fn(),
+  copy_to_clipboard: vi.fn(),
+};
 const mockOpen = vi.fn();
 
-vi.mock("@tauri-apps/api/core", () => ({
-  invoke: (...args: unknown[]) => mockInvoke(...args),
+vi.mock("@/lib/taurpc", () => ({
+  getTaurpc: () => mockTaurpc,
 }));
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({
@@ -41,14 +49,20 @@ const defaultProps = {
 
 describe("LibraryTab", () => {
   beforeEach(() => {
-    mockInvoke.mockReset();
     mockOpen.mockReset();
-    mockInvoke.mockResolvedValue({
+    mockTaurpc.get_app_state.mockReset();
+    mockTaurpc.get_app_state.mockResolvedValue({
       library_path: "",
       library: {},
       categories: [],
       status: "",
     });
+    mockTaurpc.set_library_path.mockResolvedValue(undefined);
+    mockTaurpc.load_library.mockResolvedValue(0);
+    mockTaurpc.save_library.mockResolvedValue(undefined);
+    mockTaurpc.save_settings.mockResolvedValue(undefined);
+    mockTaurpc.update_snippet.mockResolvedValue(undefined);
+    mockTaurpc.copy_to_clipboard.mockResolvedValue(undefined);
   });
 
   it("renders Text Expansion Library heading", () => {

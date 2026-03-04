@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState, lazy, Suspense } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { invoke } from "@tauri-apps/api/core";
+import { getTaurpc } from "./lib/taurpc";
 import { emitTo, listen } from "@tauri-apps/api/event";
 import { onOpenUrl } from "@tauri-apps/plugin-deep-link";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
@@ -13,6 +13,7 @@ import {
   FileText,
 } from "lucide-react";
 import type { AppState, PendingVariableInput, Snippet } from "./types";
+import { normalizeAppState, normalizePendingInput } from "./lib/normalizeState";
 import { LibraryTab } from "./components/LibraryTab";
 const ConfigTab = lazy(() =>
   import("./components/ConfigTab").then((m) => ({ default: m.ConfigTab }))
@@ -95,9 +96,9 @@ function App() {
 
   const loadAppState = useCallback(async () => {
     try {
-      const state = (await invoke("get_app_state")) as AppState;
-      setAppState(state);
-      return state;
+      const state = await getTaurpc().get_app_state();
+      setAppState(normalizeAppState(state));
+      return normalizeAppState(state);
     } catch (e) {
       setLibraryStatus("Error: " + String(e));
       setLibraryStatusError(true);
@@ -143,19 +144,19 @@ function App() {
       }
       try {
         if (snippetEditorMode === "add") {
-          await invoke("add_snippet", {
-            category: snippet.category || "General",
-            snippet,
-          });
+          await getTaurpc().add_snippet(
+            snippet.category || "General",
+            snippet
+          );
         } else {
-          await invoke("update_snippet", {
-            category: snippetEditorCategory,
-            snippetIdx: snippetEditorIdx,
-            snippet,
-          });
+          await getTaurpc().update_snippet(
+            snippetEditorCategory,
+            snippetEditorIdx,
+            snippet
+          );
         }
-        await invoke("save_library");
-        await invoke("save_settings").catch(() => {});
+        await getTaurpc().save_library();
+        await getTaurpc().save_settings().catch(() => {});
         closeSnippetEditor();
         const state = await loadAppState();
         if (state) {
@@ -189,18 +190,16 @@ function App() {
 
   const handleDeleteConfirm = useCallback(async () => {
     try {
-      await invoke("delete_snippet", {
-        category: deleteConfirmCat,
-        snippetIdx: deleteConfirmIdx,
-      });
-      await invoke("save_library");
-      await invoke("save_settings").catch(() => {});
+      await getTaurpc().delete_snippet(deleteConfirmCat, deleteConfirmIdx);
+      await getTaurpc().save_library();
+      await getTaurpc().save_settings().catch(() => {});
       setDeleteConfirmVisible(false);
       const state = await loadAppState();
       if (state) {
         setAppState(state);
-        if (state.library && Object.keys(state.library).length > 0) {
-          await syncLibraryToSqlite(state.library);
+        const lib = state.library ?? {};
+        if (Object.keys(lib).length > 0) {
+          await syncLibraryToSqlite(lib as Record<string, Snippet[]>);
         }
       }
       setLibraryStatusFn("Snippet deleted and saved");
@@ -223,7 +222,7 @@ function App() {
 
   const handleClipClearConfirm = useCallback(async () => {
     try {
-      await invoke("clear_clipboard_history");
+      await getTaurpc().clear_clipboard_history();
       setClipClearConfirmVisible(false);
       setClipboardRefreshTrigger((n) => n + 1);
       setLibraryStatusFn("Clipboard history cleared.");
@@ -235,7 +234,7 @@ function App() {
   const handleSaveUiPrefs = useCallback(
     async (lastTab: number, cols: string[]) => {
       try {
-        await invoke("save_ui_prefs", { last_tab: lastTab, column_order: cols });
+        await getTaurpc().save_ui_prefs(lastTab, cols);
       } catch {
         /* ignore */
       }
@@ -252,7 +251,7 @@ function App() {
 
   const handleVariableInputOk = useCallback(async (values: Record<string, string>) => {
     try {
-      await invoke("submit_variable_input", { values });
+      await getTaurpc().submit_variable_input(values);
       setVariableInputVisible(false);
       setVariableInputData(null);
     } catch (e) {
@@ -262,7 +261,7 @@ function App() {
 
   const handleVariableInputCancel = useCallback(async () => {
     try {
-      await invoke("cancel_variable_input");
+      await getTaurpc().cancel_variable_input();
     } catch {
       /* ignore */
     }
@@ -272,11 +271,9 @@ function App() {
 
   const showVariableInputModal = useCallback(async () => {
     try {
-      const data = (await invoke("get_pending_variable_input")) as
-        | PendingVariableInput
-        | null;
+      const data = await getTaurpc().get_pending_variable_input();
       if (data) {
-        setVariableInputData(data);
+        setVariableInputData(normalizePendingInput(data));
         setVariableInputVisible(true);
       }
     } catch {
@@ -463,10 +460,7 @@ function App() {
   useEffect(() => {
     (async () => {
       try {
-        const prefs = (await invoke("get_ui_prefs")) as {
-          last_tab?: number;
-          column_order?: string[];
-        };
+        const prefs = await getTaurpc().get_ui_prefs();
         const cols = Array.isArray(prefs.column_order) && prefs.column_order.length
           ? prefs.column_order.filter((c) => DEFAULT_COLUMNS.includes(c))
           : [...DEFAULT_COLUMNS];
@@ -480,8 +474,9 @@ function App() {
         /* ignore */
       }
       const state = await loadAppState();
-      if (state?.library && Object.keys(state.library).length > 0) {
-        syncLibraryToSqlite(state.library).catch(() => {});
+      const lib = state?.library ?? {};
+      if (Object.keys(lib).length > 0) {
+        syncLibraryToSqlite(lib as Record<string, Snippet[]>).catch(() => {});
       }
     })();
   }, [loadAppState]);

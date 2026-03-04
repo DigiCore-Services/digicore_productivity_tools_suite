@@ -2,8 +2,11 @@ import { describe, it, expect, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import { LogTab } from "./LogTab";
 
-vi.mock("@tauri-apps/api/core", () => ({
-  invoke: vi.fn().mockResolvedValue([]),
+vi.mock("@/lib/taurpc", () => ({
+  getTaurpc: () => ({
+    get_diagnostic_logs: vi.fn().mockResolvedValue([]),
+    clear_diagnostic_logs: vi.fn().mockResolvedValue(undefined),
+  }),
 }));
 
 describe("LogTab", () => {

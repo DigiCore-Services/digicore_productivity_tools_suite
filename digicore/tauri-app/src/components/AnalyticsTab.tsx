@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { getTaurpc } from "@/lib/taurpc";
 import { BarChart3, RotateCcw } from "lucide-react";
 import { Button } from "./ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
@@ -35,7 +35,7 @@ export function AnalyticsTab() {
   const loadStats = useCallback(async () => {
     try {
       setLoading(true);
-      const s = (await invoke("get_expansion_stats")) as ExpansionStats;
+      const s = await getTaurpc().get_expansion_stats();
       setStats(s);
     } catch (e) {
       console.error("Failed to load expansion stats:", e);
@@ -52,7 +52,7 @@ export function AnalyticsTab() {
   const handleReset = useCallback(async () => {
     try {
       setResetting(true);
-      await invoke("reset_expansion_stats");
+      await getTaurpc().reset_expansion_stats();
       await loadStats();
     } catch (e) {
       console.error("Failed to reset stats:", e);

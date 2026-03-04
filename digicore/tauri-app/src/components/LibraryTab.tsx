@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { getTaurpc } from "@/lib/taurpc";
+import { normalizeAppState } from "@/lib/normalizeState";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { FolderOpen, Save, Search, Plus, Pencil, Trash2, FolderSearch, Pin } from "lucide-react";
@@ -11,7 +12,7 @@ import {
   SQLITE_PARTIAL_THRESHOLD,
   SQLITE_PAGE_SIZE,
 } from "@/lib/useSqliteRows";
-import { formatLastModified, getCellValue, COLUMN_KEYS } from "@/lib/libraryUtils";
+import { formatLastModified, getCellValue, getRawField, COLUMN_KEYS } from "@/lib/libraryUtils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
@@ -66,7 +67,8 @@ export function LibraryTab({
 
   const loadAppState = useCallback(async () => {
     try {
-      const state = (await invoke("get_app_state")) as AppState;
+      const dto = await getTaurpc().get_app_state();
+      const state = normalizeAppState(dto);
       setLibraryPath(state.library_path || "");
       onAppStateChange(state);
       return state;
@@ -79,16 +81,16 @@ export function LibraryTab({
   const handleLoad = async () => {
     if (libraryPath.trim()) {
       try {
-        await invoke("set_library_path", { path: libraryPath.trim() });
+        await getTaurpc().set_library_path(libraryPath.trim());
       } catch (e) {
         setStatus("set_library_path: " + String(e), true);
         return;
       }
     }
     try {
-      const count = (await invoke("load_library")) as number;
+      const count = await getTaurpc().load_library();
       setStatus(`Loaded ${count} categories`);
-      await invoke("save_settings").catch(() => {});
+      await getTaurpc().save_settings().catch(() => {});
       const state = await loadAppState();
       if (state?.library && Object.keys(state.library).length > 0) {
         await syncLibraryToSqlite(state.library);
@@ -139,16 +141,16 @@ export function LibraryTab({
       const s = snips[idx];
       const newPinned = (s.pinned || "false") === "true" ? "false" : "true";
       try {
-        await invoke("update_snippet", {
-          category: cat,
-          snippetIdx: idx,
-          snippet: { ...s, pinned: newPinned },
+        await getTaurpc().update_snippet(cat, idx, {
+          ...s,
+          pinned: newPinned,
         });
-        await invoke("save_library");
-        await invoke("save_settings").catch(() => {});
+        await getTaurpc().save_library();
+        await getTaurpc().save_settings().catch(() => {});
         const state = await loadAppState();
-        if (state?.library && Object.keys(state.library).length > 0) {
-          await syncLibraryToSqlite(state.library);
+        const lib = state?.library ?? {};
+        if (Object.keys(lib).length > 0) {
+          await syncLibraryToSqlite(lib);
         }
         setStatus(newPinned === "true" ? "Snippet pinned" : "Snippet unpinned");
       } catch (e) {
@@ -161,7 +163,7 @@ export function LibraryTab({
   const categories = appState?.categories ?? [];
   const handleSave = async () => {
     try {
-      await invoke("save_library");
+      await getTaurpc().save_library();
       setStatus("Saved successfully");
       const state = await loadAppState();
       if (state?.library && Object.keys(state.library).length > 0) {
@@ -208,8 +210,9 @@ export function LibraryTab({
   const getVal = (r: (typeof rows)[0]) => {
     if (!key) return "";
     if (key === "content") return (r.s.content || "").toLowerCase();
-    if (key === "last_modified") return r.s.last_modified || "";
-    return ((r.s as unknown as Record<string, string>)[key] || "").toLowerCase();
+    const rec = r.s as unknown as Record<string, string | undefined>;
+    const raw = getRawField(rec, key);
+    return key === "last_modified" ? raw : raw.toLowerCase();
   };
   const isPinned = (r: (typeof rows)[0]) =>
     (r.s.pinned || "false").toLowerCase() === "true";
@@ -493,9 +496,9 @@ export function LibraryTab({
                           text: "Copy Full Content to Clipboard",
                           onClick: async () => {
                             try {
-                              await invoke("copy_to_clipboard", {
-                                text: row.s.content || "",
-                              });
+                              await getTaurpc().copy_to_clipboard(
+                                row.s.content || ""
+                              );
                               setStatus("Copied to clipboard");
                             } catch (err) {
                               setStatus("Copy failed: " + String(err), true);
@@ -677,9 +680,9 @@ export function LibraryTab({
                         text: "Copy Full Content to Clipboard",
                         onClick: async () => {
                           try {
-                            await invoke("copy_to_clipboard", {
-                              text: s.content || "",
-                            });
+                            await getTaurpc().copy_to_clipboard(
+                              s.content || ""
+                            );
                             setStatus("Copied to clipboard");
                           } catch (err) {
                             setStatus("Copy failed: " + String(err), true);
@@ -699,13 +702,6 @@ export function LibraryTab({
                     ]);
                   }}
                 >
-                  <td className="border border-[var(--dc-border)] p-1.5 w-[28px] text-center">
-                    {(s.pinned || "false").toLowerCase() === "true" ? (
-                      <span title="Pinned"><Pin className="w-3.5 h-3.5 mx-auto text-amber-500 fill-amber-500" aria-hidden /></span>
-                    ) : (
-                      <span className="w-3.5 h-3.5 inline-block" aria-hidden />
-                    )}
-                  </td>
                   <td className="border border-[var(--dc-border)] p-1.5 w-[28px] text-center">
                     {(s.pinned || "false").toLowerCase() === "true" ? (
                       <span title="Pinned"><Pin className="w-3.5 h-3.5 mx-auto text-amber-500 fill-amber-500" aria-hidden /></span>

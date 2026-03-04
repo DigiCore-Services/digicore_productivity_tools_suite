@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { getTaurpc } from "@/lib/taurpc";
 import type { AppState } from "../types";
 
 interface ScriptTabProps {
@@ -21,10 +21,10 @@ export function ScriptTab({ appState }: ScriptTabProps) {
 
   const loadScriptTab = async () => {
     try {
-      const state = (await invoke("get_app_state")) as AppState;
+      const state = await getTaurpc().get_app_state();
       setRunDisabled(!!state.script_library_run_disabled);
       setRunAllowlist(state.script_library_run_allowlist || "");
-      const js = (await invoke("get_script_library_js")) as string;
+      const js = await getTaurpc().get_script_library_js();
       setJsContent(js || "");
     } catch (e) {
       setStatus("Error: " + String(e));
@@ -37,13 +37,11 @@ export function ScriptTab({ appState }: ScriptTabProps) {
 
   const handleSaveRun = async () => {
     try {
-      await invoke("update_config", {
-        config: {
-          script_library_run_disabled: runDisabled,
-          script_library_run_allowlist: runAllowlist,
-        },
-      });
-      await invoke("save_settings");
+      await getTaurpc().update_config({
+        script_library_run_disabled: runDisabled,
+        script_library_run_allowlist: runAllowlist,
+      } as Parameters<ReturnType<typeof getTaurpc>["update_config"]>[0]);
+      await getTaurpc().save_settings();
       setStatus("Run settings saved.");
     } catch (e) {
       setStatus("Error: " + String(e));
@@ -52,7 +50,7 @@ export function ScriptTab({ appState }: ScriptTabProps) {
 
   const handleSaveJs = async () => {
     try {
-      await invoke("save_script_library_js", { content: jsContent });
+      await getTaurpc().save_script_library_js(jsContent);
       setStatus("Global Library saved! JS hot-reloaded.");
     } catch (e) {
       setStatus("Error: " + String(e));

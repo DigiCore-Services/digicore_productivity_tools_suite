@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { getTaurpc } from "@/lib/taurpc";
 import { FileText, RotateCcw } from "lucide-react";
 import { Button } from "./ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
@@ -30,7 +30,7 @@ export function LogTab() {
   const loadLogs = useCallback(async () => {
     try {
       setLoading(true);
-      const e = (await invoke("get_diagnostic_logs")) as DiagnosticEntry[];
+      const e = await getTaurpc().get_diagnostic_logs();
       setEntries(e);
     } catch (err) {
       console.error("Failed to load diagnostic logs:", err);
@@ -53,7 +53,7 @@ export function LogTab() {
   const handleClear = useCallback(async () => {
     try {
       setClearing(true);
-      await invoke("clear_diagnostic_logs");
+      await getTaurpc().clear_diagnostic_logs();
       await loadLogs();
     } catch (err) {
       console.error("Failed to clear logs:", err);
