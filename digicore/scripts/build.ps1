@@ -123,12 +123,13 @@ function Build-Tauri {
 
     Push-Location $TauriAppDir
     try {
-        # npm run build runs "tauri build"; use -- to pass --release to tauri CLI
-        if ($Release) {
-            & npm run build -- --release
-        } else {
-            & npm run build
-        }
+        # npm run tauri build = full Tauri build (beforeBuildCommand + Rust + bundle)
+        # beforeBuildCommand runs "npm run build" = tsc && vite build (React/Vite frontend)
+        # tauri build is release by default; use --debug for debug build
+        # --no-sign skips code signing (avoids "TAURI_SIGNING_PRIVATE_KEY" error when pubkey is set)
+        $extraArgs = @("--no-sign")
+        if (-not $Release) { $extraArgs += "--debug" }
+        & npm run tauri build -- @extraArgs
         if ($LASTEXITCODE -ne 0) {
             Write-Fail "tauri build failed"
             return $false
