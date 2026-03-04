@@ -45,7 +45,7 @@ fn test_get_pinned_snippets_empty_filter() {
 
     let pinned = ghost_follower::get_pinned_snippets("");
     assert_eq!(pinned.len(), 2);
-    let triggers: Vec<_> = pinned.iter().map(|(s, _)| s.trigger.as_str()).collect();
+    let triggers: Vec<_> = pinned.iter().map(|(s, _, _)| s.trigger.as_str()).collect();
     assert!(triggers.contains(&"addr"));
     assert!(triggers.contains(&"email"));
 

@@ -346,15 +346,7 @@ impl eframe::App for TextExpanderApp {
                 }
             };
             builder = builder.with_position(egui::pos2(pos_x, pos_y));
-            let pinned_with_idx: Vec<(Snippet, String, usize)> = pinned
-                .iter()
-                .filter_map(|(snip, cat)| {
-                    self.library
-                        .get(cat)
-                        .and_then(|v| v.iter().position(|s| s.trigger == snip.trigger))
-                        .map(|idx| (snip.clone(), cat.clone(), idx))
-                })
-                .collect();
+            let pinned_with_idx: Vec<(Snippet, String, usize)> = pinned;
             let clips_with_idx: Vec<(usize, clipboard_history::ClipEntry)> = clips
                 .iter()
                 .enumerate()

@@ -72,8 +72,8 @@ impl Default for GhostFollowerConfig {
 struct FollowerState {
     config: GhostFollowerConfig,
     library: HashMap<String, Vec<Snippet>>,
-    /// Pinned snippets only (F50).
-    pinned: Vec<(Snippet, String)>, // (snippet, category)
+    /// Pinned snippets only (F50). (snippet, category, snippet_idx)
+    pinned: Vec<(Snippet, String, usize)>,
 }
 
 static FOLLOWER_STATE: Mutex<Option<Arc<Mutex<FollowerState>>>> = Mutex::new(None);
@@ -138,12 +138,12 @@ pub fn get_config() -> GhostFollowerConfig {
     state.lock().map(|s| s.config.clone()).unwrap_or_default()
 }
 
-fn collect_pinned(library: &HashMap<String, Vec<Snippet>>) -> Vec<(Snippet, String)> {
+fn collect_pinned(library: &HashMap<String, Vec<Snippet>>) -> Vec<(Snippet, String, usize)> {
     let mut result = Vec::new();
     for (category, snippets) in library {
-        for snip in snippets {
+        for (idx, snip) in snippets.iter().enumerate() {
             if snip.is_pinned() {
-                result.push((snip.clone(), category.clone()));
+                result.push((snip.clone(), category.clone(), idx));
             }
         }
     }
@@ -157,7 +157,8 @@ pub fn get_clipboard_entries() -> Vec<super::clipboard_history::ClipEntry> {
 }
 
 /// Get pinned snippets for display, filtered by search (F50, F51).
-pub fn get_pinned_snippets(filter: &str) -> Vec<(Snippet, String)> {
+/// Returns (Snippet, category, snippet_idx).
+pub fn get_pinned_snippets(filter: &str) -> Vec<(Snippet, String, usize)> {
     let guard = match FOLLOWER_STATE.lock() {
         Ok(g) => g,
         Err(_) => return vec![],
@@ -179,7 +180,7 @@ pub fn get_pinned_snippets(filter: &str) -> Vec<(Snippet, String)> {
     }
     s.pinned
         .iter()
-        .filter(|(snip, cat)| {
+        .filter(|(snip, cat, _)| {
             snip.trigger.to_lowercase().contains(&filter_lower)
                 || snip.content.to_lowercase().contains(&filter_lower)
                 || cat.to_lowercase().contains(&filter_lower)
