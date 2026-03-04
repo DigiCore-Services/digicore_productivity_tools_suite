@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ghost Suggestor</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; background: transparent; font-family: 'Segoe UI', sans-serif; font-size: 13px; }
+    body { padding: 8px; }
+    .card { background: rgba(255, 255, 255, 0.96); border-radius: 8px; padding: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); border: 1px solid rgba(0,0,0,0.06); }
+    h4 { margin: 0 0 8px 0; font-size: 12px; color: #374151; }
+    .suggestions { max-height: 140px; overflow-y: auto; border: 1px solid #e5e7eb; border-radius: 4px; background: #fff; }
+    .suggestion { padding: 6px 10px; cursor: pointer; border-bottom: 1px solid #f3f4f6; }
+    .suggestion:last-child { border-bottom: none; }
+    .suggestion.selected { background: #dbeafe; }
+    .suggestion:hover { background: #f3f4f6; }
+    .actions { margin-top: 8px; display: flex; gap: 6px; }
+    button { padding: 4px 10px; font-size: 12px; cursor: pointer; border-radius: 4px; border: 1px solid #d1d5db; background: #f9fafb; }
+    button:hover { background: #e5e7eb; }
+  </style>
+</head>
+<body>
+  <div class="card">
+  <h4>Suggestions (Tab to accept, Ctrl+Tab to cycle)</h4>
+  <div id="suggestions-list" class="suggestions"></div>
+  <div class="actions">
+    <button id="btn-accept">Accept</button>
+    <button id="btn-create">Create Snippet</button>
+    <button id="btn-ignore">Ignore</button>
+  </div>
+  </div>
+  <script type="module" src="/src/ghost-suggestor.ts"></script>
+</body>
+</html>

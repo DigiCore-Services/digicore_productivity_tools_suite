@@ -30,5 +30,12 @@ export default defineConfig({
     minify: !process.env.TAURI_ENV_DEBUG ? "esbuild" : false,
     sourcemap: !!process.env.TAURI_ENV_DEBUG,
     outDir: "dist",
+    rollupOptions: {
+      input: {
+        main: path.resolve(__dirname, "index.html"),
+        "ghost-follower": path.resolve(__dirname, "ghost-follower.html"),
+        "ghost-suggestor": path.resolve(__dirname, "ghost-suggestor.html"),
+      },
+    },
   },
 });
