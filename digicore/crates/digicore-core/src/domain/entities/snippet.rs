@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 /// Matches the JSON format from text_expansion_library.json:
 /// trigger, content, options, category, profile, appLock, pinned, lastModified.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct Snippet {
     pub trigger: String,
     pub content: String,
