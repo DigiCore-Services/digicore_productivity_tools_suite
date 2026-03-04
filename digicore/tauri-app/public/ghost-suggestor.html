@@ -64,15 +64,20 @@
       try {
         const state = await invoke('get_ghost_suggestor_state');
         render(state);
+        const w = getCurrentWebviewWindow();
+        if (w) {
+          if (state && state.should_passthrough) {
+            try { w.setIgnoreCursorEvents(true); } catch (_) {}
+          } else {
+            try { w.setIgnoreCursorEvents(false); } catch (_) {}
+          }
+        }
         if (state && state.has_suggestions && state.position) {
-          const w = getCurrentWebviewWindow();
           if (w) w.setPosition({ x: state.position[0], y: state.position[1] });
         }
         if (state && state.has_suggestions) {
-          const w = getCurrentWebviewWindow();
           if (w) w.show();
         } else {
-          const w = getCurrentWebviewWindow();
           if (w) w.hide();
         }
       } catch (_) {}

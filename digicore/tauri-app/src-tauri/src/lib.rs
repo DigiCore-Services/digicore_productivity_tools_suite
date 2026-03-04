@@ -9,13 +9,13 @@ use digicore_core::domain::Snippet;
 use digicore_text_expander::adapters::storage::JsonFileStorageAdapter;
 use digicore_text_expander::application::app_state::AppState;
 use digicore_text_expander::application::clipboard_history::{self, ClipboardHistoryConfig};
+use digicore_text_expander::application::expansion_diagnostics;
+use digicore_text_expander::application::expansion_stats;
 use digicore_text_expander::application::ghost_follower;
 use digicore_text_expander::application::ghost_suggestor;
 use digicore_text_expander::application::scripting::{get_scripting_config, set_global_library};
 use digicore_text_expander::application::template_processor::{self, InteractiveVarType};
 use digicore_text_expander::application::variable_input;
-use digicore_text_expander::application::expansion_diagnostics;
-use digicore_text_expander::application::expansion_stats;
 use digicore_text_expander::drivers::hotstring::{
     start_listener, sync_ghost_config, update_library, GhostConfig,
 };
@@ -29,6 +29,7 @@ use std::path::Path;
 use std::sync::Mutex;
 use tauri::menu::{Menu, MenuItem};
 use tauri::{Emitter, Manager, State};
+use tauri_plugin_sql::{Migration, MigrationKind};
 
 /// Application state held by Tauri. Wraps AppState in Mutex for thread-safe access.
 pub struct TauriAppState(pub Mutex<AppState>);
@@ -192,7 +193,52 @@ pub fn run() {
         enabled: true,
         max_depth: app_state.clip_history_max_depth,
     });
+    let prevent_default = if cfg!(debug_assertions) {
+        tauri_plugin_prevent_default::debug()
+    } else {
+        tauri_plugin_prevent_default::init()
+    };
     tauri::Builder::default()
+        .plugin(tauri_plugin_store::Builder::new().build())
+        .plugin(tauri_plugin_http::init())
+        .plugin(tauri_plugin_persisted_scope::init())
+        .plugin(tauri_plugin_positioner::init())
+        .plugin(prevent_default)
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(
+            tauri_plugin_sql::Builder::default()
+                .add_migrations(
+                    "sqlite:digicore.db",
+                    vec![
+                        Migration {
+                            version: 1,
+                            description: "create_snippets_schema",
+                            sql: r#"
+                                CREATE TABLE IF NOT EXISTS categories (
+                                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                    name TEXT NOT NULL UNIQUE
+                                );
+                                CREATE TABLE IF NOT EXISTS snippets (
+                                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                    category_id INTEGER NOT NULL,
+                                    trigger TEXT NOT NULL,
+                                    content TEXT NOT NULL,
+                                    options TEXT DEFAULT '',
+                                    profile TEXT DEFAULT 'Default',
+                                    app_lock TEXT DEFAULT '',
+                                    pinned TEXT DEFAULT 'false',
+                                    last_modified TEXT DEFAULT '',
+                                    FOREIGN KEY (category_id) REFERENCES categories(id)
+                                );
+                                CREATE INDEX IF NOT EXISTS idx_snippets_category ON snippets(category_id);
+                                CREATE INDEX IF NOT EXISTS idx_snippets_trigger ON snippets(trigger);
+                            "#,
+                            kind: MigrationKind::Up,
+                        },
+                    ],
+                )
+                .build(),
+        )
         .plugin(tauri_plugin_window_state::Builder::new().build())
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             if let Some(win) = app.get_webview_window("main") {
@@ -209,10 +255,15 @@ pub fn run() {
         .plugin(tauri_plugin_deep_link::init())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
-                .with_shortcuts(["F11"])
-                .expect("F11 shortcut")
+                .with_shortcuts(["F11", "Shift+Alt+Space"])
+                .expect("global shortcuts")
                 .with_handler(|app, shortcut, _event| {
-                    if shortcut.to_string() != "F11" {
+                    let s = shortcut.to_string();
+                    if s.eq_ignore_ascii_case("Shift+Alt+Space") {
+                        let _ = app.emit("show-command-palette", ());
+                        return;
+                    }
+                    if s != "F11" {
                         return;
                     }
                     if variable_input::has_viewport_modal() {
@@ -265,16 +316,14 @@ pub fn run() {
         )
         .setup(|app| {
             #[cfg(desktop)]
-            let _ = app.handle().plugin(tauri_plugin_updater::Builder::new().build());
+            let _ = app
+                .handle()
+                .plugin(tauri_plugin_updater::Builder::new().build());
             #[cfg(target_os = "windows")]
             {
                 use tauri::window::{Effect, EffectsBuilder};
                 if let Some(win) = app.get_webview_window("main") {
-                    let _ = win.set_effects(
-                        EffectsBuilder::new()
-                            .effect(Effect::Mica)
-                            .build(),
-                    );
+                    let _ = win.set_effects(EffectsBuilder::new().effect(Effect::Mica).build());
                 }
             }
             #[cfg(any(windows, target_os = "linux"))]
@@ -294,11 +343,14 @@ pub fn run() {
             // Tray menu: Show, Pause, Add Snippet, Quit
             if let Some(tray) = app.tray_by_id("default") {
                 let show_i = MenuItem::with_id(&handle, "show", "Show", true, None::<&str>);
-                let pause_i = MenuItem::with_id(&handle, "pause", "Pause expansion", true, None::<&str>);
-                let add_i = MenuItem::with_id(&handle, "add_snippet", "Add Snippet", true, None::<&str>);
+                let pause_i =
+                    MenuItem::with_id(&handle, "pause", "Pause expansion", true, None::<&str>);
+                let add_i =
+                    MenuItem::with_id(&handle, "add_snippet", "Add Snippet", true, None::<&str>);
                 let quit_i = MenuItem::with_id(&handle, "quit", "Quit", true, None::<&str>);
                 if let (Ok(show), Ok(pause), Ok(add), Ok(quit)) = (show_i, pause_i, add_i, quit_i) {
-                    let items: Vec<&dyn tauri::menu::IsMenuItem<_>> = vec![&show, &pause, &add, &quit];
+                    let items: Vec<&dyn tauri::menu::IsMenuItem<_>> =
+                        vec![&show, &pause, &add, &quit];
                     if let Ok(m) = Menu::with_items(&handle, &items) {
                         let _ = tray.set_menu(Some(m));
                         let _ = tray.set_show_menu_on_left_click(true);
@@ -306,32 +358,32 @@ pub fn run() {
                 }
             }
 
-            app.on_menu_event(move |app_handle, event| {
-                match event.id.as_ref() {
-                    "show" => {
-                        if let Some(win) = app_handle.get_webview_window("main") {
-                            let _ = win.show();
-                            let _ = win.set_focus();
-                            let _ = win.unminimize();
-                        }
+            app.on_menu_event(move |app_handle, event| match event.id.as_ref() {
+                "show" => {
+                    if let Some(win) = app_handle.get_webview_window("main") {
+                        let _ = win.show();
+                        let _ = win.set_focus();
+                        let _ = win.unminimize();
                     }
-                    "pause" => {
-                        use digicore_text_expander::application::expansion_engine::{is_expansion_paused, set_expansion_paused};
-                        set_expansion_paused(!is_expansion_paused());
-                        let _ = app_handle.emit("ghost-follower-update", ());
-                    }
-                    "add_snippet" => {
-                        let _ = app_handle.emit("tray-add-snippet", ());
-                        if let Some(win) = app_handle.get_webview_window("main") {
-                            let _ = win.show();
-                            let _ = win.set_focus();
-                        }
-                    }
-                    "quit" => {
-                        app_handle.exit(0);
-                    }
-                    _ => {}
                 }
+                "pause" => {
+                    use digicore_text_expander::application::expansion_engine::{
+                        is_expansion_paused, set_expansion_paused,
+                    };
+                    set_expansion_paused(!is_expansion_paused());
+                    let _ = app_handle.emit("ghost-follower-update", ());
+                }
+                "add_snippet" => {
+                    let _ = app_handle.emit("tray-add-snippet", ());
+                    if let Some(win) = app_handle.get_webview_window("main") {
+                        let _ = win.show();
+                        let _ = win.set_focus();
+                    }
+                }
+                "quit" => {
+                    app_handle.exit(0);
+                }
+                _ => {}
             });
 
             Ok(())
@@ -364,6 +416,10 @@ pub fn run() {
             get_ghost_follower_state,
             ghost_follower_insert,
             ghost_follower_set_search,
+            ghost_follower_request_view_full,
+            ghost_follower_request_edit,
+            ghost_follower_request_promote,
+            ghost_follower_toggle_pin,
             get_pending_variable_input,
             submit_variable_input,
             cancel_variable_input,
@@ -695,12 +751,22 @@ pub struct GhostSuggestorStateDto {
     pub suggestions: Vec<SuggestionDto>,
     pub selected_index: usize,
     pub position: Option<(i32, i32)>,
+    /// When true, enable mouse passthrough (e.g. when fading out per display_duration).
+    pub should_passthrough: bool,
 }
 
 #[tauri::command]
 fn get_ghost_suggestor_state() -> Result<GhostSuggestorStateDto, String> {
     let suggestions = ghost_suggestor::get_suggestions();
     let selected = ghost_suggestor::get_selected_index();
+    let has_suggestions = !suggestions.is_empty();
+    let should_auto_hide = ghost_suggestor::should_auto_hide();
+    let should_passthrough = should_auto_hide || !has_suggestions;
+    if should_auto_hide && has_suggestions {
+        ghost_suggestor::dismiss();
+    }
+    let suggestions = ghost_suggestor::get_suggestions();
+    let has_suggestions = !suggestions.is_empty();
     #[cfg(target_os = "windows")]
     let position = {
         let pos = windows_caret::get_caret_screen_position();
@@ -710,7 +776,7 @@ fn get_ghost_suggestor_state() -> Result<GhostSuggestorStateDto, String> {
     #[cfg(not(target_os = "windows"))]
     let position: Option<(i32, i32)> = None;
     Ok(GhostSuggestorStateDto {
-        has_suggestions: !suggestions.is_empty(),
+        has_suggestions,
         suggestions: suggestions
             .into_iter()
             .map(|s| SuggestionDto {
@@ -725,6 +791,7 @@ fn get_ghost_suggestor_state() -> Result<GhostSuggestorStateDto, String> {
             .collect(),
         selected_index: selected,
         position,
+        should_passthrough,
     })
 }
 
@@ -766,6 +833,7 @@ pub struct PinnedSnippetDto {
     pub content: String,
     pub content_preview: String,
     pub category: String,
+    pub snippet_idx: usize,
 }
 
 #[derive(serde::Serialize)]
@@ -775,6 +843,10 @@ pub struct GhostFollowerStateDto {
     pub search_filter: String,
     /// Position (x, y) for edge-anchored window. None on non-Windows.
     pub position: Option<(i32, i32)>,
+    /// True when edge is Right (for positioner TopRight).
+    pub edge_right: bool,
+    /// True when monitor is Primary (positioner works best for primary).
+    pub monitor_primary: bool,
 }
 
 #[tauri::command]
@@ -813,7 +885,7 @@ fn get_ghost_follower_state(
         enabled,
         pinned: pinned
             .into_iter()
-            .map(|(s, cat)| PinnedSnippetDto {
+            .map(|(s, cat, idx)| PinnedSnippetDto {
                 trigger: s.trigger.clone(),
                 content: s.content.clone(),
                 content_preview: if s.content.len() > 40 {
@@ -822,10 +894,13 @@ fn get_ghost_follower_state(
                     s.content.clone()
                 },
                 category: cat,
+                snippet_idx: idx,
             })
             .collect(),
         search_filter: ghost_follower::get_search_filter(),
         position,
+        edge_right: cfg.edge == ghost_follower::FollowerEdge::Right,
+        monitor_primary: cfg.monitor_anchor == ghost_follower::MonitorAnchor::Primary,
     })
 }
 
@@ -838,6 +913,69 @@ fn ghost_follower_insert(_trigger: String, content: String) -> Result<(), String
 #[tauri::command]
 fn ghost_follower_set_search(filter: String, app: tauri::AppHandle) -> Result<(), String> {
     ghost_follower::set_search_filter(&filter);
+    let _ = app.emit("ghost-follower-update", ());
+    Ok(())
+}
+
+/// Emit to main window: open View Full Content modal (from Ghost Follower).
+#[tauri::command]
+fn ghost_follower_request_view_full(content: String, app: tauri::AppHandle) -> Result<(), String> {
+    let _ = app.emit("ghost-follower-view-full", content);
+    Ok(())
+}
+
+/// Emit to main window: open Snippet Editor in edit mode (from Ghost Follower).
+#[tauri::command]
+fn ghost_follower_request_edit(
+    category: String,
+    snippet_idx: usize,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    let _ = app.emit(
+        "ghost-follower-edit",
+        serde_json::json!({ "category": category, "snippetIdx": snippet_idx }),
+    );
+    Ok(())
+}
+
+/// Emit to main window: open Snippet Editor in promote mode (from Ghost Follower).
+#[tauri::command]
+fn ghost_follower_request_promote(
+    content: String,
+    trigger: String,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    let _ = app.emit(
+        "ghost-follower-promote",
+        serde_json::json!({ "content": content, "trigger": trigger }),
+    );
+    Ok(())
+}
+
+/// Toggle pin state of a snippet (from Ghost Follower). Emits ghost-follower-update after.
+#[tauri::command]
+fn ghost_follower_toggle_pin(
+    state: State<TauriAppState>,
+    category: String,
+    snippet_idx: usize,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    let mut guard = state.0.lock().map_err(|e| e.to_string())?;
+    let snippets = guard
+        .library
+        .get_mut(&category)
+        .ok_or_else(|| "Category not found".to_string())?;
+    let s = snippets
+        .get_mut(snippet_idx)
+        .ok_or_else(|| "Snippet not found".to_string())?;
+    let new_pinned = if s.pinned.eq_ignore_ascii_case("true") {
+        "false"
+    } else {
+        "true"
+    };
+    s.pinned = new_pinned.to_string();
+    guard.try_save_library().map_err(|e| e.to_string())?;
+    update_library(guard.library.clone());
     let _ = app.emit("ghost-follower-update", ());
     Ok(())
 }
