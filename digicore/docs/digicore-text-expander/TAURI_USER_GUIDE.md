@@ -1,7 +1,7 @@
 # DigiCore Text Expander - Tauri User Guide
 
-**Version:** 1.0  
-**Last Updated:** 2026-03-03  
+**Version:** 1.1  
+**Last Updated:** 2026-03-04  
 **Product:** DigiCore Text Expander (Tauri + React + Vite)
 
 ---
@@ -180,10 +180,18 @@ Open with:
 - App uses native OS title bar (`decorations: true`)
 - Custom TitleBar component was removed to avoid duplicate headers
 
+### TauRPC / IPC
+
+- All IPC uses TauRPC proxy via `getTaurpc()` from `@/lib/taurpc`
+- Do not use `invoke()`; it will not route to backend commands
+- Bindings are generated at `src/bindings.ts` when running `tauri dev` or `tauri build`
+- Ghost overlays (ghost-follower.html, ghost-suggestor.html) are Vite entry points; built to dist/
+
 ---
 
 ## Related Documentation
 
 - [TAURI_IMPLEMENTATION_STATUS.md](./TAURI_IMPLEMENTATION_STATUS.md) - Implementation status
+- [TYPE_SAFE_IPC_IMPLEMENTATION_PLAN.md](./TYPE_SAFE_IPC_IMPLEMENTATION_PLAN.md) - TauRPC migration plan (implemented)
 - [tauri_advanced_innovations.md](./tauri_advanced_innovations.md) - Elite features
 - [tauri_phase3_future_polish.md](./tauri_phase3_future_polish.md) - Future polish

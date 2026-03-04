@@ -1,7 +1,7 @@
 # Tauri Implementation Status
 
-**Version:** 1.7  
-**Last Updated:** 2026-03-03  
+**Version:** 1.8  
+**Last Updated:** 2026-03-04  
 **Purpose:** Quick reference for current Tauri implementation status and next steps.
 
 ---
@@ -43,8 +43,14 @@
 | **Snippet Editor lazy load** | Done | React.lazy; DOM deferred until modal opened |
 | **CSP** | Done | security.csp in tauri.conf.json |
 | **tauri-plugin-store** | Done | Key-value persistence; store:default in capabilities |
+| **Type-safe IPC (TauRPC)** | Done | TauRPC replaces invoke(); getTaurpc() proxy; bindings.ts; main React app + Ghost overlays migrated |
 
 ---
+
+## Completed (2026-03-04)
+
+- **Type-safe IPC (TauRPC)**: Backend Api trait + ApiImpl with 37 procedures; DTOs with #[taurpc::ipc_type]; AppHandle injected via setup; frontend getTaurpc() proxy; App.tsx, LibraryTab, ConfigTab, ClipboardTab, ScriptTab, AnalyticsTab, LogTab, CommandPalette migrated; bindings exported to src/bindings.ts; Vitest mocks updated
+- **Phase 4 Ghost Overlays**: Vite multi-page config for ghost-follower.html and ghost-suggestor.html; src/ghost-follower.ts and src/ghost-suggestor.ts entry scripts using getTaurpc(); HTML moved from public/ to project root; all invoke() calls removed (9 in follower, 5 in suggestor)
 
 ## Completed (2026-03-03)
 
@@ -123,7 +129,6 @@ Per [tauri_phase3_future_polish.md](./tauri_phase3_future_polish.md) Section 8:
 10. ~~**Snippet Editor lazy load**~~ – Done – React.lazy; DOM deferred until opened
 
 **Remaining (optional/future)**:
-- **Type-safe IPC** (Tauri Specta/TauRPC) – see [TYPE_SAFE_IPC_IMPLEMENTATION_PLAN.md](./TYPE_SAFE_IPC_IMPLEMENTATION_PLAN.md)
 - **Windows Taskbar jump list** – Tauri does not support natively; would need custom implementation
 - **Template processing in Worker** – Doc 3 marked as future; heavy `{js:}`/`{run:}` in Worker
 
@@ -154,7 +159,7 @@ cd digicore\tauri-app
 npm run test
 ```
 
-**Frontend test results** (as of 2026-03-03): 33 tests across 7 files (libraryUtils, sqliteLoad, sqliteSync, utils, LogTab, LibraryTab, button, ui).
+**Frontend test results** (as of 2026-03-04): 33 tests across 7 files (libraryUtils, sqliteLoad, sqliteSync, utils, LogTab, LibraryTab, button, ui). Vitest mocks use getTaurpc() for LibraryTab and LogTab.
 
 ```powershell
 # Backend (Rust) - from digicore directory
@@ -163,7 +168,7 @@ cargo test -p digicore-text-expander -- --test-threads=1
 cargo test -p digicore-text-expander-tauri
 ```
 
-**Backend test results** (as of 2026-03-03): 150+ tests across lib, app_state, cli, expansion_engine, ghost_follower, ghost_suggestor, template_scripting_integration.
+**Backend test results** (as of 2026-03-04): 150+ tests across lib, app_state, cli, expansion_engine, ghost_follower, ghost_suggestor, template_scripting_integration. Tauri crate: `cargo test -p digicore-text-expander-tauri` (4 integration tests).
 
 ---
 
