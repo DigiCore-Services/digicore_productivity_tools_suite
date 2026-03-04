@@ -38,10 +38,28 @@ describe("getCellValue", () => {
     expect(result.endsWith("...")).toBe(true);
   });
 
-  it("formats last_modified for Last Modified column", () => {
+  it("formats last_modified for Last Modified column (snake_case)", () => {
     expect(
       getCellValue(
         { last_modified: "20260303143022" } as SnippetLike,
+        "Last Modified"
+      )
+    ).toBe("2026-03-03 14:30:22");
+  });
+
+  it("formats lastModified for Last Modified column (camelCase from backend)", () => {
+    expect(
+      getCellValue(
+        { lastModified: "20260303143022" } as SnippetLike,
+        "Last Modified"
+      )
+    ).toBe("2026-03-03 14:30:22");
+  });
+
+  it("formats 17-char lastModified (YYYYMMDDHHmmssfff)", () => {
+    expect(
+      getCellValue(
+        { lastModified: "20260303143022123" } as SnippetLike,
         "Last Modified"
       )
     ).toBe("2026-03-03 14:30:22");

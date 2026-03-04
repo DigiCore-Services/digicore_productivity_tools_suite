@@ -41,6 +41,21 @@ export interface SnippetLike {
 }
 
 /**
+ * Get raw value from snippet, supporting both snake_case (SQLite) and camelCase (backend DTO).
+ * Exported for use in sorting and other non-display logic.
+ */
+export function getRawField(
+  rec: Record<string, string | undefined>,
+  key: string
+): string {
+  const snake = rec[key];
+  if (snake !== undefined && snake !== "") return String(snake);
+  const camel = key === "app_lock" ? "appLock" : key === "last_modified" ? "lastModified" : key;
+  const val = rec[camel];
+  return val !== undefined ? String(val) : "";
+}
+
+/**
  * Get display value for a table cell by column name.
  */
 export function getCellValue(s: SnippetLike, col: string): string {
@@ -51,6 +66,6 @@ export function getCellValue(s: SnippetLike, col: string): string {
     const content = (rec.content || "").replace(/\n/g, " ").slice(0, 60);
     return content + (rec.content?.length && rec.content.length > 60 ? "..." : "");
   }
-  if (key === "last_modified") return formatLastModified(rec.last_modified || "");
-  return (rec[key] || "").toString();
+  if (key === "last_modified") return formatLastModified(getRawField(rec, "last_modified") || "");
+  return getRawField(rec, key);
 }
