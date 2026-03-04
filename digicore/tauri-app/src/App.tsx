@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState, lazy, Suspense } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { emitTo, listen } from "@tauri-apps/api/event";
 import { onOpenUrl } from "@tauri-apps/plugin-deep-link";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import {
@@ -14,18 +14,35 @@ import {
 } from "lucide-react";
 import type { AppState, PendingVariableInput, Snippet } from "./types";
 import { LibraryTab } from "./components/LibraryTab";
-import { ConfigTab } from "./components/ConfigTab";
-import { ClipboardTab } from "./components/ClipboardTab";
-import { ScriptTab } from "./components/ScriptTab";
-import { AnalyticsTab } from "./components/AnalyticsTab";
-import { LogTab } from "./components/LogTab";
+const ConfigTab = lazy(() =>
+  import("./components/ConfigTab").then((m) => ({ default: m.ConfigTab }))
+);
+const ClipboardTab = lazy(() =>
+  import("./components/ClipboardTab").then((m) => ({ default: m.ClipboardTab }))
+);
+const ScriptTab = lazy(() =>
+  import("./components/ScriptTab").then((m) => ({ default: m.ScriptTab }))
+);
+const AnalyticsTab = lazy(() =>
+  import("./components/AnalyticsTab").then((m) => ({ default: m.AnalyticsTab }))
+);
+const LogTab = lazy(() =>
+  import("./components/LogTab").then((m) => ({ default: m.LogTab }))
+);
+const SnippetEditor = lazy(() =>
+  import("./components/modals/SnippetEditor").then((m) => ({
+    default: m.SnippetEditor,
+  }))
+);
 import {
-  SnippetEditor,
   DeleteConfirm,
   ViewFull,
   ClipClearConfirm,
   VariableInput,
 } from "./components/modals";
+import { CommandPalette } from "./components/CommandPalette";
+import { initNotificationActionListener } from "./lib/notifications";
+import { syncLibraryToSqlite } from "./lib/sqliteSync";
 
 const DEFAULT_COLUMNS = [
   "Profile",
@@ -41,7 +58,7 @@ function App() {
   const [activeTab, setActiveTab] = useState(0);
   const [appState, setAppState] = useState<AppState | null>(null);
   const [columnOrder, setColumnOrder] = useState<string[]>(DEFAULT_COLUMNS);
-  const [sortColumn, setSortColumn] = useState<string | null>(null);
+  const [sortColumn, setSortColumn] = useState<string | null>("Trigger");
   const [sortAsc, setSortAsc] = useState(true);
 
   const [snippetEditorVisible, setSnippetEditorVisible] = useState(false);
@@ -61,12 +78,18 @@ function App() {
 
   const [viewFullVisible, setViewFullVisible] = useState(false);
   const [viewFullContent, setViewFullContent] = useState("");
+  const [viewFullEditMeta, setViewFullEditMeta] = useState<{
+    category: string;
+    snippetIdx: number;
+  } | null>(null);
 
   const [clipClearConfirmVisible, setClipClearConfirmVisible] = useState(false);
 
   const [variableInputVisible, setVariableInputVisible] = useState(false);
   const [variableInputData, setVariableInputData] =
     useState<PendingVariableInput | null>(null);
+
+  const [commandPaletteVisible, setCommandPaletteVisible] = useState(false);
 
   const [clipboardRefreshTrigger, setClipboardRefreshTrigger] = useState(0);
 
@@ -131,11 +154,18 @@ function App() {
             snippet,
           });
         }
+        await invoke("save_library");
+        await invoke("save_settings").catch(() => {});
         closeSnippetEditor();
         const state = await loadAppState();
-        if (state) setAppState(state);
+        if (state) {
+          setAppState(state);
+          if (state.library && Object.keys(state.library).length > 0) {
+            await syncLibraryToSqlite(state.library);
+          }
+        }
         setLibraryStatusFn(
-          snippetEditorMode === "add" ? "Snippet added" : "Snippet updated"
+          snippetEditorMode === "add" ? "Snippet added and saved" : "Snippet updated and saved"
         );
       } catch (e) {
         setLibraryStatusFn("Error: " + String(e), true);
@@ -163,19 +193,33 @@ function App() {
         category: deleteConfirmCat,
         snippetIdx: deleteConfirmIdx,
       });
+      await invoke("save_library");
+      await invoke("save_settings").catch(() => {});
       setDeleteConfirmVisible(false);
       const state = await loadAppState();
-      if (state) setAppState(state);
-      setLibraryStatusFn("Snippet deleted");
+      if (state) {
+        setAppState(state);
+        if (state.library && Object.keys(state.library).length > 0) {
+          await syncLibraryToSqlite(state.library);
+        }
+      }
+      setLibraryStatusFn("Snippet deleted and saved");
     } catch (e) {
       setLibraryStatusFn("Delete failed: " + String(e), true);
     }
   }, [deleteConfirmCat, deleteConfirmIdx, loadAppState, setLibraryStatusFn]);
 
-  const openViewFull = useCallback((content: string) => {
-    setViewFullContent(content);
-    setViewFullVisible(true);
-  }, []);
+  const openViewFull = useCallback(
+    (
+      content: string,
+      editMeta?: { category: string; snippetIdx: number } | null
+    ) => {
+      setViewFullContent(content);
+      setViewFullEditMeta(editMeta ?? null);
+      setViewFullVisible(true);
+    },
+    []
+  );
 
   const handleClipClearConfirm = useCallback(async () => {
     try {
@@ -265,6 +309,75 @@ function App() {
       unlisten?.();
     };
   }, [showVariableInputModal]);
+
+  useEffect(() => {
+    const unlistens: (() => void)[] = [];
+    listen<string>("ghost-follower-view-full", (e) => {
+      openViewFull(e.payload ?? "");
+    }).then((fn) => unlistens.push(fn));
+    listen<{ category: string; snippetIdx: number }>(
+      "ghost-follower-edit",
+      (e) => {
+        const { category, snippetIdx } = e.payload ?? {};
+        if (category != null && snippetIdx != null) {
+          openSnippetEditor("edit", category, snippetIdx);
+        }
+      }
+    ).then((fn) => unlistens.push(fn));
+    listen<{ content: string; trigger: string }>(
+      "ghost-follower-promote",
+      (e) => {
+        const { content, trigger } = e.payload ?? {};
+        if (content != null && trigger != null) {
+          const cats = appState?.categories ?? ["General"];
+          openSnippetEditor("add", cats[0] ?? "General", -1, {
+            content,
+            trigger,
+          });
+        }
+      }
+    ).then((fn) => unlistens.push(fn));
+    return () => unlistens.forEach((u) => u());
+  }, [openViewFull, openSnippetEditor, appState?.categories]);
+
+  useEffect(() => {
+    let cleanup: (() => void) | undefined;
+    initNotificationActionListener().then((fn) => {
+      cleanup = fn;
+    });
+    return () => cleanup?.();
+  }, []);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    listen("notification-view-library", async () => {
+      setActiveTab(0);
+      try {
+        const { getCurrentWindow } = await import("@tauri-apps/api/window");
+        const win = getCurrentWindow();
+        await win.setFocus();
+        await win.unminimize();
+      } catch {
+        /* ignore */
+      }
+    }).then((fn) => {
+      unlisten = fn;
+    });
+    return () => unlisten?.();
+  }, []);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    listen("show-command-palette", async () => {
+      if (!appState) await loadAppState();
+      setCommandPaletteVisible(true);
+    }).then((fn) => {
+      unlisten = fn;
+    });
+    return () => {
+      unlisten?.();
+    };
+  }, [appState, loadAppState]);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -366,7 +479,10 @@ function App() {
       } catch {
         /* ignore */
       }
-      await loadAppState();
+      const state = await loadAppState();
+      if (state?.library && Object.keys(state.library).length > 0) {
+        syncLibraryToSqlite(state.library).catch(() => {});
+      }
     })();
   }, [loadAppState]);
 
@@ -382,7 +498,7 @@ function App() {
         alwaysOnTop: true,
         visible: false,
       });
-      new WebviewWindow("ghost-follower", {
+      const followerWin = new WebviewWindow("ghost-follower", {
         url: "ghost-follower.html",
         title: "Ghost Follower",
         width: 280,
@@ -391,6 +507,9 @@ function App() {
         transparent: true,
         alwaysOnTop: true,
         visible: false,
+      });
+      followerWin.once("tauri://created", () => {
+        setTimeout(() => emitTo("ghost-follower", "ghost-follower-update"), 800);
       });
     } catch {
       /* ghost windows may fail in dev without Tauri */
@@ -433,14 +552,24 @@ function App() {
       : "Are you sure you want to delete this snippet?";
 
   return (
-    <div className="min-h-screen bg-[var(--dc-bg)] text-[var(--dc-text)] font-sans">
-      <nav className="mb-4 flex gap-1 flex-wrap">
+    <div className="flex min-h-screen flex-col bg-[var(--dc-bg)] text-[var(--dc-text)] font-sans">
+      <div className="sticky top-0 z-20 bg-[var(--dc-bg)] border-b border-[var(--dc-border)] p-5 pt-4 pb-4">
+      <nav
+        className="flex gap-1 flex-wrap"
+        role="tablist"
+        aria-label="Main navigation"
+      >
         {tabs.map((tab, idx) => {
           const Icon = tab.icon;
           return (
             <motion.button
               key={tab.id}
               type="button"
+              role="tab"
+              aria-selected={activeTab === idx}
+              aria-controls={`panel-${tab.id}`}
+              id={`tab-${tab.id}`}
+              tabIndex={activeTab === idx ? 0 : -1}
               onClick={() => handleTabClick(idx)}
               className={`inline-flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors ${
                 activeTab === idx
@@ -450,17 +579,21 @@ function App() {
               whileHover={{ scale: 1.02 }}
               whileTap={{ scale: 0.98 }}
             >
-              <Icon className="w-4 h-4" />
+              <Icon className="w-4 h-4" aria-hidden />
               {tab.label}
             </motion.button>
           );
         })}
       </nav>
-
+      </div>
+      <div className="flex-1 overflow-auto p-5 pt-4">
       <AnimatePresence mode="wait">
         {activeTab === 0 && (
         <motion.div
           key="library"
+          id="panel-library"
+          role="tabpanel"
+          aria-labelledby="tab-library"
           initial={{ opacity: 0, x: -10 }}
           animate={{ opacity: 1, x: 0 }}
           exit={{ opacity: 0, x: 10 }}
@@ -472,6 +605,7 @@ function App() {
           setStatus={setLibraryStatusFn}
           libraryStatus={libraryStatus}
           libraryStatusError={libraryStatusError}
+          onOpenViewFull={openViewFull}
           onOpenSnippetEditor={openSnippetEditor}
           onOpenDeleteConfirm={openDeleteConfirm}
           columnOrder={columnOrder}
@@ -489,22 +623,31 @@ function App() {
       {activeTab === 1 && (
         <motion.div
           key="config"
+          id="panel-config"
+          role="tabpanel"
+          aria-labelledby="tab-config"
           initial={{ opacity: 0, x: -10 }}
           animate={{ opacity: 1, x: 0 }}
           exit={{ opacity: 0, x: 10 }}
           transition={{ duration: 0.2 }}
         >
-          <ConfigTab appState={appState} onConfigLoaded={() => {}} />
+          <Suspense fallback={<div className="py-8 text-[var(--dc-text-muted)]">Loading...</div>}>
+            <ConfigTab appState={appState} onConfigLoaded={() => {}} />
+          </Suspense>
         </motion.div>
       )}
       {activeTab === 2 && (
         <motion.div
           key="clipboard"
+          id="panel-clipboard"
+          role="tabpanel"
+          aria-labelledby="tab-clipboard"
           initial={{ opacity: 0, x: -10 }}
           animate={{ opacity: 1, x: 0 }}
           exit={{ opacity: 0, x: 10 }}
           transition={{ duration: 0.2 }}
         >
+          <Suspense fallback={<div className="py-8 text-[var(--dc-text-muted)]">Loading...</div>}>
           <ClipboardTab
             appState={appState}
             refreshTrigger={clipboardRefreshTrigger}
@@ -512,17 +655,23 @@ function App() {
             onOpenSnippetEditor={openSnippetEditor}
             onOpenClipClearConfirm={() => setClipClearConfirmVisible(true)}
           />
+          </Suspense>
         </motion.div>
       )}
       {activeTab === 3 && (
         <motion.div
           key="script"
+          id="panel-script"
+          role="tabpanel"
+          aria-labelledby="tab-script"
           initial={{ opacity: 0, x: -10 }}
           animate={{ opacity: 1, x: 0 }}
           exit={{ opacity: 0, x: 10 }}
           transition={{ duration: 0.2 }}
         >
-          <ScriptTab appState={appState} />
+          <Suspense fallback={<div className="py-8 text-[var(--dc-text-muted)]">Loading...</div>}>
+            <ScriptTab appState={appState} />
+          </Suspense>
         </motion.div>
       )}
       {activeTab === 4 && (
@@ -533,32 +682,43 @@ function App() {
           exit={{ opacity: 0, x: 10 }}
           transition={{ duration: 0.2 }}
         >
-          <AnalyticsTab />
+          <Suspense fallback={<div className="py-8 text-[var(--dc-text-muted)]">Loading...</div>}>
+            <AnalyticsTab />
+          </Suspense>
         </motion.div>
       )}
       {activeTab === 5 && (
         <motion.div
           key="log"
+          id="panel-log"
+          role="tabpanel"
+          aria-labelledby="tab-log"
           initial={{ opacity: 0, x: -10 }}
           animate={{ opacity: 1, x: 0 }}
           exit={{ opacity: 0, x: 10 }}
           transition={{ duration: 0.2 }}
         >
-          <LogTab />
+          <Suspense fallback={<div className="py-8 text-[var(--dc-text-muted)]">Loading...</div>}>
+            <LogTab />
+          </Suspense>
         </motion.div>
       )}
       </AnimatePresence>
 
-      <SnippetEditor
-        visible={snippetEditorVisible}
-        mode={snippetEditorMode}
-        category={snippetEditorCategory}
-        snippetIdx={snippetEditorIdx}
-        initialSnippet={getInitialSnippet()}
-        prefill={snippetEditorPrefill}
-        onSave={handleSnippetSave}
-        onCancel={closeSnippetEditor}
-      />
+      {snippetEditorVisible && (
+        <Suspense fallback={null}>
+          <SnippetEditor
+            visible={snippetEditorVisible}
+            mode={snippetEditorMode}
+            category={snippetEditorCategory}
+            snippetIdx={snippetEditorIdx}
+            initialSnippet={getInitialSnippet()}
+            prefill={snippetEditorPrefill}
+            onSave={handleSnippetSave}
+            onCancel={closeSnippetEditor}
+          />
+        </Suspense>
+      )}
 
       <DeleteConfirm
         visible={deleteConfirmVisible}
@@ -570,7 +730,20 @@ function App() {
       <ViewFull
         visible={viewFullVisible}
         content={viewFullContent}
-        onClose={() => setViewFullVisible(false)}
+        onClose={() => {
+          setViewFullVisible(false);
+          setViewFullEditMeta(null);
+        }}
+        onEdit={
+          viewFullEditMeta
+            ? (cat, idx) => {
+                openSnippetEditor("edit", cat, idx);
+                setViewFullVisible(false);
+                setViewFullEditMeta(null);
+              }
+            : undefined
+        }
+        editMeta={viewFullEditMeta}
       />
 
       <ClipClearConfirm
@@ -585,6 +758,14 @@ function App() {
         onOk={handleVariableInputOk}
         onCancel={handleVariableInputCancel}
       />
+
+      <CommandPalette
+        visible={commandPaletteVisible}
+        appState={appState}
+        onClose={() => setCommandPaletteVisible(false)}
+        onOpenSnippetEditor={openSnippetEditor}
+      />
+      </div>
     </div>
   );
 }
