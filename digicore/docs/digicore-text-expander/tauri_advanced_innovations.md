@@ -58,9 +58,12 @@ Integrate `tauri-plugin-log` with a custom frontend "Terminal/Log" view.
 
 ## 4. The "Invisible" Polish
 
-*   **DPI Awareness**: Ensure Ghost Overlays scale perfectly across multi-monitor setups with different scaling factors (e.g., 4K 150% + 1080p 100%).
-*   **Mouse Path-through**: For the Suggestor, implement "Mouse Passthrough" when the window is fading out, so users don't accidentally click the overlay while typing.
-*   **Single-Instance Deep Linking**: If the user tries to open the app twice, the first instance should focus itself and potentially navigate to the requested page via a custom protocol (e.g., `digicore://open/settings`).
+| Feature | Status | Notes |
+|---------|--------|-------|
+| **DPI Awareness** | Done | Positioner plugin used for Ghost Follower on primary monitor; windows_monitor uses virtual-screen coordinates |
+| **Mouse Passthrough** | Done | Ghost Suggestor: setIgnoreCursorEvents(true) when display_duration elapses or no suggestions |
+| **Positioner plugin** | Done | Ghost Follower: moveWindow(Position.TopRight/TopLeft) when primary monitor; positioner:default in ghost-windows capability |
+| **Single-Instance Deep Linking** | Done | digicore://; --open-settings, --add-snippet; single-instance forwards args |
 
 ---
 
@@ -72,12 +75,14 @@ Integrate `tauri-plugin-log` with a custom frontend "Terminal/Log" view.
 ### 5.1 Elite Features Status (Document 2)
 | Feature | Status | Notes |
 |---------|--------|-------|
-| Mica/Acrylic (window-vibrancy) | Not started | Next: Document 2 visual immersion |
-| Custom titlebars | Not started | Requires `decorations: false` on main window |
-| Global Command Palette | Not started | $Shift+Alt+Space$; fuzzy search |
-| Native context menus | Not started | `tauri-plugin-context-menu` |
-| Rich notifications | Not started | Actionable toasts |
-| SQLite | Not started | For 10K+ items |
+| Mica/Acrylic | Done | Tauri native `set_effects(Effect::Mica)`; transparent html/body |
+| Window decorations | Done | Native OS title bar (decorations: true); custom TitleBar removed to avoid dual header |
+| Global Command Palette | Done | Shift+Alt+Space; Fuse.js fuzzy search; Enter=copy, Ctrl+E=edit |
+| Native context menus | Done | Tauri Menu.popup; Edit/Delete on snippet rows |
+| Rich notifications | Done | Actionable toasts; View Library action; onAction listener |
+| SQLite | Done | tauri-plugin-sql; schema; preload digicore.db |
+| SQLite partial loading | Done | useSqliteRows + loadSnippetsPage when library > 5000 items |
+| DPI / Positioner (Invisible) | Done | Ghost Follower uses positioner plugin; Ghost Suggestor mouse passthrough |
 
 ### 5.3 window-vibrancy (Mica/Acrylic)
 *   **Crate**: `window-vibrancy` (Rust crate, not a Tauri plugin). Add to `Cargo.toml`: `window-vibrancy = "0.4"`.

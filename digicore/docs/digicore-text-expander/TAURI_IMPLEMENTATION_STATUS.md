@@ -1,6 +1,6 @@
 # Tauri Implementation Status
 
-**Version:** 1.5  
+**Version:** 1.7  
 **Last Updated:** 2026-03-03  
 **Purpose:** Quick reference for current Tauri implementation status and next steps.
 
@@ -11,24 +11,47 @@
 | Area | Status | Notes |
 |------|--------|-------|
 | **Backend commands** | Done | get_app_state, load_library, save_library, set_library_path, save_settings, get_ui_prefs, save_ui_prefs |
-| **Library tab** | Done | Load, Save, search, full columns, sort, reorder, persist, row shading; Add/Edit/Delete; Snippet Editor modal; Delete confirmation |
-| **Snippet Editor** | Done | Modal for Add/Edit (trigger, profile, options, category, content, appLock, pinned) |
+| **Library tab** | Done | Load, Save, search, full columns, sort, reorder, persist, row shading; Add/Edit/Delete; Snippet Editor modal; Delete confirmation; SQLite partial loading when > 5000 items |
+| **Snippet Editor** | Done | Modal for Add/Edit (trigger, profile, options, category, content, appLock, pinned); lazy-loaded on first open |
 | **Configuration tab** | Done | Templates, Sync, Discovery, Ghost Suggestor, Ghost Follower, Clipboard config |
 | **Clipboard History tab** | Done | List, Copy, View Full, Delete, Promote, Clear All |
 | **Script Library tab** | Done | {run:} security, allowlist, global JS editor |
 | **Hotstring listener** | Done | Started on launch; expansion works in other apps |
-| **Ghost Suggestor** | Done | WebviewWindow overlay, caret positioning, Accept/Create/Ignore |
+| **Ghost Suggestor** | Done | WebviewWindow overlay, caret positioning, Accept/Create/Ignore; mouse passthrough when fading out |
 | **Variable Input (F11)** | Done | Global shortcut, modal for {var:}/{choice:}/{checkbox:} etc. |
 | **System tray** | Done | Tray icon + menu (Show, Quit, Pause, Add Snippet) |
 | **Theme** | Done | Dark/Light toggle in Core config, localStorage |
-| **Ghost Follower** | Done | WebviewWindow edge ribbon, pinned snippets, double-click insert |
+| **Ghost Follower** | Done | WebviewWindow edge ribbon, pinned snippets, double-click insert; positioner plugin for edge placement; context menus |
 | **Statistics** | Done | Analytics tab (expansions, chars saved, time saved, top triggers) |
 | **Updater** | Done | Check for Updates in Config; tauri-plugin-updater + process |
 | **Log (Diagnostics)** | Done | Log tab; expansion events (AppLock, no match, paused); tauri-plugin-log |
 | **Deep Link / CLI** | Done | digicore://; --open-settings, --add-snippet; single-instance args |
 | **Context menu** | Done | Radix ContextMenu on snippet rows (Edit/Delete) |
 | **Theme sync** | Done | System option; prefers-color-scheme |
-| **Notifications** | Done | Toast on library load/save |
+| **Notifications** | Done | Toast on library load/save; rich actionable (View Library) |
+| **Command Palette** | Done | Shift+Alt+Space; fuzzy search (Fuse.js); Enter=copy, Ctrl+E=edit |
+| **Native context menus** | Done | Tauri Menu.popup; Edit/Delete on snippet rows |
+| **Window decorations** | Done | Native OS title bar (decorations: true); custom TitleBar removed to avoid dual header |
+| **Lazy-load tabs** | Done | React.lazy for Config, Clipboard, Script, Analytics, Log |
+| **SQLite** | Done | tauri-plugin-sql; schema; sync from JSON on Load/Save/startup; preload digicore.db |
+| **Web Workers** | Done | Fuzzy search (Fuse.js) in worker; CommandPalette off main thread |
+| **Accessibility** | Done | ARIA labels, tab roles, prefers-reduced-motion, prefers-contrast |
+| **FileDialogPort** | Done | tauri-plugin-dialog; Browse button in Library tab for native file picker (.json) |
+| **Ghost Suggestor mouse passthrough** | Done | setIgnoreCursorEvents when display_duration elapses or no suggestions |
+| **Ghost Follower positioner** | Done | tauri-plugin-positioner for TopRight/TopLeft when primary monitor |
+| **SQLite partial loading** | Done | useSqliteRows + loadSnippetsPage when library > 5000 items |
+| **Snippet Editor lazy load** | Done | React.lazy; DOM deferred until modal opened |
+| **CSP** | Done | security.csp in tauri.conf.json |
+| **tauri-plugin-store** | Done | Key-value persistence; store:default in capabilities |
+
+---
+
+## Completed (2026-03-03)
+
+- **Doc 2 "Invisible" Polish**: Mouse passthrough for Ghost Suggestor (setIgnoreCursorEvents when fading); DPI-aware positioning via positioner plugin; Ghost Follower uses moveWindow(Position.TopRight/TopLeft) when primary monitor
+- **Doc 3 SQLite partial loading**: useSqliteRows hook; loadSnippetsPage with pinned-first ordering; LibraryTab switches to SQLite when totalSnippetCount > 5000; page size 100
+- **Doc 3 Snippet editor lazy load**: SnippetEditor loaded via React.lazy; rendered only when snippetEditorVisible; separate chunk (SnippetEditor-*.js)
+- **Optional**: CSP (default-src, connect-src, img-src, style-src); tauri-plugin-store with store:default permission
 
 ---
 
@@ -81,42 +104,76 @@
 | Doc | Purpose | Status |
 |-----|---------|--------|
 | **1** | [tauri_analysis_recommendations.md](./tauri_analysis_recommendations.md) | **Complete** – Foundation, Phases 1–3 |
-| **2** | [tauri_advanced_innovations.md](./tauri_advanced_innovations.md) | **Next** – Elite features (Mica, Command Palette, SQLite, etc.) |
-| **3** | [tauri_phase3_future_polish.md](./tauri_phase3_future_polish.md) | **After Doc 2** – Long-term polish, community plugins |
+| **2** | [tauri_advanced_innovations.md](./tauri_advanced_innovations.md) | **Complete** – Elite features (Mica, Command Palette, SQLite, Invisible polish) |
+| **3** | [tauri_phase3_future_polish.md](./tauri_phase3_future_polish.md) | **Complete** – Long-term polish, community plugins |
 
 ## Next Steps (Priority Order)
 
 Per [tauri_phase3_future_polish.md](./tauri_phase3_future_polish.md) Section 8:
 
 1. ~~**Diagnostics**~~ – Done – `tauri-plugin-log` + Log tab; expansion_diagnostics module
-2. ~~**CLI + Deep Link**~~ – Done – `tauri-plugin-deep-link`; `digicore://open/settings`, `digicore://add-snippet`, `digicore://open/snippet?trigger=X`; `--open-settings`, `--add-snippet`; single-instance forwards args
+2. ~~**CLI + Deep Link**~~ – Done – `tauri-plugin-deep-link`; `digicore://open/settings`, `digicore://add-snippet`; single-instance forwards args
 3. ~~**Context menu**~~ – Done – Radix ContextMenu on snippet table rows (Edit/Delete)
 4. ~~**Theme sync**~~ – Done – "System" option in Core config; prefers-color-scheme listener
 5. ~~**Virtualization**~~ – Done – `@tanstack/react-virtual` when library >= 500 items (LibraryTab)
-6. ~~**Platform polish**~~ – Done – Windows Mica via Tauri native `set_effects(Effect::Mica)`; transparent html/body; macOS/Linux unsupported for Mica
+6. ~~**Platform polish**~~ – Done – Windows Mica via Tauri native `set_effects(Effect::Mica)`
+7. ~~**Command Palette**~~ – Done – Shift+Alt+Space global shortcut; fuzzy search (Fuse.js); Enter=copy, Ctrl+E=edit
+8. ~~**Doc 2 Invisible Polish**~~ – Done – Mouse passthrough (Ghost Suggestor); DPI/positioner (Ghost Follower)
+9. ~~**SQLite partial loading**~~ – Done – useSqliteRows + loadSnippetsPage when library > 5000 items
+10. ~~**Snippet Editor lazy load**~~ – Done – React.lazy; DOM deferred until opened
+
+**Remaining (optional/future)**:
+- **Type-safe IPC** (Tauri Specta/TauRPC) – see [TYPE_SAFE_IPC_IMPLEMENTATION_PLAN.md](./TYPE_SAFE_IPC_IMPLEMENTATION_PLAN.md)
+- **Windows Taskbar jump list** – Tauri does not support natively; would need custom implementation
+- **Template processing in Worker** – Doc 3 marked as future; heavy `{js:}`/`{run:}` in Worker
 
 **Optional (production)**: Run `tauri signer generate -w ~/.tauri/digicore.key` and set pubkey + endpoints in tauri.conf.json for updater.
+
+---
+
+## Build
+
+```powershell
+# From digicore directory
+.\scripts\build.ps1 -Target Tauri          # Debug
+.\scripts\build.ps1 -Target Tauri -Release # Release
+
+# Dev
+cd tauri-app; npm run tauri dev
+```
+
+See [TAURI_USER_GUIDE.md](./TAURI_USER_GUIDE.md) for full build, dev, and SQLite details.
 
 ---
 
 ## Testing
 
 ```powershell
-# Frontend (Vitest)
+# Frontend (Vitest) - from tauri-app directory
+cd digicore\tauri-app
 npm run test
+```
 
-# Backend (Rust)
+**Frontend test results** (as of 2026-03-03): 33 tests across 7 files (libraryUtils, sqliteLoad, sqliteSync, utils, LogTab, LibraryTab, button, ui).
+
+```powershell
+# Backend (Rust) - from digicore directory
+cd digicore
 cargo test -p digicore-text-expander -- --test-threads=1
 cargo test -p digicore-text-expander-tauri
 ```
+
+**Backend test results** (as of 2026-03-03): 150+ tests across lib, app_state, cli, expansion_engine, ghost_follower, ghost_suggestor, template_scripting_integration.
 
 ---
 
 ## Related Documentation
 
+- [TAURI_USER_GUIDE.md](./TAURI_USER_GUIDE.md) – Build, dev, SQLite sync, troubleshooting
 - [IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md) – Parity matrix, Phase 1 roadmap
 - [TAURI_MIGRATION_PLAN.md](./TAURI_MIGRATION_PLAN.md) – Architecture, run commands
 - [UI_DECOUPLING_IMPLEMENTATION_PLAN.md](./UI_DECOUPLING_IMPLEMENTATION_PLAN.md) – Ports, adapters, post Phase 0/1
 - [tauri_analysis_recommendations.md](./tauri_analysis_recommendations.md) – Foundation roadmap, plugin recommendations
 - [tauri_advanced_innovations.md](./tauri_advanced_innovations.md) – Elite features (Mica, Command Palette, SQLite)
 - [tauri_phase3_future_polish.md](./tauri_phase3_future_polish.md) – Phase 3 long-term polish, community plugins
+- [TYPE_SAFE_IPC_IMPLEMENTATION_PLAN.md](./TYPE_SAFE_IPC_IMPLEMENTATION_PLAN.md) – Specta/TauRPC refactoring plan

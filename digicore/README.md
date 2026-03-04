@@ -24,10 +24,26 @@ Cross-platform application ecosystem (Text Expander, Copy-to-Clipboard, Appearan
 cargo build
 ```
 
+### Tauri App (React + Vite)
+
+```powershell
+# From digicore directory - full Tauri build (frontend + Rust + bundle)
+.\scripts\build.ps1 -Target Tauri
+
+# Release (optimized)
+.\scripts\build.ps1 -Target Tauri -Release
+```
+
+See [Tauri User Guide](docs/digicore-text-expander/TAURI_USER_GUIDE.md) for build, dev, and SQLite details.
+
 ## Run GUI (Text Expander)
 
 ```bash
+# egui (native Rust UI)
 cargo run -p digicore-text-expander
+
+# Tauri (React + Vite)
+cd tauri-app; npm run tauri dev
 ```
 
 ## Run CLI (proof-of-concept)
@@ -71,9 +87,11 @@ Real-time clipboard monitoring (F38-F42 parity). Configurable depth (5-100). Rig
 
 ## Documentation
 
+- [Tauri User Guide](docs/digicore-text-expander/TAURI_USER_GUIDE.md) - Build, dev, SQLite sync, key features
 - [Scripting User Guide](docs/digicore-text-expander/SCRIPTING_USER_GUIDE.md) - JavaScript, DSL, HTTP, Run, Script Library
 - [Clipboard History](docs/digicore-text-expander/CLIPBOARD_HISTORY.md) - Clipboard History tab and context menu
 - [Implementation Plan](docs/digicore-text-expander/IMPLEMENTATION_PLAN.md) - Implementation status, testing details
+- [Tauri Implementation Status](docs/digicore-text-expander/TAURI_IMPLEMENTATION_STATUS.md) - Tauri feature status
 - [Changelog](CHANGELOG.md) - Recent changes and test status
 
 ## Structure

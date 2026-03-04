@@ -73,10 +73,10 @@ This document outlines Phase 3 recommendations that build on [Document 1](./taur
 
 ## 4. Accessibility & Inclusivity
 
-- **Screen readers**: Ensure semantic HTML, ARIA labels. React/Radix components help.
-- **Keyboard navigation**: Full tab order, Escape to close modals, arrow keys in lists.
-- **High contrast**: Support Windows High Contrast mode; test `prefers-contrast` media query.
-- **Reduced motion**: Respect `prefers-reduced-motion`; disable or simplify animations.
+- **Screen readers**: Done – Semantic HTML, ARIA labels on tabs, inputs, buttons.
+- **Keyboard navigation**: Full tab order, Escape to close modals, arrow keys in CommandPalette.
+- **High contrast**: Done – `prefers-contrast` media query in index.css.
+- **Reduced motion**: Done – `prefers-reduced-motion` in index.css.
 
 ---
 
@@ -84,24 +84,24 @@ This document outlines Phase 3 recommendations that build on [Document 1](./taur
 
 ### 5.1 Virtualization
 
-- **Large snippet lists**: Use virtualized lists (e.g., `@tanstack/react-virtual`) when library exceeds ~500 items.
-- **Partial loading**: With SQLite (Document 2), load only visible rows + prefetch.
+- **Large snippet lists**: Use virtualized lists (e.g., `@tanstack/react-virtual`) when library exceeds ~500 items. Done.
+- **Partial loading**: With SQLite (Document 2), load only visible rows + prefetch. Done – useSqliteRows + loadSnippetsPage when library > 5000 items; page size 100; pinned-first ordering.
 
 ### 5.2 Web Workers
 
-- **Fuzzy search**: Move Fuse.js or equivalent to Worker; keep main thread responsive.
-- **Template processing**: Heavy `{js:...}` or `{run:...}` in Worker where safe.
+- **Fuzzy search**: Done – Fuse.js in `fuzzy-search.worker.ts`; CommandPalette uses `useFuzzySearch` hook.
+- **Template processing**: Heavy `{js:...}` or `{run:...}` in Worker where safe (future).
 
 ### 5.3 Lazy Loading
 
-- **Tabs**: Lazy-load Clipboard and Script panels on first visit.
-- **Modals**: Defer snippet editor DOM until opened.
+- **Tabs**: Lazy-load Clipboard and Script panels on first visit. Done.
+- **Modals**: Defer snippet editor DOM until opened. Done – SnippetEditor via React.lazy; rendered only when snippetEditorVisible.
 
 ---
 
 ## 6. Security & Trust
 
-- **CSP**: Content Security Policy for webview; restrict inline scripts if migrating to bundled frontend.
+- **CSP**: Content Security Policy for webview; restrict inline scripts if migrating to bundled frontend. Done – security.csp in tauri.conf.json.
 - **Sandbox**: Ensure `{run:}` allowlist is enforced; consider `tauri-plugin-stronghold` for sensitive config.
 - **Updates**: Sign updates; use `tauri-plugin-updater` with verified endpoints.
 
@@ -132,13 +132,28 @@ This document outlines Phase 3 recommendations that build on [Document 1](./taur
 | 2 | ~~**CLI + Deep Link**~~ | Doc 2, 3 | Done |
 | 3 | ~~**Context menu**~~ | Doc 2, 3 | Done (Radix ContextMenu) |
 | 4 | ~~**Theme sync**~~ | Doc 3 | Done (prefers-color-scheme) |
-| 5 | **Virtualization**: `@tanstack/react-virtual` when library exceeds ~500 items | Doc 2, 3 | Not started |
-| 6 | **Platform polish**: Windows Mica first (window-vibrancy); macOS/Linux as needed | Doc 2 | Not started |
+| 5 | ~~**Virtualization**~~: `@tanstack/react-virtual` when library >= 500 items | Doc 2, 3 | Done |
+| 6 | ~~**Platform polish**~~: Windows Mica (Tauri native); macOS/Linux as needed | Doc 2 | Done |
+| 7 | ~~**Command Palette**~~: Shift+Alt+Space; fuzzy search; Enter=copy, Ctrl+E=edit | Doc 2 | Done |
+| 8 | ~~**Native context menus**~~: Tauri Menu.popup; Edit/Delete on rows | Doc 2 | Done |
+| 9 | ~~**Window decorations**~~: Native OS title bar (decorations: true); custom TitleBar removed to avoid dual header | Doc 2 | Done |
+| 10 | ~~**Lazy-load tabs**~~: React.lazy for Config, Clipboard, Script, Analytics, Log | Doc 3 | Done |
+| 11 | ~~**Web Workers**~~: Fuzzy search (Fuse.js) in worker; CommandPalette off main thread | Doc 3 | Done |
+| 12 | ~~**Accessibility**~~: ARIA labels, tab roles, prefers-reduced-motion, prefers-contrast | Doc 3 | Done |
+| 13 | ~~**tauri-plugin-prevent-default**~~: Disable Ctrl+W, F12, etc. in webview | Doc 3 | Done |
+| 14 | ~~**tauri-plugin-positioner**~~: Window positioning (tray-relative, edges) | Doc 3 | Done |
+| 15 | ~~**tauri-plugin-persisted-scope**~~: Persist file dialog scope across restarts | Doc 3 | Done |
+| 16 | ~~**tauri-plugin-http**~~: Rust HTTP client for sync, updates (no CORS) | Doc 3 | Done |
+| 17 | ~~**SQLite partial loading**~~: loadSnippetsPage() for large libraries; useSqliteRows when > 5000 items | Doc 3 | Done |
+| 18 | ~~**Snippet Editor lazy load**~~: React.lazy; DOM deferred until modal opened | Doc 3 | Done |
+| 19 | ~~**CSP**~~: security.csp in tauri.conf.json (default-src, connect-src, img-src, style-src) | Doc 3 | Done |
+| 20 | ~~**tauri-plugin-store**~~: Key-value persistence; store:default in capabilities | Doc 3 | Done |
 
 ---
 
 ## 9. Related Documentation
 
+- [TAURI_USER_GUIDE.md](./TAURI_USER_GUIDE.md) – Build, dev, SQLite sync, troubleshooting
 - [tauri_analysis_recommendations.md](./tauri_analysis_recommendations.md) – Foundation & Phase 1–3
 - [tauri_advanced_innovations.md](./tauri_advanced_innovations.md) – Elite features
 - [TAURI_IMPLEMENTATION_STATUS.md](./TAURI_IMPLEMENTATION_STATUS.md) – Current status

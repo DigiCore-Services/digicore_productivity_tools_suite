@@ -569,6 +569,8 @@ digicore/
 
 ## 14. References
 
+- [TAURI_USER_GUIDE.md](./TAURI_USER_GUIDE.md) - **Build, dev, SQLite sync, troubleshooting**
+- [TAURI_IMPLEMENTATION_STATUS.md](./TAURI_IMPLEMENTATION_STATUS.md) - Tauri feature status
 - [IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md) - **Parity matrix, Tauri roadmap, key decisions**
 - [TAURI_MIGRATION_PLAN.md](./TAURI_MIGRATION_PLAN.md)
 - [EGUI_TO_TAURI_MIGRATION_NOTES.md](./EGUI_TO_TAURI_MIGRATION_NOTES.md)

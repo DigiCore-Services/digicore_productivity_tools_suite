@@ -1,7 +1,7 @@
 # DigiCore Text Expander - Implementation Plan
 
-**Version:** 2.1  
-**Last Updated:** 2026-03-02  
+**Version:** 2.2  
+**Last Updated:** 2026-03-03  
 **Product:** DigiCore Text Expander (Rust)  
 **Status:** egui complete; Tauri Phase 1.1-1.2 partial (Library tab with Load/Save/search/table); AHK legacy retained for reference
 
@@ -72,7 +72,7 @@ This document tracks implementation status, parity across GUI frontends (egui, T
 | 1.5 | Clipboard History tab: list, context menu, Promote, View Full, Delete, Clear All | Done | tauri-app/src |
 | 1.6 | Script Library tab: {run:} security, allowlist, global JS editor | Done | tauri-app/src |
 | 1.7 | StoragePort: TauriStorageAdapter (JSON file in app data dir) | Done | adapters/storage |
-| 1.8 | FileDialogPort: rfd or Tauri dialog plugin | Pending | rfd or tauri-plugin-dialog |
+| 1.8 | FileDialogPort: rfd or Tauri dialog plugin | Done | tauri-plugin-dialog; Browse button in Library tab |
 
 ### Phase 2: Secondary Windows
 
@@ -200,6 +200,18 @@ This document tracks implementation status, parity across GUI frontends (egui, T
 | icon.ico | Done |
 | serde_json | Done |
 | Build script | `scripts/build.ps1` | Done |
+
+### Tauri Enhancements (2026-03-03)
+
+| Item | Status |
+|------|--------|
+| Build script | Uses `npm run tauri build` (full Tauri build); `-Release` for release, default for debug | Done |
+| Window decorations | Native OS title bar (decorations: true); custom TitleBar removed to avoid dual header | Done |
+| SQLite | tauri-plugin-sql; schema; sync from JSON on Load/Save/startup; preload digicore.db | Done |
+| SQLite sync | `src/lib/sqliteSync.ts`; syncs appState.library to categories/snippets tables | Done |
+| Web Workers | Fuzzy search (Fuse.js) in worker; CommandPalette off main thread | Done |
+| Rich notifications | Actionable toasts; "View Library" action; onAction listener | Done |
+| Accessibility | ARIA labels, tab roles, prefers-reduced-motion, prefers-contrast | Done |
 | Tauri commands | get_app_state, load_library, save_library, set_library_path, save_settings, get_ui_prefs, save_ui_prefs, add_snippet, update_snippet, delete_snippet | Done |
 | Library tab frontend | Load, Save, search, snippet table | Done |
 | Library tab UI enhancements | Title removed; tabs renamed; columns (Profile, Category, Trigger, Content Preview, AppLock, Options, Last Modified); sortable; draggable reorder; persist last tab + column order; row shading; Add Snippet, Edit, Delete, Snippet Editor modal, Delete confirmation | Done |
@@ -253,6 +265,7 @@ cargo test -p digicore-text-expander -- --test-threads=1
 
 ## 10. Related Documentation
 
+- [TAURI_USER_GUIDE.md](./TAURI_USER_GUIDE.md) - Build, dev, SQLite sync, troubleshooting
 - [UI_DECOUPLING_IMPLEMENTATION_PLAN.md](./UI_DECOUPLING_IMPLEMENTATION_PLAN.md) - Ports, adapters, AppState extraction
 - [TAURI_MIGRATION_PLAN.md](./TAURI_MIGRATION_PLAN.md) - Tauri architecture, run commands
 - [EGUI_TO_TAURI_MIGRATION_NOTES.md](./EGUI_TO_TAURI_MIGRATION_NOTES.md) - Dual-binary summary
