@@ -5,6 +5,7 @@
   "windows": ["main"],
   "permissions": [
     "core:default",
+    "core:window:allow-start-dragging",
     "shell:allow-open",
     "global-shortcut:allow-register-all",
     "core:tray:default",
@@ -13,6 +14,21 @@
     "updater:default",
     "process:default",
     "log:default",
-    "deep-link:default"
+    "deep-link:default",
+    "sql:default",
+    "sql:allow-execute",
+    "dialog:default",
+    "positioner:default",
+    "store:default",
+    {
+      "identifier": "http:default",
+      "allow": [
+        { "url": "https://*.github.com/*" },
+        { "url": "https://*.githubusercontent.com/*" },
+        { "url": "http://localhost:*" },
+        { "url": "http://127.0.0.1:*" },
+        { "url": "https://*" }
+      ]
+    }
   ]
 }

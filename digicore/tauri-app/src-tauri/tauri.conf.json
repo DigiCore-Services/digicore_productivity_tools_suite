@@ -1,6 +1,14 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "DigiCore Text Expander",
+  "security": {
+    "csp": {
+      "default-src": "'self' asset:",
+      "connect-src": "ipc: http://ipc.localhost http://localhost:* https://*",
+      "img-src": "'self' asset: blob: data:",
+      "style-src": "'unsafe-inline' 'self'"
+    }
+  },
   "version": "0.1.0",
   "identifier": "com.digicore.text-expander",
   "build": {
@@ -23,7 +31,7 @@
         "height": 600,
         "minWidth": 600,
         "minHeight": 400,
-        "transparent": true,
+        "transparent": false,
         "decorations": true
       }
     ]
@@ -44,6 +52,9 @@
     "category": "Utility"
   },
   "plugins": {
+    "sql": {
+      "preload": ["sqlite:digicore.db"]
+    },
     "shell": {
       "open": true
     },

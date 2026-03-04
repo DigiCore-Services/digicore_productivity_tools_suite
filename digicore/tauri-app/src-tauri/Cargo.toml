@@ -23,6 +23,12 @@ dirs = "5.0"
 digicore-text-expander = { path = "../../crates/digicore-text-expander", default-features = false, features = ["gui-tauri"] }
 digicore-core = { path = "../../crates/digicore-core", features = ["platform-windows", "sync"] }
 arboard = "3.3"
+tauri-plugin-sql = { version = "2", features = ["sqlite"] }
+tauri-plugin-dialog = "2"
+tauri-plugin-prevent-default = "4"
+tauri-plugin-http = "2"
+tauri-plugin-persisted-scope = "2"
+tauri-plugin-store = "2"
 
 [dev-dependencies]
 tempfile = "3.10"
@@ -36,3 +42,4 @@ tauri-plugin-process = "2"
 tauri-plugin-log = "2"
 tauri-plugin-deep-link = "2"
 log = "0.4"
+tauri-plugin-positioner = "2"
