@@ -39,7 +39,35 @@ html, body {
 
 body {
   font-family: "Inter", "Segoe UI", system-ui, sans-serif;
-  margin: 20px;
+  margin: 0;
   color: var(--dc-text);
   -webkit-font-smoothing: antialiased;
+}
+
+/* Accessibility: respect reduced motion preference */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Hide horizontal scrollbar only (sticky bar shown separately). WebKit/Chromium. */
+.hide-h-scrollbar::-webkit-scrollbar {
+  height: 0;
+}
+
+/* Accessibility: high contrast mode support */
+@media (prefers-contrast: high) {
+  :root {
+    --dc-border: #111827;
+    --dc-border-strong: #111827;
+  }
+  [data-theme="dark"] {
+    --dc-border: #f9fafb;
+    --dc-border-strong: #f9fafb;
+  }
 }

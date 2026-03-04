@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { showNativeContextMenu } from "@/lib/nativeContextMenu";
 import type { AppState, ClipEntry } from "../types";
 
 interface ClipboardTabProps {
@@ -146,7 +147,34 @@ export function ClipboardTab({
                 return (
                   <tr
                     key={i}
-                    className="even:bg-[var(--dc-bg-alt)] hover:bg-[var(--dc-bg-tertiary)]"
+                    className="even:bg-[var(--dc-bg-alt)] hover:bg-[var(--dc-bg-tertiary)] cursor-context-menu"
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      const entry = entries[i];
+                      if (!entry) return;
+                      showNativeContextMenu(e.clientX, e.clientY, [
+                        {
+                          id: "copy",
+                          text: "Copy to Clipboard",
+                          onClick: () => handleCopy(i),
+                        },
+                        {
+                          id: "view-full",
+                          text: "View Full Content",
+                          onClick: () => handleView(i),
+                        },
+                        {
+                          id: "promote",
+                          text: "Promote to Snippet",
+                          onClick: () => handlePromote(i),
+                        },
+                        {
+                          id: "delete",
+                          text: "Delete",
+                          onClick: () => handleDelete(i),
+                        },
+                      ]);
+                    }}
                   >
                     <td className="border border-[var(--dc-border)] p-1.5">
                       {i + 1}

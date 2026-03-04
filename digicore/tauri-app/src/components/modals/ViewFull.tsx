@@ -1,13 +1,30 @@
 import { motion, AnimatePresence } from "framer-motion";
 import { Button } from "@/components/ui/button";
+import { Pencil } from "lucide-react";
 
 interface ViewFullProps {
   visible: boolean;
   content: string;
   onClose: () => void;
+  /** When from Library tab: edit metadata to show Edit button. */
+  onEdit?: (category: string, snippetIdx: number) => void;
+  editMeta?: { category: string; snippetIdx: number } | null;
 }
 
-export function ViewFull({ visible, content, onClose }: ViewFullProps) {
+export function ViewFull({
+  visible,
+  content,
+  onClose,
+  onEdit,
+  editMeta,
+}: ViewFullProps) {
+  const handleEdit = () => {
+    if (onEdit && editMeta) {
+      onEdit(editMeta.category, editMeta.snippetIdx);
+      onClose();
+    }
+  };
+
   return (
     <AnimatePresence>
       {visible && (
@@ -29,10 +46,16 @@ export function ViewFull({ visible, content, onClose }: ViewFullProps) {
             <pre className="bg-[var(--dc-bg-tertiary)] p-4 overflow-x-auto text-sm rounded-lg max-h-[60vh] overflow-y-auto whitespace-pre-wrap">
               {content}
             </pre>
-            <div className="mt-4">
+            <div className="mt-4 flex gap-2">
               <Button variant="secondary" size="sm" onClick={onClose}>
                 Close
               </Button>
+              {onEdit && editMeta && (
+                <Button size="sm" onClick={handleEdit}>
+                  <Pencil className="w-3 h-3 mr-1" aria-hidden />
+                  Edit
+                </Button>
+              )}
             </div>
           </motion.div>
         </motion.div>
