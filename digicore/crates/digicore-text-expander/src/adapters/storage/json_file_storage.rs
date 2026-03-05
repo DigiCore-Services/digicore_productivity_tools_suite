@@ -19,21 +19,30 @@ fn state_file_path() -> PathBuf {
 pub struct JsonFileStorageAdapter {
     cache: HashMap<String, String>,
     path: PathBuf,
+    /// True when file existed but JSON parse failed. Never persist in that case.
+    parse_failed: bool,
 }
 
 impl JsonFileStorageAdapter {
     /// Create and load from file. Creates parent dir if needed.
     pub fn load() -> Self {
         let path = state_file_path();
-        let cache = if path.exists() {
-            std::fs::read_to_string(&path)
+        let (cache, parse_failed) = if path.exists() {
+            match std::fs::read_to_string(&path)
                 .ok()
                 .and_then(|s| serde_json::from_str(&s).ok())
-                .unwrap_or_default()
+            {
+                Some(c) => (c, false),
+                None => (HashMap::new(), true),
+            }
         } else {
-            HashMap::new()
+            (HashMap::new(), false)
         };
-        Self { cache, path }
+        Self {
+            cache,
+            path,
+            parse_failed,
+        }
     }
 
     /// Persist cache to file. Call when saving.
@@ -47,9 +56,13 @@ impl JsonFileStorageAdapter {
         std::fs::write(&self.path, json)
     }
 
-    /// Persist only if safe. Returns false if file exists but cache is empty (parse likely failed);
-    /// in that case persisting would overwrite and lose library_path and other keys.
+    /// Persist only if safe. Returns false and skips persist when:
+    /// - File existed but JSON parse failed (would overwrite valid data with partial cache)
+    /// - File exists and cache is empty (parse failed, cache would wipe file)
     pub fn persist_if_safe(&self) -> std::io::Result<bool> {
+        if self.parse_failed {
+            return Ok(false);
+        }
         if self.path.exists() && self.cache.is_empty() {
             return Ok(false);
         }
@@ -83,6 +96,7 @@ mod tests {
         let mut storage = JsonFileStorageAdapter {
             cache: HashMap::new(),
             path: path.clone(),
+            parse_failed: false,
         };
         assert!(storage.get(storage_keys::LIBRARY_PATH).is_none());
         storage.set(storage_keys::LIBRARY_PATH, "/path/to/lib.json");
@@ -94,6 +108,7 @@ mod tests {
         let loaded = JsonFileStorageAdapter {
             cache: serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap(),
             path: path.clone(),
+            parse_failed: false,
         };
         assert_eq!(loaded.get(storage_keys::LIBRARY_PATH).as_deref(), Some("/path/to/lib.json"));
         assert_eq!(loaded.get(storage_keys::SYNC_URL).as_deref(), Some("https://example.com"));
@@ -110,6 +125,7 @@ mod tests {
         let storage = JsonFileStorageAdapter {
             cache: HashMap::new(),
             path: path.clone(),
+            parse_failed: false,
         };
         assert!(storage.get(storage_keys::LIBRARY_PATH).is_none());
     }
@@ -124,6 +140,7 @@ mod tests {
         let mut storage = JsonFileStorageAdapter {
             cache: HashMap::new(),
             path: path.clone(),
+            parse_failed: false,
         };
         storage.set(storage_keys::UI_LAST_TAB, "2");
         storage.set(
@@ -135,12 +152,102 @@ mod tests {
         let loaded = JsonFileStorageAdapter {
             cache: serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap(),
             path: path.clone(),
+            parse_failed: false,
         };
         assert_eq!(loaded.get(storage_keys::UI_LAST_TAB).as_deref(), Some("2"));
         assert_eq!(
             loaded.get(storage_keys::UI_COLUMN_ORDER).as_deref(),
             Some("Profile,Category,Trigger,Content Preview,AppLock,Options,Last Modified")
         );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_persist_if_safe_skips_when_parse_failed() {
+        let temp = std::env::temp_dir().join("digicore_text_expander_test_parse_fail");
+        std::fs::create_dir_all(&temp).unwrap();
+        let path = temp.join("parse_fail_state.json");
+        std::fs::write(&path, r#"{"library_path":"/path/to/snippets.json"}"#).unwrap();
+
+        let mut storage = JsonFileStorageAdapter {
+            cache: HashMap::new(),
+            path: path.clone(),
+            parse_failed: true,
+        };
+        storage.set(storage_keys::GHOST_FOLLOWER_POSITION_X, "100");
+        storage.set(storage_keys::GHOST_FOLLOWER_POSITION_Y, "200");
+        let ok = storage.persist_if_safe().unwrap();
+        assert!(!ok, "persist_if_safe must skip when parse_failed");
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("library_path"), "file must not be overwritten");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_appearance_rules_create_update_delete_cycle() {
+        let temp = std::env::temp_dir().join("digicore_text_expander_test_appearance_rules");
+        std::fs::create_dir_all(&temp).unwrap();
+        let path = temp.join("appearance_rules_state.json");
+        let _ = std::fs::remove_file(&path);
+
+        let mut storage = JsonFileStorageAdapter {
+            cache: HashMap::new(),
+            path: path.clone(),
+            parse_failed: false,
+        };
+
+        // Create
+        let create_payload = r#"[{"app_process":"cursor.exe","opacity":200,"enabled":true}]"#;
+        storage.set(
+            storage_keys::APPEARANCE_TRANSPARENCY_RULES_JSON,
+            create_payload,
+        );
+        storage.persist().unwrap();
+
+        let create_map: HashMap<String, String> =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let create_rules_raw = create_map
+            .get(storage_keys::APPEARANCE_TRANSPARENCY_RULES_JSON)
+            .unwrap();
+        let create_rules: serde_json::Value = serde_json::from_str(create_rules_raw).unwrap();
+        assert_eq!(create_rules.as_array().unwrap().len(), 1);
+        assert_eq!(create_rules[0]["app_process"], "cursor.exe");
+
+        // Update
+        let update_payload =
+            r#"[{"app_process":"cursor.exe","opacity":140,"enabled":false},{"app_process":"code.exe","opacity":220,"enabled":true}]"#;
+        storage.set(
+            storage_keys::APPEARANCE_TRANSPARENCY_RULES_JSON,
+            update_payload,
+        );
+        storage.persist().unwrap();
+
+        let update_map: HashMap<String, String> =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let update_rules_raw = update_map
+            .get(storage_keys::APPEARANCE_TRANSPARENCY_RULES_JSON)
+            .unwrap();
+        let update_rules: serde_json::Value = serde_json::from_str(update_rules_raw).unwrap();
+        assert_eq!(update_rules.as_array().unwrap().len(), 2);
+        assert_eq!(update_rules[0]["opacity"], 140);
+        assert_eq!(update_rules[0]["enabled"], false);
+
+        // Delete
+        let delete_payload = r#"[]"#;
+        storage.set(
+            storage_keys::APPEARANCE_TRANSPARENCY_RULES_JSON,
+            delete_payload,
+        );
+        storage.persist().unwrap();
+
+        let delete_map: HashMap<String, String> =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let delete_rules_raw = delete_map
+            .get(storage_keys::APPEARANCE_TRANSPARENCY_RULES_JSON)
+            .unwrap();
+        let delete_rules: serde_json::Value = serde_json::from_str(delete_rules_raw).unwrap();
+        assert_eq!(delete_rules.as_array().unwrap().len(), 0);
 
         let _ = std::fs::remove_file(&path);
     }

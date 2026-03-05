@@ -13,6 +13,7 @@ use digicore_text_expander::adapters::storage::JsonFileStorageAdapter;
 use digicore_text_expander::application::app_state::AppState;
 use digicore_text_expander::application::clipboard_history::{self, ClipboardHistoryConfig};
 use digicore_text_expander::application::ghost_suggestor;
+use digicore_text_expander::application::scripting::load_and_apply_script_libraries;
 use digicore_text_expander::application::template_processor::{self, InteractiveVarType};
 use digicore_text_expander::application::variable_input;
 use digicore_text_expander::application::discovery;
@@ -278,6 +279,8 @@ fn init_app_state_from_storage() -> AppState {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let mut app_state = init_app_state_from_storage();
+    // Ensure {js:...} has global library functions available at startup.
+    load_and_apply_script_libraries();
     let app_handle: Arc<Mutex<Option<tauri::AppHandle>>> = Arc::new(Mutex::new(None));
     let app_handle_for_setup = app_handle.clone();
     if !app_state.library_path.is_empty() {
@@ -452,6 +455,10 @@ pub fn run() {
         )
         .setup(move |app| {
             *app_handle_for_setup.lock().unwrap() = Some(app.handle().clone());
+            std::thread::spawn(|| loop {
+                crate::api::enforce_appearance_transparency_rules();
+                std::thread::sleep(std::time::Duration::from_secs(3));
+            });
             #[cfg(desktop)]
             let _ = app
                 .handle()
@@ -516,12 +523,23 @@ pub fn run() {
                         WebviewUrl::App("ghost-follower.html".into()),
                     )
                     .title("Ghost Follower")
-                    .inner_size(280.0, 420.0)
-                    .decorations(true)
+                    .inner_size(64.0, 36.0)
+                    .decorations(false)
+                    .resizable(false)
+                    .maximizable(false)
+                    .minimizable(false)
+                    .shadow(false)
                     .transparent(true)
                     .always_on_top(true)
                     .visible(true)
                     .build()?;
+
+                    // Defensive enforcement: keep Ghost Follower borderless even if platform/window-state
+                    // attempts to restore framed styles from prior sessions.
+                    let _ = follower.set_decorations(false);
+                    let _ = follower.set_resizable(false);
+                    let _ = follower.set_maximizable(false);
+                    let _ = follower.set_minimizable(false);
 
                     log::info!("[GhostFollower] window created from Rust");
                     let handle_emit = handle_for_ghost.clone();
@@ -628,6 +646,33 @@ pub struct ConfigUpdateDto {
     pub clip_history_max_depth: Option<u32>,
     pub script_library_run_disabled: Option<bool>,
     pub script_library_run_allowlist: Option<String>,
+}
+
+#[taurpc::ipc_type]
+pub struct AppearanceTransparencyRuleDto {
+    pub app_process: String,
+    pub opacity: u32,
+    pub enabled: bool,
+}
+
+#[taurpc::ipc_type]
+pub struct SettingsImportResultDto {
+    pub applied_groups: Vec<String>,
+    pub skipped_groups: Vec<String>,
+    pub warnings: Vec<String>,
+    pub updated_keys: u32,
+    pub appearance_rules_applied: u32,
+    pub theme: Option<String>,
+    pub autostart_enabled: Option<bool>,
+}
+
+#[taurpc::ipc_type]
+pub struct SettingsBundlePreviewDto {
+    pub path: String,
+    pub schema_version: String,
+    pub available_groups: Vec<String>,
+    pub warnings: Vec<String>,
+    pub valid: bool,
 }
 
 #[taurpc::ipc_type]

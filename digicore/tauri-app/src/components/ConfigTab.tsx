@@ -4,6 +4,8 @@ import { getTaurpc } from "@/lib/taurpc";
 import { resolveTheme, applyThemeToDocument } from "@/lib/theme";
 import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
+import { open, save } from "@tauri-apps/plugin-dialog";
+import { ShieldAlert, ShieldCheck, ShieldX } from "lucide-react";
 import { normalizeAppState } from "@/lib/normalizeState";
 import type { AppState } from "../types";
 
@@ -22,6 +24,46 @@ interface ConfigTabProps {
   appState: AppState | null;
   onConfigLoaded: (state: AppState) => void;
 }
+
+type SettingsBundlePreview = {
+  path: string;
+  schema_version: string;
+  available_groups: string[];
+  warnings: string[];
+  valid: boolean;
+};
+
+type PreviewBadge = {
+  label: "Ready" | "Review Warnings" | "Blocked";
+  className: string;
+  icon: "check" | "alert" | "blocked";
+};
+
+function getPreviewBadge(preview: SettingsBundlePreview): PreviewBadge {
+  if (!preview.valid) {
+    return { label: "Blocked", className: "text-red-500", icon: "blocked" };
+  }
+  if (preview.warnings.length > 0) {
+    return {
+      label: "Review Warnings",
+      className: "text-amber-500",
+      icon: "alert",
+    };
+  }
+  return { label: "Ready", className: "text-emerald-500", icon: "check" };
+}
+
+const SETTINGS_GROUP_OPTIONS = [
+  { id: "templates", label: "Templates" },
+  { id: "sync", label: "Sync" },
+  { id: "discovery", label: "Discovery" },
+  { id: "ghost_suggestor", label: "Ghost Suggestor" },
+  { id: "ghost_follower", label: "Ghost Follower" },
+  { id: "clipboard_history", label: "Clipboard History" },
+  { id: "core", label: "Core" },
+  { id: "script_runtime", label: "Script Runtime" },
+  { id: "appearance", label: "Appearance" },
+] as const;
 
 export function ConfigTab({ appState, onConfigLoaded }: ConfigTabProps) {
   const [status, setStatus] = useState("");
@@ -56,6 +98,20 @@ export function ConfigTab({ appState, onConfigLoaded }: ConfigTabProps) {
   const [theme, setTheme] = useState("light");
   const [updateChecking, setUpdateChecking] = useState(false);
   const [updateStatus, setUpdateStatus] = useState("");
+  const [settingsTransferMode, setSettingsTransferMode] = useState<
+    "export" | "import"
+  >("export");
+  const [settingsTransferScope, setSettingsTransferScope] = useState<
+    "all" | "selected"
+  >("all");
+  const [selectedSettingsGroups, setSelectedSettingsGroups] = useState<string[]>(
+    SETTINGS_GROUP_OPTIONS.map((g) => g.id)
+  );
+  const [importPreview, setImportPreview] = useState<SettingsBundlePreview | null>(
+    null
+  );
+  const [importWarningsAcknowledged, setImportWarningsAcknowledged] =
+    useState(false);
 
   useEffect(() => {
     if (appState) {
@@ -82,6 +138,7 @@ export function ConfigTab({ appState, onConfigLoaded }: ConfigTabProps) {
       setGhostFollowerMonitor(
         String(appState.ghost_follower_monitor_anchor ?? 0)
       );
+      setGhostFollowerOpacity(appState.ghost_follower_opacity ?? 100);
       setClipMaxDepth(appState.clip_history_max_depth ?? 20);
       setExpansionPaused(!!appState.expansion_paused);
       setTheme(
@@ -108,6 +165,20 @@ export function ConfigTab({ appState, onConfigLoaded }: ConfigTabProps) {
   useEffect(() => {
     loadAutostart();
   }, []);
+
+  const parseIntOr = (raw: string, fallback: number): number => {
+    const parsed = Number.parseInt(raw, 10);
+    return Number.isFinite(parsed) ? parsed : fallback;
+  };
+
+  const clampInt = (value: number, min: number, max: number): number =>
+    Math.min(max, Math.max(min, value));
+
+  const monitorAnchorSafe = clampInt(
+    parseIntOr(ghostFollowerMonitor, 0),
+    0,
+    2
+  );
 
   const applyConfig = async (partial: Record<string, unknown>) => {
     try {
@@ -143,6 +214,147 @@ export function ConfigTab({ appState, onConfigLoaded }: ConfigTabProps) {
 
   const sectionCls =
     "my-3 border border-[var(--dc-border)] rounded p-2";
+
+  const getTargetSettingsGroups = (): string[] => {
+    if (settingsTransferScope === "all") {
+      return SETTINGS_GROUP_OPTIONS.map((g) => g.id);
+    }
+    return selectedSettingsGroups;
+  };
+
+  const toggleSettingsGroup = (groupId: string, checked: boolean) => {
+    setSelectedSettingsGroups((prev) => {
+      if (checked) {
+        return prev.includes(groupId) ? prev : [...prev, groupId];
+      }
+      return prev.filter((g) => g !== groupId);
+    });
+  };
+
+  const handleExportSettingsBundle = async () => {
+    const groups = getTargetSettingsGroups();
+    if (groups.length === 0) {
+      setStatus("Validation: choose at least one settings group to export.");
+      setStatusError(true);
+      return;
+    }
+    const path = await save({
+      title: "Export DigiCore Settings",
+      defaultPath: "digicore_settings_bundle.json",
+      filters: [{ name: "JSON", extensions: ["json"] }],
+    });
+    if (!path) {
+      setStatus("Export cancelled.");
+      setStatusError(false);
+      return;
+    }
+    try {
+      const count = await getTaurpc().export_settings_bundle_to_file(
+        path,
+        groups,
+        theme,
+        autostart
+      );
+      setStatus(
+        `Exported settings bundle with ${count} group${
+          count === 1 ? "" : "s"
+        } to ${String(path)}`
+      );
+      setStatusError(false);
+    } catch (e) {
+      setStatus("Export failed: " + String(e));
+      setStatusError(true);
+    }
+  };
+
+  const handleImportSettingsBundle = async () => {
+    const pathSelection = await open({
+      title: "Preview DigiCore Settings Bundle",
+      multiple: false,
+      directory: false,
+      filters: [{ name: "JSON", extensions: ["json"] }],
+    });
+    const path = Array.isArray(pathSelection) ? pathSelection[0] : pathSelection;
+    if (!path) {
+      setStatus("Import preview cancelled.");
+      setStatusError(false);
+      return;
+    }
+    try {
+      const preview = await getTaurpc().preview_settings_bundle_from_file(path);
+      setImportPreview(preview);
+      setImportWarningsAcknowledged(false);
+      setStatus(
+        `Preview loaded: schema ${preview.schema_version}, groups ${preview.available_groups.length}, warnings ${preview.warnings.length}.`
+      );
+      setStatusError(!preview.valid);
+    } catch (e) {
+      setImportPreview(null);
+      setImportWarningsAcknowledged(false);
+      setStatus("Preview failed: " + String(e));
+      setStatusError(true);
+    }
+  };
+
+  const handleApplyImportSettingsBundle = async () => {
+    const groups = getTargetSettingsGroups();
+    if (groups.length === 0) {
+      setStatus("Validation: choose at least one settings group to import.");
+      setStatusError(true);
+      return;
+    }
+    if (!importPreview?.path) {
+      setStatus("Validation: preview a settings bundle file first.");
+      setStatusError(true);
+      return;
+    }
+    if (!importPreview.valid) {
+      setStatus("Validation: cannot import from an invalid preview bundle.");
+      setStatusError(true);
+      return;
+    }
+    if (importPreview.warnings.length > 0 && !importWarningsAcknowledged) {
+      setStatus("Validation: acknowledge preview warnings before import.");
+      setStatusError(true);
+      return;
+    }
+    try {
+      const result = await getTaurpc().import_settings_bundle_from_file(
+        importPreview.path,
+        groups
+      );
+      if (result.theme) {
+        setTheme(result.theme);
+        localStorage.setItem("digicore-theme", result.theme);
+        applyTheme(result.theme);
+      }
+      if (typeof result.autostart_enabled === "boolean") {
+        try {
+          const autostartPlugin = getAutostart();
+          if (autostartPlugin) {
+            if (result.autostart_enabled) await autostartPlugin.enable();
+            else await autostartPlugin.disable();
+            setAutostart(result.autostart_enabled);
+          }
+        } catch {
+          /* ignore plugin apply failure */
+        }
+      }
+      const dto = await getTaurpc().get_app_state();
+      onConfigLoaded(normalizeAppState(dto));
+      setStatus(
+        `Import complete: applied ${result.applied_groups.length} group${
+          result.applied_groups.length === 1 ? "" : "s"
+        }, warnings ${result.warnings.length}.`
+      );
+      setStatusError(false);
+      setImportPreview(null);
+      setImportWarningsAcknowledged(false);
+    } catch (e) {
+      setStatus("Import failed: " + String(e));
+      setStatusError(true);
+    }
+  };
 
   return (
     <div className="p-4 border border-[var(--dc-border)] rounded mt-2">
@@ -220,7 +432,11 @@ export function ConfigTab({ appState, onConfigLoaded }: ConfigTabProps) {
         <input
           type="number"
           value={discoveryThreshold}
-          onChange={(e) => setDiscoveryThreshold(parseInt(e.target.value, 10))}
+          onChange={(e) =>
+            setDiscoveryThreshold((prev) =>
+              clampInt(parseIntOr(e.target.value, prev), 2, 10)
+            )
+          }
           min={2}
           max={10}
           className={inputCls}
@@ -229,7 +445,11 @@ export function ConfigTab({ appState, onConfigLoaded }: ConfigTabProps) {
         <input
           type="number"
           value={discoveryLookback}
-          onChange={(e) => setDiscoveryLookback(parseInt(e.target.value, 10))}
+          onChange={(e) =>
+            setDiscoveryLookback((prev) =>
+              clampInt(parseIntOr(e.target.value, prev), 5, 240)
+            )
+          }
           min={5}
           max={240}
           className={inputCls}
@@ -238,7 +458,11 @@ export function ConfigTab({ appState, onConfigLoaded }: ConfigTabProps) {
         <input
           type="number"
           value={discoveryMinLen}
-          onChange={(e) => setDiscoveryMinLen(parseInt(e.target.value, 10))}
+          onChange={(e) =>
+            setDiscoveryMinLen((prev) =>
+              clampInt(parseIntOr(e.target.value, prev), 2, 20)
+            )
+          }
           min={2}
           max={20}
           className={inputCls}
@@ -247,7 +471,11 @@ export function ConfigTab({ appState, onConfigLoaded }: ConfigTabProps) {
         <input
           type="number"
           value={discoveryMaxLen}
-          onChange={(e) => setDiscoveryMaxLen(parseInt(e.target.value, 10))}
+          onChange={(e) =>
+            setDiscoveryMaxLen((prev) =>
+              clampInt(parseIntOr(e.target.value, prev), 10, 100)
+            )
+          }
           min={10}
           max={100}
           className={inputCls}
@@ -301,7 +529,9 @@ export function ConfigTab({ appState, onConfigLoaded }: ConfigTabProps) {
           type="number"
           value={ghostSuggestorDebounce}
           onChange={(e) =>
-            setGhostSuggestorDebounce(parseInt(e.target.value, 10))
+            setGhostSuggestorDebounce((prev) =>
+              clampInt(parseIntOr(e.target.value, prev), 20, 200)
+            )
           }
           min={20}
           max={200}
@@ -314,7 +544,9 @@ export function ConfigTab({ appState, onConfigLoaded }: ConfigTabProps) {
           type="number"
           value={ghostSuggestorDisplay}
           onChange={(e) =>
-            setGhostSuggestorDisplay(parseInt(e.target.value, 10))
+            setGhostSuggestorDisplay((prev) =>
+              clampInt(parseIntOr(e.target.value, prev), 0, 120)
+            )
           }
           min={0}
           max={120}
@@ -325,7 +557,9 @@ export function ConfigTab({ appState, onConfigLoaded }: ConfigTabProps) {
           type="number"
           value={ghostSuggestorSnooze}
           onChange={(e) =>
-            setGhostSuggestorSnooze(parseInt(e.target.value, 10))
+            setGhostSuggestorSnooze((prev) =>
+              clampInt(parseIntOr(e.target.value, prev), 1, 120)
+            )
           }
           min={1}
           max={120}
@@ -336,7 +570,9 @@ export function ConfigTab({ appState, onConfigLoaded }: ConfigTabProps) {
           type="number"
           value={ghostSuggestorOffsetX}
           onChange={(e) =>
-            setGhostSuggestorOffsetX(parseInt(e.target.value, 10))
+            setGhostSuggestorOffsetX((prev) =>
+              parseIntOr(e.target.value, prev)
+            )
           }
           className={inputCls}
         />
@@ -345,7 +581,9 @@ export function ConfigTab({ appState, onConfigLoaded }: ConfigTabProps) {
           type="number"
           value={ghostSuggestorOffsetY}
           onChange={(e) =>
-            setGhostSuggestorOffsetY(parseInt(e.target.value, 10))
+            setGhostSuggestorOffsetY((prev) =>
+              parseIntOr(e.target.value, prev)
+            )
           }
           className={inputCls}
         />
@@ -391,12 +629,18 @@ export function ConfigTab({ appState, onConfigLoaded }: ConfigTabProps) {
           type="number"
           value={ghostFollowerCollapse}
           onChange={(e) =>
-            setGhostFollowerCollapse(parseInt(e.target.value, 10))
+            setGhostFollowerCollapse((prev) =>
+              clampInt(parseIntOr(e.target.value, prev), 0, 60)
+            )
           }
           min={0}
           max={60}
           className={inputCls}
         />
+        <p className="mt-1 text-xs text-[var(--dc-text-muted)]">
+          NOTE: value "0" keeps open always, otherwise change duration to 1-n
+          seconds before collapsing to pill.
+        </p>
         <label className="block mt-2">Edge:</label>
         <select
           value={ghostFollowerEdge}
@@ -425,7 +669,7 @@ export function ConfigTab({ appState, onConfigLoaded }: ConfigTabProps) {
           max={100}
           value={ghostFollowerOpacity}
           onChange={(e) => {
-            const v = parseInt(e.target.value, 10);
+            const v = clampInt(parseIntOr(e.target.value, ghostFollowerOpacity), 10, 100);
             setGhostFollowerOpacity(v);
             getTaurpc().ghost_follower_set_opacity(v).catch(() => {});
           }}
@@ -438,7 +682,7 @@ export function ConfigTab({ appState, onConfigLoaded }: ConfigTabProps) {
               ghost_follower_hover_preview: ghostFollowerHover,
               ghost_follower_collapse_delay_secs: ghostFollowerCollapse,
               ghost_follower_edge_right: ghostFollowerEdge === "right",
-              ghost_follower_monitor_anchor: parseInt(ghostFollowerMonitor, 10),
+              ghost_follower_monitor_anchor: monitorAnchorSafe,
               ghost_follower_opacity: ghostFollowerOpacity,
             })
           }
@@ -456,7 +700,11 @@ export function ConfigTab({ appState, onConfigLoaded }: ConfigTabProps) {
         <input
           type="number"
           value={clipMaxDepth}
-          onChange={(e) => setClipMaxDepth(parseInt(e.target.value, 10))}
+          onChange={(e) =>
+            setClipMaxDepth((prev) =>
+              clampInt(parseIntOr(e.target.value, prev), 5, 100)
+            )
+          }
           min={5}
           max={100}
           className={inputCls}
@@ -469,6 +717,14 @@ export function ConfigTab({ appState, onConfigLoaded }: ConfigTabProps) {
         >
           Apply
         </button>
+      </details>
+
+      <details className={sectionCls}>
+        <summary className="cursor-pointer font-bold">Appearance</summary>
+        <p className="text-sm text-[var(--dc-text-muted)] mt-1">
+          NOTE: See &apos;Appearance&apos; tab for detailed configurations and
+          settings.
+        </p>
       </details>
 
       <details className={sectionCls}>
@@ -550,7 +806,7 @@ export function ConfigTab({ appState, onConfigLoaded }: ConfigTabProps) {
               ghost_follower_hover_preview: ghostFollowerHover,
               ghost_follower_collapse_delay_secs: ghostFollowerCollapse,
               ghost_follower_edge_right: ghostFollowerEdge === "right",
-              ghost_follower_monitor_anchor: parseInt(ghostFollowerMonitor, 10),
+              ghost_follower_monitor_anchor: monitorAnchorSafe,
               ghost_follower_opacity: ghostFollowerOpacity,
               clip_history_max_depth: clipMaxDepth,
             });
@@ -559,6 +815,190 @@ export function ConfigTab({ appState, onConfigLoaded }: ConfigTabProps) {
         >
           Save All Settings
         </button>
+      </details>
+
+      <details className={sectionCls}>
+        <summary className="cursor-pointer font-bold">
+          Import/Export Settings
+        </summary>
+        <p className="text-sm text-[var(--dc-text-muted)] mt-1">
+          Export or import all settings, or only selected categories for team
+          sharing and backups.
+        </p>
+
+        <label className="block mt-2 font-medium">Mode:</label>
+        <div className="mt-1 flex items-center gap-4">
+          <label className="flex items-center gap-2">
+            <input
+              type="radio"
+              name="settings-transfer-mode"
+              checked={settingsTransferMode === "export"}
+              onChange={() => {
+                setSettingsTransferMode("export");
+                setImportPreview(null);
+                setImportWarningsAcknowledged(false);
+              }}
+            />
+            Export
+          </label>
+          <label className="flex items-center gap-2">
+            <input
+              type="radio"
+              name="settings-transfer-mode"
+              checked={settingsTransferMode === "import"}
+              onChange={() => setSettingsTransferMode("import")}
+            />
+            Import
+          </label>
+        </div>
+
+        <label className="block mt-3 font-medium">Scope:</label>
+        <div className="mt-1 flex items-center gap-4">
+          <label className="flex items-center gap-2">
+            <input
+              type="radio"
+              name="settings-transfer-scope"
+              checked={settingsTransferScope === "all"}
+              onChange={() => setSettingsTransferScope("all")}
+            />
+            All Settings
+          </label>
+          <label className="flex items-center gap-2">
+            <input
+              type="radio"
+              name="settings-transfer-scope"
+              checked={settingsTransferScope === "selected"}
+              onChange={() => setSettingsTransferScope("selected")}
+            />
+            Selected Groups
+          </label>
+        </div>
+
+        <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-2">
+          {SETTINGS_GROUP_OPTIONS.map((group) => (
+            <label
+              key={group.id}
+              className="flex items-center gap-2 text-sm"
+            >
+              <input
+                type="checkbox"
+                checked={selectedSettingsGroups.includes(group.id)}
+                disabled={settingsTransferScope === "all"}
+                onChange={(e) =>
+                  toggleSettingsGroup(group.id, e.target.checked)
+                }
+              />
+              {group.label}
+            </label>
+          ))}
+        </div>
+
+        <div className="mt-3 flex gap-2">
+          <button
+            type="button"
+            onClick={handleExportSettingsBundle}
+            className="px-3 py-1.5 bg-[var(--dc-accent)] text-white rounded"
+            disabled={settingsTransferMode !== "export"}
+          >
+            Export Settings JSON
+          </button>
+          <button
+            type="button"
+            onClick={handleImportSettingsBundle}
+            className="px-3 py-1.5 bg-[var(--dc-bg-alt)] border border-[var(--dc-border)] rounded"
+            disabled={settingsTransferMode !== "import"}
+          >
+            Select Import File (Preview)
+          </button>
+          <button
+            type="button"
+            onClick={handleApplyImportSettingsBundle}
+            className="px-3 py-1.5 bg-[var(--dc-accent)] text-white rounded"
+            disabled={
+              settingsTransferMode !== "import" ||
+              !importPreview ||
+              !importPreview.valid ||
+              (importPreview.warnings.length > 0 && !importWarningsAcknowledged)
+            }
+          >
+            Apply Import from Preview
+          </button>
+        </div>
+
+        {settingsTransferMode === "import" && importPreview && (
+          <div className="mt-3 p-2 border border-[var(--dc-border)] rounded text-sm">
+            {(() => {
+              const badge = getPreviewBadge(importPreview);
+              const icon =
+                badge.icon === "check" ? (
+                  <ShieldCheck className="w-3.5 h-3.5" aria-hidden />
+                ) : badge.icon === "alert" ? (
+                  <ShieldAlert className="w-3.5 h-3.5" aria-hidden />
+                ) : (
+                  <ShieldX className="w-3.5 h-3.5" aria-hidden />
+                );
+              return (
+                <p>
+                  <strong>Preview Status:</strong>{" "}
+                  <span
+                    className={`inline-flex items-center gap-1 ${badge.className}`}
+                    title={`Preview status: ${badge.label}`}
+                  >
+                    {icon}
+                    {badge.label}
+                  </span>
+                </p>
+              );
+            })()}
+            <p>
+              <strong>Preview File:</strong> {importPreview.path}
+            </p>
+            <p>
+              <strong>Schema:</strong> {importPreview.schema_version} (
+              {importPreview.valid ? "valid" : "invalid"})
+            </p>
+            <p>
+              <strong>Available Groups:</strong>{" "}
+              {importPreview.available_groups.join(", ") || "(none)"}
+            </p>
+            <p>
+              <strong>Target Groups:</strong> {getTargetSettingsGroups().join(", ")}
+            </p>
+            {importPreview.warnings.length > 0 && (
+              <>
+                <p className="text-amber-500">
+                  <strong>Warnings:</strong> {importPreview.warnings.join(" | ")}
+                </p>
+                <label className="mt-2 flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={importWarningsAcknowledged}
+                    onChange={(e) =>
+                      setImportWarningsAcknowledged(e.target.checked)
+                    }
+                  />
+                  I reviewed and acknowledge the preview warnings before import.
+                </label>
+              </>
+            )}
+
+            <p className="mt-2 text-xs text-[var(--dc-text-muted)]">
+              <strong>Legend:</strong>{" "}
+              <span className="inline-flex items-center gap-1 text-emerald-500 mr-2">
+                <ShieldCheck className="w-3.5 h-3.5" aria-hidden />
+                Ready
+              </span>
+              <span className="inline-flex items-center gap-1 text-amber-500 mr-2">
+                <ShieldAlert className="w-3.5 h-3.5" aria-hidden />
+                Review
+              </span>
+              <span className="inline-flex items-center gap-1 text-red-500">
+                <ShieldX className="w-3.5 h-3.5" aria-hidden />
+                Blocked
+              </span>
+            </p>
+          </div>
+        )}
       </details>
 
       <details className={sectionCls}>

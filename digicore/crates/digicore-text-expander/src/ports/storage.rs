@@ -43,6 +43,8 @@ pub mod keys {
     pub const UI_LAST_TAB: &str = "ui_last_tab";
     /// Tauri UI: column order for Library table (comma-separated: Profile,Category,Trigger,Content Preview,AppLock,Options,Last Modified).
     pub const UI_COLUMN_ORDER: &str = "ui_column_order";
+    /// Tauri UI: Appearance tab transparency rules as JSON array.
+    pub const APPEARANCE_TRANSPARENCY_RULES_JSON: &str = "appearance_transparency_rules_json";
 }
 
 /// Port for key-value persistence (user preferences, window state).

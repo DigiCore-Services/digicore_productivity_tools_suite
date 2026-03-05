@@ -9,6 +9,8 @@ type TAURI_CHANNEL<T> = (response: T) => void
  */
 export type AppStateDto = { library_path: string; library: Partial<{ [key in string]: Snippet[] }>; categories: string[]; selected_category: number | null; status: string; sync_url: string; sync_status: string; expansion_paused: boolean; template_date_format: string; template_time_format: string; discovery_enabled: boolean; discovery_threshold: number; discovery_lookback: number; discovery_min_len: number; discovery_max_len: number; discovery_excluded_apps: string; discovery_excluded_window_titles: string; ghost_suggestor_enabled: boolean; ghost_suggestor_debounce_ms: number; ghost_suggestor_display_secs: number; ghost_suggestor_snooze_duration_mins: number; ghost_suggestor_offset_x: number; ghost_suggestor_offset_y: number; ghost_follower_enabled: boolean; ghost_follower_edge_right: boolean; ghost_follower_monitor_anchor: number; ghost_follower_search: string; ghost_follower_hover_preview: boolean; ghost_follower_collapse_delay_secs: number; ghost_follower_opacity: number; clip_history_max_depth: number; script_library_run_disabled: boolean; script_library_run_allowlist: string }
 
+export type AppearanceTransparencyRuleDto = { app_process: string; opacity: number; enabled: boolean }
+
 /**
  * Clipboard entry DTO (Instant not serializable).
  */
@@ -78,6 +80,10 @@ export type PendingVariableInputDto = { content: string; vars: InteractiveVarDto
 
 export type PinnedSnippetDto = { trigger: string; content: string; content_preview: string; category: string; snippet_idx: number }
 
+export type SettingsBundlePreviewDto = { path: string; schema_version: string; available_groups: string[]; warnings: string[]; valid: boolean }
+
+export type SettingsImportResultDto = { applied_groups: string[]; skipped_groups: string[]; warnings: string[]; updated_keys: number; appearance_rules_applied: number; theme: string | null; autostart_enabled: boolean | null }
+
 /**
  * A text expansion snippet.
  * 
@@ -93,22 +99,27 @@ export type SuggestionDto = { trigger: string; content_preview: string; category
  */
 export type UiPrefsDto = { last_tab: number; column_order: string[] }
 
-const ARGS_MAP = { '':'{"add_snippet":["category","snippet"],"bring_main_window_to_foreground":[],"cancel_variable_input":[],"clear_clipboard_history":[],"clear_diagnostic_logs":[],"copy_to_clipboard":["text"],"delete_clip_entry":["index"],"delete_snippet":["category","snippet_idx"],"get_app_state":[],"get_clipboard_entries":[],"get_diagnostic_logs":[],"get_expansion_stats":[],"get_ghost_follower_state":["search_filter"],"get_ghost_suggestor_state":[],"get_pending_variable_input":[],"get_script_library_js":[],"get_ui_prefs":[],"ghost_follower_capture_target_window":[],"ghost_follower_hide":[],"ghost_follower_insert":["trigger","content"],"ghost_follower_request_edit":["category","snippet_idx"],"ghost_follower_request_promote":["content","trigger"],"ghost_follower_request_view_full":["content"],"ghost_follower_restore_always_on_top":[],"ghost_follower_save_position":["x","y"],"ghost_follower_set_collapsed":["collapsed"],"ghost_follower_set_opacity":["opacity_pct"],"ghost_follower_set_search":["filter"],"ghost_follower_set_size":["width","height"],"ghost_follower_toggle_pin":["category","snippet_idx"],"ghost_follower_touch":[],"ghost_suggestor_accept":[],"ghost_suggestor_create_snippet":[],"ghost_suggestor_cycle_forward":[],"ghost_suggestor_dismiss":[],"ghost_suggestor_ignore":["phrase"],"ghost_suggestor_snooze":[],"greet":["name"],"load_library":[],"reset_expansion_stats":[],"save_library":[],"save_script_library_js":["content"],"save_settings":[],"save_ui_prefs":["last_tab","column_order"],"set_library_path":["path"],"submit_variable_input":["values"],"update_config":["config"],"update_snippet":["category","snippet_idx","snippet"]}' }
+const ARGS_MAP = { '':'{"add_snippet":["category","snippet"],"apply_appearance_transparency_now":["app_process","opacity"],"bring_main_window_to_foreground":[],"cancel_variable_input":[],"clear_clipboard_history":[],"clear_diagnostic_logs":[],"copy_to_clipboard":["text"],"delete_appearance_transparency_rule":["app_process"],"delete_clip_entry":["index"],"delete_snippet":["category","snippet_idx"],"export_settings_bundle_to_file":["path","selected_groups","theme","autostart_enabled"],"get_app_state":[],"get_appearance_transparency_rules":[],"get_clipboard_entries":[],"get_diagnostic_logs":[],"get_expansion_stats":[],"get_ghost_follower_state":["search_filter"],"get_ghost_suggestor_state":[],"get_pending_variable_input":[],"get_running_process_names":[],"get_script_library_js":[],"get_ui_prefs":[],"ghost_follower_capture_target_window":[],"ghost_follower_hide":[],"ghost_follower_insert":["trigger","content"],"ghost_follower_request_edit":["category","snippet_idx"],"ghost_follower_request_promote":["content","trigger"],"ghost_follower_request_view_full":["content"],"ghost_follower_restore_always_on_top":[],"ghost_follower_save_position":["x","y"],"ghost_follower_set_collapsed":["collapsed"],"ghost_follower_set_opacity":["opacity_pct"],"ghost_follower_set_search":["filter"],"ghost_follower_set_size":["width","height"],"ghost_follower_toggle_pin":["category","snippet_idx"],"ghost_follower_touch":[],"ghost_suggestor_accept":[],"ghost_suggestor_create_snippet":[],"ghost_suggestor_cycle_forward":[],"ghost_suggestor_dismiss":[],"ghost_suggestor_ignore":["phrase"],"ghost_suggestor_snooze":[],"greet":["name"],"import_settings_bundle_from_file":["path","selected_groups"],"load_library":[],"preview_settings_bundle_from_file":["path"],"reset_expansion_stats":[],"restore_appearance_defaults":[],"save_appearance_transparency_rule":["app_process","opacity","enabled"],"save_library":[],"save_script_library_js":["content"],"save_settings":[],"save_ui_prefs":["last_tab","column_order"],"set_library_path":["path"],"submit_variable_input":["values"],"update_config":["config"],"update_snippet":["category","snippet_idx","snippet"]}' }
 export type Router = { "": {add_snippet: (category: string, snippet: Snippet) => Promise<null>, 
+apply_appearance_transparency_now: (appProcess: string, opacity: number) => Promise<number>, 
 bring_main_window_to_foreground: () => Promise<null>, 
 cancel_variable_input: () => Promise<null>, 
 clear_clipboard_history: () => Promise<null>, 
 clear_diagnostic_logs: () => Promise<null>, 
 copy_to_clipboard: (text: string) => Promise<null>, 
+delete_appearance_transparency_rule: (appProcess: string) => Promise<null>, 
 delete_clip_entry: (index: number) => Promise<null>, 
 delete_snippet: (category: string, snippetIdx: number) => Promise<null>, 
+export_settings_bundle_to_file: (path: string, selectedGroups: string[], theme: string | null, autostartEnabled: boolean | null) => Promise<number>, 
 get_app_state: () => Promise<AppStateDto>, 
+get_appearance_transparency_rules: () => Promise<AppearanceTransparencyRuleDto[]>, 
 get_clipboard_entries: () => Promise<ClipEntryDto[]>, 
 get_diagnostic_logs: () => Promise<DiagnosticEntryDto[]>, 
 get_expansion_stats: () => Promise<ExpansionStatsDto>, 
 get_ghost_follower_state: (searchFilter: string | null) => Promise<GhostFollowerStateDto>, 
 get_ghost_suggestor_state: () => Promise<GhostSuggestorStateDto>, 
 get_pending_variable_input: () => Promise<PendingVariableInputDto | null>, 
+get_running_process_names: () => Promise<string[]>, 
 get_script_library_js: () => Promise<string>, 
 get_ui_prefs: () => Promise<UiPrefsDto>, 
 ghost_follower_capture_target_window: () => Promise<null>, 
@@ -132,8 +143,12 @@ ghost_suggestor_dismiss: () => Promise<null>,
 ghost_suggestor_ignore: (phrase: string) => Promise<null>, 
 ghost_suggestor_snooze: () => Promise<null>, 
 greet: (name: string) => Promise<string>, 
+import_settings_bundle_from_file: (path: string, selectedGroups: string[]) => Promise<SettingsImportResultDto>, 
 load_library: () => Promise<number>, 
+preview_settings_bundle_from_file: (path: string) => Promise<SettingsBundlePreviewDto>, 
 reset_expansion_stats: () => Promise<null>, 
+restore_appearance_defaults: () => Promise<number>, 
+save_appearance_transparency_rule: (appProcess: string, opacity: number, enabled: boolean) => Promise<null>, 
 save_library: () => Promise<null>, 
 save_script_library_js: (content: string) => Promise<null>, 
 save_settings: () => Promise<null>, 

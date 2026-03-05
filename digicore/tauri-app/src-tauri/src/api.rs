@@ -1,8 +1,8 @@
 //! TauRPC API - type-safe IPC procedures for DigiCore Text Expander.
 
 use crate::{
-    app_state_to_dto, ConfigUpdateDto, ExpansionStatsDto, GhostFollowerStateDto,
-    GhostSuggestorStateDto, UiPrefsDto,
+    app_state_to_dto, AppearanceTransparencyRuleDto, ConfigUpdateDto, ExpansionStatsDto, GhostFollowerStateDto,
+    GhostSuggestorStateDto, SettingsBundlePreviewDto, SettingsImportResultDto, UiPrefsDto,
 };
 use digicore_core::domain::Snippet;
 use digicore_text_expander::adapters::storage::JsonFileStorageAdapter;
@@ -20,15 +20,291 @@ use digicore_text_expander::drivers::hotstring::{
 };
 use digicore_text_expander::application::app_state::AppState;
 use digicore_text_expander::ports::{storage_keys, StoragePort};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use tauri::{AppHandle, Emitter, Manager};
+#[cfg(target_os = "windows")]
+use windows::core::BOOL;
+#[cfg(target_os = "windows")]
+use windows::Win32::Foundation::{COLORREF, HWND, LPARAM};
+#[cfg(target_os = "windows")]
+use windows::Win32::UI::WindowsAndMessaging::{
+    EnumWindows, GetLayeredWindowAttributes, GetWindowLongW, GetWindowThreadProcessId, IsWindowVisible,
+    SetLayeredWindowAttributes, SetWindowLongW, GWL_EXSTYLE, LWA_ALPHA, WS_EX_LAYERED,
+};
 
 use crate::{
     ClipEntryDto, DiagnosticEntryDto, InteractiveVarDto, PinnedSnippetDto,
     PendingVariableInputDto as PendingVarDto, SuggestionDto,
 };
+
+fn load_appearance_rules(storage: &JsonFileStorageAdapter) -> Vec<AppearanceTransparencyRuleDto> {
+    storage
+        .get(storage_keys::APPEARANCE_TRANSPARENCY_RULES_JSON)
+        .and_then(|s| serde_json::from_str::<Vec<AppearanceTransparencyRuleDto>>(&s).ok())
+        .unwrap_or_default()
+}
+
+fn normalize_process_key(name: &str) -> String {
+    name.trim()
+        .to_ascii_lowercase()
+        .trim_end_matches(".exe")
+        .to_string()
+}
+
+fn sort_appearance_rules_deterministic(rules: &mut [AppearanceTransparencyRuleDto]) {
+    rules.sort_by(|a, b| {
+        b.enabled
+            .cmp(&a.enabled)
+            .then_with(|| normalize_process_key(&a.app_process).cmp(&normalize_process_key(&b.app_process)))
+            .then_with(|| a.app_process.to_ascii_lowercase().cmp(&b.app_process.to_ascii_lowercase()))
+            .then_with(|| a.opacity.cmp(&b.opacity))
+    });
+}
+
+fn effective_rules_for_enforcement(mut rules: Vec<AppearanceTransparencyRuleDto>) -> Vec<AppearanceTransparencyRuleDto> {
+    sort_appearance_rules_deterministic(&mut rules);
+    let mut seen = HashSet::new();
+    let mut effective = Vec::new();
+    for rule in rules {
+        let key = normalize_process_key(&rule.app_process);
+        if key.is_empty() || !seen.insert(key) {
+            continue;
+        }
+        if rule.enabled {
+            effective.push(rule);
+        }
+    }
+    effective
+}
+
+fn save_appearance_rules(rules: &[AppearanceTransparencyRuleDto]) -> Result<(), String> {
+    let mut storage = JsonFileStorageAdapter::load();
+    let serialized = serde_json::to_string(rules).map_err(|e| e.to_string())?;
+    storage.set(storage_keys::APPEARANCE_TRANSPARENCY_RULES_JSON, &serialized);
+    storage
+        .persist_if_safe()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+const SETTINGS_GROUP_TEMPLATES: &str = "templates";
+const SETTINGS_GROUP_SYNC: &str = "sync";
+const SETTINGS_GROUP_DISCOVERY: &str = "discovery";
+const SETTINGS_GROUP_GHOST_SUGGESTOR: &str = "ghost_suggestor";
+const SETTINGS_GROUP_GHOST_FOLLOWER: &str = "ghost_follower";
+const SETTINGS_GROUP_CLIPBOARD_HISTORY: &str = "clipboard_history";
+const SETTINGS_GROUP_CORE: &str = "core";
+const SETTINGS_GROUP_SCRIPT_RUNTIME: &str = "script_runtime";
+const SETTINGS_GROUP_APPEARANCE: &str = "appearance";
+
+fn all_settings_groups() -> Vec<&'static str> {
+    vec![
+        SETTINGS_GROUP_TEMPLATES,
+        SETTINGS_GROUP_SYNC,
+        SETTINGS_GROUP_DISCOVERY,
+        SETTINGS_GROUP_GHOST_SUGGESTOR,
+        SETTINGS_GROUP_GHOST_FOLLOWER,
+        SETTINGS_GROUP_CLIPBOARD_HISTORY,
+        SETTINGS_GROUP_CORE,
+        SETTINGS_GROUP_SCRIPT_RUNTIME,
+        SETTINGS_GROUP_APPEARANCE,
+    ]
+}
+
+fn normalize_settings_group(raw: &str) -> Option<&'static str> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "templates" => Some(SETTINGS_GROUP_TEMPLATES),
+        "sync" => Some(SETTINGS_GROUP_SYNC),
+        "discovery" => Some(SETTINGS_GROUP_DISCOVERY),
+        "ghost_suggestor" | "ghost-suggestor" | "ghost suggestor" => Some(SETTINGS_GROUP_GHOST_SUGGESTOR),
+        "ghost_follower" | "ghost-follower" | "ghost follower" => Some(SETTINGS_GROUP_GHOST_FOLLOWER),
+        "clipboard_history" | "clipboard-history" | "clipboard history" => Some(SETTINGS_GROUP_CLIPBOARD_HISTORY),
+        "core" => Some(SETTINGS_GROUP_CORE),
+        "script_runtime" | "script-runtime" | "script runtime" => Some(SETTINGS_GROUP_SCRIPT_RUNTIME),
+        "appearance" => Some(SETTINGS_GROUP_APPEARANCE),
+        _ => None,
+    }
+}
+
+fn normalized_selected_groups(groups: &[String]) -> Vec<String> {
+    let mut out = Vec::<String>::new();
+    if groups.is_empty() {
+        return all_settings_groups().into_iter().map(str::to_string).collect();
+    }
+    for g in groups {
+        if let Some(n) = normalize_settings_group(g) {
+            if !out.iter().any(|v| v == n) {
+                out.push(n.to_string());
+            }
+        }
+    }
+    out
+}
+
+fn diag_log(level: &str, message: impl Into<String>) {
+    let msg = message.into();
+    expansion_diagnostics::push(level, msg.clone());
+    match level {
+        "error" => log::error!("{msg}"),
+        "warn" => log::warn!("{msg}"),
+        _ => log::info!("{msg}"),
+    }
+}
+
+pub(crate) fn enforce_appearance_transparency_rules() {
+    let storage = JsonFileStorageAdapter::load();
+    let rules = load_appearance_rules(&storage);
+    for rule in effective_rules_for_enforcement(rules) {
+        let _ = apply_process_transparency(
+            &rule.app_process,
+            Some(rule.opacity.clamp(20, 255) as u8),
+        );
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn transparency_cache() -> &'static Mutex<HashMap<isize, u8>> {
+    static CACHE: OnceLock<Mutex<HashMap<isize, u8>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+#[cfg(target_os = "windows")]
+struct TransparencyApplyContext {
+    target_pids: std::collections::HashSet<u32>,
+    alpha: Option<u8>,
+    applied: u32,
+}
+
+#[cfg(target_os = "windows")]
+unsafe extern "system" fn enum_apply_transparency(hwnd: HWND, lparam: LPARAM) -> BOOL {
+    let ctx = &mut *(lparam.0 as *mut TransparencyApplyContext);
+    let hwnd_key = hwnd.0 as isize;
+    if !IsWindowVisible(hwnd).as_bool() {
+        return BOOL(1);
+    }
+    let mut pid = 0u32;
+    let _ = GetWindowThreadProcessId(hwnd, Some(&mut pid));
+    if pid == 0 || !ctx.target_pids.contains(&pid) {
+        return BOOL(1);
+    }
+    let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE);
+    if let Some(alpha) = ctx.alpha {
+        if let Ok(cache) = transparency_cache().lock() {
+            if cache.get(&hwnd_key).copied() == Some(alpha) {
+                return BOOL(1);
+            }
+        }
+        let mut next_style = ex_style;
+        if (next_style & WS_EX_LAYERED.0 as i32) == 0 {
+            next_style |= WS_EX_LAYERED.0 as i32;
+            let _ = SetWindowLongW(hwnd, GWL_EXSTYLE, next_style);
+        }
+        let mut current_color_key = COLORREF(0);
+        let mut current_alpha: u8 = 0;
+        let mut current_flags = windows::Win32::UI::WindowsAndMessaging::LAYERED_WINDOW_ATTRIBUTES_FLAGS(0);
+        let has_current_alpha = GetLayeredWindowAttributes(
+            hwnd,
+            Some(&mut current_color_key),
+            Some(&mut current_alpha),
+            Some(&mut current_flags),
+        )
+        .is_ok()
+            && (current_flags.0 & LWA_ALPHA.0) != 0;
+        if !has_current_alpha || current_alpha != alpha {
+            let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), alpha, LWA_ALPHA);
+        }
+        if let Ok(mut cache) = transparency_cache().lock() {
+            cache.insert(hwnd_key, alpha);
+        }
+    } else if (ex_style & WS_EX_LAYERED.0 as i32) != 0 {
+        let _ = SetWindowLongW(hwnd, GWL_EXSTYLE, ex_style & !(WS_EX_LAYERED.0 as i32));
+        if let Ok(mut cache) = transparency_cache().lock() {
+            cache.remove(&hwnd_key);
+        }
+    }
+    ctx.applied = ctx.applied.saturating_add(1);
+    BOOL(1)
+}
+
+#[cfg(target_os = "windows")]
+fn process_name_matches(target: &str, name: &str) -> bool {
+    let t = normalize_process_key(target);
+    let n = normalize_process_key(name);
+    !t.is_empty() && t == n
+}
+
+#[cfg(target_os = "windows")]
+fn apply_process_transparency(app_process: &str, alpha: Option<u8>) -> Result<u32, String> {
+    use sysinfo::{ProcessesToUpdate, System};
+    let target = app_process.trim();
+    if target.is_empty() {
+        return Ok(0);
+    }
+    let mut sys = System::new_all();
+    sys.refresh_processes(ProcessesToUpdate::All, true);
+    let target_pids: std::collections::HashSet<u32> = sys
+        .processes()
+        .iter()
+        .filter_map(|(pid, process)| {
+            let name = process.name().to_string_lossy();
+            if process_name_matches(target, &name) {
+                Some(pid.as_u32())
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    if target_pids.is_empty() {
+        return Ok(0);
+    }
+
+    let mut ctx = TransparencyApplyContext {
+        target_pids,
+        alpha,
+        applied: 0,
+    };
+    unsafe {
+        let _ = EnumWindows(
+            Some(enum_apply_transparency),
+            LPARAM((&mut ctx as *mut TransparencyApplyContext) as isize),
+        );
+    }
+    Ok(ctx.applied)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn apply_process_transparency(_app_process: &str, _alpha: Option<u8>) -> Result<u32, String> {
+    Ok(0)
+}
+
+#[cfg(target_os = "windows")]
+fn get_running_process_names() -> Vec<String> {
+    use std::collections::BTreeSet;
+    use sysinfo::{ProcessesToUpdate, System};
+
+    let mut sys = System::new_all();
+    sys.refresh_processes(ProcessesToUpdate::All, true);
+    let mut names = BTreeSet::new();
+    for process in sys.processes().values() {
+        let mut name = process.name().to_string_lossy().trim().to_ascii_lowercase();
+        if name.is_empty() {
+            continue;
+        }
+        if !name.ends_with(".exe") {
+            name.push_str(".exe");
+        }
+        names.insert(name);
+    }
+    names.into_iter().collect()
+}
+
+#[cfg(not(target_os = "windows"))]
+fn get_running_process_names() -> Vec<String> {
+    Vec::new()
+}
 
 /// Persists app state to JSON storage. Used by save_settings and save_all_on_exit.
 fn persist_settings_to_storage(state: &AppState) -> Result<(), String> {
@@ -179,6 +455,23 @@ pub trait Api {
     async fn copy_to_clipboard(text: String) -> Result<(), String>;
     async fn get_script_library_js() -> Result<String, String>;
     async fn save_script_library_js(content: String) -> Result<(), String>;
+    async fn get_appearance_transparency_rules() -> Result<Vec<AppearanceTransparencyRuleDto>, String>;
+    async fn get_running_process_names() -> Result<Vec<String>, String>;
+    async fn export_settings_bundle_to_file(
+        path: String,
+        selected_groups: Vec<String>,
+        theme: Option<String>,
+        autostart_enabled: Option<bool>,
+    ) -> Result<u32, String>;
+    async fn preview_settings_bundle_from_file(path: String) -> Result<SettingsBundlePreviewDto, String>;
+    async fn import_settings_bundle_from_file(
+        path: String,
+        selected_groups: Vec<String>,
+    ) -> Result<SettingsImportResultDto, String>;
+    async fn save_appearance_transparency_rule(app_process: String, opacity: u32, enabled: bool) -> Result<(), String>;
+    async fn delete_appearance_transparency_rule(app_process: String) -> Result<(), String>;
+    async fn apply_appearance_transparency_now(app_process: String, opacity: u32) -> Result<u32, String>;
+    async fn restore_appearance_defaults() -> Result<u32, String>;
     async fn get_ghost_suggestor_state() -> Result<GhostSuggestorStateDto, String>;
     async fn ghost_suggestor_accept() -> Result<Option<(String, String)>, String>;
     async fn ghost_suggestor_snooze() -> Result<(), String>;
@@ -547,6 +840,561 @@ function greet(name) { return "Hello, " + name + "!"; }
         std::fs::write(&lib_path, &content).map_err(|e| e.to_string())?;
         set_global_library(content);
         Ok(())
+    }
+
+    async fn get_appearance_transparency_rules(self) -> Result<Vec<AppearanceTransparencyRuleDto>, String> {
+        let storage = JsonFileStorageAdapter::load();
+        let mut rules = load_appearance_rules(&storage);
+        for rule in effective_rules_for_enforcement(rules.clone()) {
+            let _ = apply_process_transparency(
+                &rule.app_process,
+                Some(rule.opacity.clamp(20, 255) as u8),
+            );
+        }
+        sort_appearance_rules_deterministic(&mut rules);
+        Ok(rules)
+    }
+
+    async fn get_running_process_names(self) -> Result<Vec<String>, String> {
+        Ok(get_running_process_names())
+    }
+
+    async fn export_settings_bundle_to_file(
+        self,
+        path: String,
+        selected_groups: Vec<String>,
+        theme: Option<String>,
+        autostart_enabled: Option<bool>,
+    ) -> Result<u32, String> {
+        let groups = normalized_selected_groups(&selected_groups);
+        if groups.is_empty() {
+            return Err("No valid settings groups selected for export.".to_string());
+        }
+        let guard = self.state.lock().map_err(|e| e.to_string())?;
+        let mut groups_obj = serde_json::Map::new();
+
+        for group in &groups {
+            match group.as_str() {
+                SETTINGS_GROUP_TEMPLATES => {
+                    groups_obj.insert(
+                        group.clone(),
+                        serde_json::json!({
+                            "template_date_format": guard.template_date_format,
+                            "template_time_format": guard.template_time_format
+                        }),
+                    );
+                }
+                SETTINGS_GROUP_SYNC => {
+                    groups_obj.insert(
+                        group.clone(),
+                        serde_json::json!({
+                            "sync_url": guard.sync_url
+                        }),
+                    );
+                }
+                SETTINGS_GROUP_DISCOVERY => {
+                    groups_obj.insert(
+                        group.clone(),
+                        serde_json::json!({
+                            "discovery_enabled": guard.discovery_enabled,
+                            "discovery_threshold": guard.discovery_threshold,
+                            "discovery_lookback": guard.discovery_lookback,
+                            "discovery_min_len": guard.discovery_min_len,
+                            "discovery_max_len": guard.discovery_max_len,
+                            "discovery_excluded_apps": guard.discovery_excluded_apps,
+                            "discovery_excluded_window_titles": guard.discovery_excluded_window_titles
+                        }),
+                    );
+                }
+                SETTINGS_GROUP_GHOST_SUGGESTOR => {
+                    groups_obj.insert(
+                        group.clone(),
+                        serde_json::json!({
+                            "ghost_suggestor_enabled": guard.ghost_suggestor_enabled,
+                            "ghost_suggestor_debounce_ms": guard.ghost_suggestor_debounce_ms,
+                            "ghost_suggestor_display_secs": guard.ghost_suggestor_display_secs,
+                            "ghost_suggestor_snooze_duration_mins": guard.ghost_suggestor_snooze_duration_mins,
+                            "ghost_suggestor_offset_x": guard.ghost_suggestor_offset_x,
+                            "ghost_suggestor_offset_y": guard.ghost_suggestor_offset_y
+                        }),
+                    );
+                }
+                SETTINGS_GROUP_GHOST_FOLLOWER => {
+                    groups_obj.insert(
+                        group.clone(),
+                        serde_json::json!({
+                            "ghost_follower_enabled": guard.ghost_follower_enabled,
+                            "ghost_follower_edge_right": guard.ghost_follower_edge_right,
+                            "ghost_follower_monitor_anchor": guard.ghost_follower_monitor_anchor,
+                            "ghost_follower_hover_preview": guard.ghost_follower_hover_preview,
+                            "ghost_follower_collapse_delay_secs": guard.ghost_follower_collapse_delay_secs,
+                            "ghost_follower_opacity": guard.ghost_follower_opacity
+                        }),
+                    );
+                }
+                SETTINGS_GROUP_CLIPBOARD_HISTORY => {
+                    groups_obj.insert(
+                        group.clone(),
+                        serde_json::json!({
+                            "clip_history_max_depth": guard.clip_history_max_depth
+                        }),
+                    );
+                }
+                SETTINGS_GROUP_CORE => {
+                    groups_obj.insert(
+                        group.clone(),
+                        serde_json::json!({
+                            "expansion_paused": guard.expansion_paused,
+                            "theme": theme,
+                            "autostart_enabled": autostart_enabled
+                        }),
+                    );
+                }
+                SETTINGS_GROUP_SCRIPT_RUNTIME => {
+                    groups_obj.insert(
+                        group.clone(),
+                        serde_json::json!({
+                            "script_library_run_disabled": guard.script_library_run_disabled,
+                            "script_library_run_allowlist": guard.script_library_run_allowlist
+                        }),
+                    );
+                }
+                SETTINGS_GROUP_APPEARANCE => {
+                    let storage = JsonFileStorageAdapter::load();
+                    let mut rules = load_appearance_rules(&storage);
+                    sort_appearance_rules_deterministic(&mut rules);
+                    groups_obj.insert(group.clone(), serde_json::json!({ "rules": rules }));
+                }
+                _ => {}
+            }
+        }
+
+        let payload = serde_json::json!({
+            "schema_version": "1.0.0",
+            "exported_at_utc": std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs().to_string())
+                .unwrap_or_else(|_| "0".to_string()),
+            "app": {
+                "name": "DigiCore Text Expander",
+                "format": "settings-bundle"
+            },
+            "selected_groups": groups,
+            "groups": groups_obj
+        });
+
+        let serialized = serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?;
+        std::fs::write(&path, serialized).map_err(|e| e.to_string())?;
+        diag_log("info", format!("[SettingsExport] Wrote settings bundle to {path}"));
+        Ok(payload["selected_groups"].as_array().map(|a| a.len() as u32).unwrap_or(0))
+    }
+
+    async fn preview_settings_bundle_from_file(
+        self,
+        path: String,
+    ) -> Result<SettingsBundlePreviewDto, String> {
+        let raw = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+        let root: serde_json::Value = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+        let schema = root
+            .get("schema_version")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+        let mut warnings = Vec::new();
+        let mut available_groups = Vec::new();
+        let mut valid = true;
+
+        if schema != "1.0.0" {
+            valid = false;
+            warnings.push(format!(
+                "Unsupported schema_version '{schema}'. Expected '1.0.0'."
+            ));
+        }
+
+        match root.get("groups").and_then(|v| v.as_object()) {
+            Some(groups_obj) => {
+                for key in groups_obj.keys() {
+                    available_groups.push(key.clone());
+                    if normalize_settings_group(key).is_none() {
+                        warnings.push(format!("Unknown group '{key}' will be ignored."));
+                    }
+                }
+            }
+            None => {
+                valid = false;
+                warnings.push("Missing or invalid 'groups' object.".to_string());
+            }
+        }
+
+        if warnings.is_empty() {
+            diag_log(
+                "info",
+                format!(
+                    "[SettingsImportPreview] OK path={} groups={}",
+                    path,
+                    available_groups.len()
+                ),
+            );
+        } else {
+            diag_log(
+                "warn",
+                format!(
+                    "[SettingsImportPreview] path={} warnings={}",
+                    path,
+                    warnings.join("; ")
+                ),
+            );
+        }
+
+        Ok(SettingsBundlePreviewDto {
+            path,
+            schema_version: schema,
+            available_groups,
+            warnings,
+            valid,
+        })
+    }
+
+    async fn import_settings_bundle_from_file(
+        self,
+        path: String,
+        selected_groups: Vec<String>,
+    ) -> Result<SettingsImportResultDto, String> {
+        let raw = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+        let root: serde_json::Value = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+        let schema = root
+            .get("schema_version")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+        if schema != "1.0.0" {
+            let msg = format!("Unsupported schema_version '{schema}'. Expected '1.0.0'.");
+            diag_log("error", format!("[SettingsImport] {msg}"));
+            return Err(msg);
+        }
+        let groups_obj = root
+            .get("groups")
+            .and_then(|v| v.as_object())
+            .ok_or_else(|| "Invalid settings bundle: missing groups object.".to_string())?;
+        let mut result = SettingsImportResultDto {
+            applied_groups: Vec::new(),
+            skipped_groups: Vec::new(),
+            warnings: Vec::new(),
+            updated_keys: 0,
+            appearance_rules_applied: 0,
+            theme: None,
+            autostart_enabled: None,
+        };
+        let selected = if selected_groups.is_empty() {
+            groups_obj
+                .keys()
+                .filter_map(|k| normalize_settings_group(k).map(str::to_string))
+                .collect::<Vec<String>>()
+        } else {
+            normalized_selected_groups(&selected_groups)
+        };
+
+        for group in selected {
+            let Some(value) = groups_obj.get(&group) else {
+                result.skipped_groups.push(group.clone());
+                result.warnings.push(format!("Group '{group}' not present in bundle."));
+                continue;
+            };
+            let obj = match value.as_object() {
+                Some(v) => v,
+                None => {
+                    result.skipped_groups.push(group.clone());
+                    result.warnings.push(format!("Group '{group}' has invalid payload type."));
+                    continue;
+                }
+            };
+
+            match group.as_str() {
+                SETTINGS_GROUP_TEMPLATES => {
+                    self.clone()
+                        .update_config(ConfigUpdateDto {
+                            expansion_paused: None,
+                            template_date_format: obj.get("template_date_format").and_then(|v| v.as_str()).map(str::to_string),
+                            template_time_format: obj.get("template_time_format").and_then(|v| v.as_str()).map(str::to_string),
+                            sync_url: None,
+                            discovery_enabled: None,
+                            discovery_threshold: None,
+                            discovery_lookback: None,
+                            discovery_min_len: None,
+                            discovery_max_len: None,
+                            discovery_excluded_apps: None,
+                            discovery_excluded_window_titles: None,
+                            ghost_suggestor_enabled: None,
+                            ghost_suggestor_debounce_ms: None,
+                            ghost_suggestor_display_secs: None,
+                            ghost_suggestor_snooze_duration_mins: None,
+                            ghost_suggestor_offset_x: None,
+                            ghost_suggestor_offset_y: None,
+                            ghost_follower_enabled: None,
+                            ghost_follower_edge_right: None,
+                            ghost_follower_monitor_anchor: None,
+                            ghost_follower_search: None,
+                            ghost_follower_hover_preview: None,
+                            ghost_follower_collapse_delay_secs: None,
+                            ghost_follower_opacity: None,
+                            clip_history_max_depth: None,
+                            script_library_run_disabled: None,
+                            script_library_run_allowlist: None,
+                        })
+                        .await?;
+                    result.updated_keys = result.updated_keys.saturating_add(2);
+                }
+                SETTINGS_GROUP_SYNC => {
+                    self.clone()
+                        .update_config(ConfigUpdateDto {
+                            expansion_paused: None,
+                            template_date_format: None,
+                            template_time_format: None,
+                            sync_url: obj.get("sync_url").and_then(|v| v.as_str()).map(str::to_string),
+                            discovery_enabled: None,
+                            discovery_threshold: None,
+                            discovery_lookback: None,
+                            discovery_min_len: None,
+                            discovery_max_len: None,
+                            discovery_excluded_apps: None,
+                            discovery_excluded_window_titles: None,
+                            ghost_suggestor_enabled: None,
+                            ghost_suggestor_debounce_ms: None,
+                            ghost_suggestor_display_secs: None,
+                            ghost_suggestor_snooze_duration_mins: None,
+                            ghost_suggestor_offset_x: None,
+                            ghost_suggestor_offset_y: None,
+                            ghost_follower_enabled: None,
+                            ghost_follower_edge_right: None,
+                            ghost_follower_monitor_anchor: None,
+                            ghost_follower_search: None,
+                            ghost_follower_hover_preview: None,
+                            ghost_follower_collapse_delay_secs: None,
+                            ghost_follower_opacity: None,
+                            clip_history_max_depth: None,
+                            script_library_run_disabled: None,
+                            script_library_run_allowlist: None,
+                        })
+                        .await?;
+                    result.updated_keys = result.updated_keys.saturating_add(1);
+                }
+                SETTINGS_GROUP_DISCOVERY | SETTINGS_GROUP_GHOST_SUGGESTOR | SETTINGS_GROUP_GHOST_FOLLOWER
+                | SETTINGS_GROUP_CLIPBOARD_HISTORY | SETTINGS_GROUP_CORE | SETTINGS_GROUP_SCRIPT_RUNTIME => {
+                    let cfg = ConfigUpdateDto {
+                        expansion_paused: obj.get("expansion_paused").and_then(|v| v.as_bool()),
+                        template_date_format: None,
+                        template_time_format: None,
+                        sync_url: None,
+                        discovery_enabled: obj.get("discovery_enabled").and_then(|v| v.as_bool()),
+                        discovery_threshold: obj.get("discovery_threshold").and_then(|v| v.as_u64()).map(|n| n as u32),
+                        discovery_lookback: obj.get("discovery_lookback").and_then(|v| v.as_u64()).map(|n| n as u32),
+                        discovery_min_len: obj.get("discovery_min_len").and_then(|v| v.as_u64()).map(|n| n as u32),
+                        discovery_max_len: obj.get("discovery_max_len").and_then(|v| v.as_u64()).map(|n| n as u32),
+                        discovery_excluded_apps: obj.get("discovery_excluded_apps").and_then(|v| v.as_str()).map(str::to_string),
+                        discovery_excluded_window_titles: obj
+                            .get("discovery_excluded_window_titles")
+                            .and_then(|v| v.as_str())
+                            .map(str::to_string),
+                        ghost_suggestor_enabled: obj.get("ghost_suggestor_enabled").and_then(|v| v.as_bool()),
+                        ghost_suggestor_debounce_ms: obj
+                            .get("ghost_suggestor_debounce_ms")
+                            .and_then(|v| v.as_u64())
+                            .map(|n| n as u32),
+                        ghost_suggestor_display_secs: obj
+                            .get("ghost_suggestor_display_secs")
+                            .and_then(|v| v.as_u64())
+                            .map(|n| n as u32),
+                        ghost_suggestor_snooze_duration_mins: obj
+                            .get("ghost_suggestor_snooze_duration_mins")
+                            .and_then(|v| v.as_u64())
+                            .map(|n| n as u32),
+                        ghost_suggestor_offset_x: obj
+                            .get("ghost_suggestor_offset_x")
+                            .and_then(|v| v.as_i64())
+                            .map(|n| n as i32),
+                        ghost_suggestor_offset_y: obj
+                            .get("ghost_suggestor_offset_y")
+                            .and_then(|v| v.as_i64())
+                            .map(|n| n as i32),
+                        ghost_follower_enabled: obj.get("ghost_follower_enabled").and_then(|v| v.as_bool()),
+                        ghost_follower_edge_right: obj.get("ghost_follower_edge_right").and_then(|v| v.as_bool()),
+                        ghost_follower_monitor_anchor: obj
+                            .get("ghost_follower_monitor_anchor")
+                            .and_then(|v| v.as_u64())
+                            .map(|n| n as u32),
+                        ghost_follower_search: None,
+                        ghost_follower_hover_preview: obj.get("ghost_follower_hover_preview").and_then(|v| v.as_bool()),
+                        ghost_follower_collapse_delay_secs: obj
+                            .get("ghost_follower_collapse_delay_secs")
+                            .and_then(|v| v.as_u64())
+                            .map(|n| n as u32),
+                        ghost_follower_opacity: obj
+                            .get("ghost_follower_opacity")
+                            .and_then(|v| v.as_u64())
+                            .map(|n| n as u32),
+                        clip_history_max_depth: obj
+                            .get("clip_history_max_depth")
+                            .and_then(|v| v.as_u64())
+                            .map(|n| n as u32),
+                        script_library_run_disabled: obj
+                            .get("script_library_run_disabled")
+                            .and_then(|v| v.as_bool()),
+                        script_library_run_allowlist: obj
+                            .get("script_library_run_allowlist")
+                            .and_then(|v| v.as_str())
+                            .map(str::to_string),
+                    };
+                    self.clone().update_config(cfg).await?;
+                    if group == SETTINGS_GROUP_CORE {
+                        result.theme = obj.get("theme").and_then(|v| v.as_str()).map(str::to_string);
+                        result.autostart_enabled = obj.get("autostart_enabled").and_then(|v| v.as_bool());
+                    }
+                    result.updated_keys = result.updated_keys.saturating_add(obj.len() as u32);
+                }
+                SETTINGS_GROUP_APPEARANCE => {
+                    let rules_value = obj.get("rules").and_then(|v| v.as_array());
+                    let Some(rules_arr) = rules_value else {
+                        result.skipped_groups.push(group.clone());
+                        result.warnings.push("Appearance group missing 'rules' array.".to_string());
+                        continue;
+                    };
+                    let mut rules = Vec::<AppearanceTransparencyRuleDto>::new();
+                    for r in rules_arr {
+                        let Some(ro) = r.as_object() else {
+                            continue;
+                        };
+                        let mut app = ro
+                            .get("app_process")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default()
+                            .trim()
+                            .to_ascii_lowercase();
+                        if app.is_empty() {
+                            continue;
+                        }
+                        if !app.ends_with(".exe") {
+                            app.push_str(".exe");
+                        }
+                        let opacity = ro
+                            .get("opacity")
+                            .and_then(|v| v.as_u64())
+                            .map(|n| n as u32)
+                            .unwrap_or(255)
+                            .clamp(20, 255);
+                        let enabled = ro.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true);
+                        rules.push(AppearanceTransparencyRuleDto {
+                            app_process: app,
+                            opacity,
+                            enabled,
+                        });
+                    }
+                    sort_appearance_rules_deterministic(&mut rules);
+                    save_appearance_rules(&rules)?;
+                    enforce_appearance_transparency_rules();
+                    result.appearance_rules_applied = rules.len() as u32;
+                    result.updated_keys = result.updated_keys.saturating_add(rules.len() as u32);
+                }
+                _ => {
+                    result.skipped_groups.push(group.clone());
+                    result.warnings.push(format!("Unsupported group '{group}'."));
+                    continue;
+                }
+            }
+
+            result.applied_groups.push(group.clone());
+            diag_log("info", format!("[SettingsImport] Applied group '{group}'"));
+        }
+
+        self.clone().save_settings().await?;
+        diag_log(
+            "info",
+            format!(
+                "[SettingsImport] Completed: applied={} skipped={} warnings={}",
+                result.applied_groups.len(),
+                result.skipped_groups.len(),
+                result.warnings.len()
+            ),
+        );
+        Ok(result)
+    }
+
+    async fn save_appearance_transparency_rule(
+        self,
+        app_process: String,
+        opacity: u32,
+        enabled: bool,
+    ) -> Result<(), String> {
+        let mut app = app_process.trim().to_ascii_lowercase();
+        if app.is_empty() {
+            return Err("App process is required".to_string());
+        }
+        if !app.ends_with(".exe") {
+            app.push_str(".exe");
+        }
+        let app_for_apply = app.clone();
+        let opacity = opacity.clamp(20, 255);
+        let storage = JsonFileStorageAdapter::load();
+        let mut rules = load_appearance_rules(&storage);
+        if let Some(existing) = rules
+            .iter_mut()
+            .find(|r| normalize_process_key(&r.app_process) == normalize_process_key(&app))
+        {
+            existing.opacity = opacity;
+            existing.enabled = enabled;
+            existing.app_process = app;
+        } else {
+            rules.push(AppearanceTransparencyRuleDto {
+                app_process: app,
+                opacity,
+                enabled,
+            });
+        }
+        sort_appearance_rules_deterministic(&mut rules);
+        save_appearance_rules(&rules)?;
+        if enabled {
+            let _ = apply_process_transparency(&app_for_apply, Some(opacity as u8));
+        }
+        Ok(())
+    }
+
+    async fn delete_appearance_transparency_rule(self, app_process: String) -> Result<(), String> {
+        let app = normalize_process_key(&app_process);
+        if app.is_empty() {
+            return Ok(());
+        }
+        let storage = JsonFileStorageAdapter::load();
+        let mut rules = load_appearance_rules(&storage);
+        rules.retain(|r| normalize_process_key(&r.app_process) != app);
+        save_appearance_rules(&rules)?;
+        let _ = apply_process_transparency(&format!("{app}.exe"), None);
+        Ok(())
+    }
+
+    async fn apply_appearance_transparency_now(
+        self,
+        app_process: String,
+        opacity: u32,
+    ) -> Result<u32, String> {
+        let alpha = opacity.clamp(20, 255) as u8;
+        apply_process_transparency(&app_process, Some(alpha))
+    }
+
+    async fn restore_appearance_defaults(self) -> Result<u32, String> {
+        let storage = JsonFileStorageAdapter::load();
+        let rules = load_appearance_rules(&storage);
+        save_appearance_rules(&[])?;
+
+        let mut seen = HashSet::new();
+        let mut cleared_windows = 0u32;
+        for rule in rules {
+            let key = normalize_process_key(&rule.app_process);
+            if key.is_empty() || !seen.insert(key.clone()) {
+                continue;
+            }
+            let app_name = format!("{key}.exe");
+            let count = apply_process_transparency(&app_name, None).unwrap_or(0);
+            cleared_windows = cleared_windows.saturating_add(count);
+        }
+        Ok(cleared_windows)
     }
 
     async fn get_ghost_suggestor_state(self) -> Result<GhostSuggestorStateDto, String> {
@@ -968,5 +1816,146 @@ function greet(name) { return "Hello, " + name + "!"; }
     async fn clear_diagnostic_logs(self) -> Result<(), String> {
         expansion_diagnostics::clear();
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        effective_rules_for_enforcement, normalize_process_key, normalized_selected_groups,
+        sort_appearance_rules_deterministic,
+    };
+    #[cfg(target_os = "windows")]
+    use super::process_name_matches;
+    use crate::AppearanceTransparencyRuleDto;
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn process_name_matches_exact_and_case_insensitive() {
+        assert!(process_name_matches("cursor.exe", "Cursor.EXE"));
+        assert!(process_name_matches("CURSOR.EXE", "cursor.exe"));
+        assert!(process_name_matches("cursor", "cursor"));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn process_name_matches_with_optional_exe_suffix() {
+        assert!(process_name_matches("cursor", "cursor.exe"));
+        assert!(process_name_matches("cursor.exe", "cursor"));
+        assert!(!process_name_matches("cursor", "code.exe"));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn process_name_matches_rejects_empty_values() {
+        assert!(!process_name_matches("", "cursor.exe"));
+        assert!(!process_name_matches("cursor.exe", ""));
+        assert!(!process_name_matches("   ", "cursor.exe"));
+    }
+
+    #[test]
+    fn normalize_process_key_handles_exe_suffix_and_case() {
+        assert_eq!(normalize_process_key("Cursor.EXE"), "cursor");
+        assert_eq!(normalize_process_key("cursor"), "cursor");
+        assert_eq!(normalize_process_key("  Code.ExE  "), "code");
+    }
+
+    #[test]
+    fn appearance_rules_sort_is_deterministic() {
+        let mut rules = vec![
+            AppearanceTransparencyRuleDto {
+                app_process: "zeta.exe".to_string(),
+                opacity: 200,
+                enabled: true,
+            },
+            AppearanceTransparencyRuleDto {
+                app_process: "cursor".to_string(),
+                opacity: 180,
+                enabled: false,
+            },
+            AppearanceTransparencyRuleDto {
+                app_process: "alpha.exe".to_string(),
+                opacity: 140,
+                enabled: true,
+            },
+        ];
+        sort_appearance_rules_deterministic(&mut rules);
+        assert_eq!(rules[0].app_process, "alpha.exe");
+        assert_eq!(rules[1].app_process, "zeta.exe");
+        assert_eq!(rules[2].app_process, "cursor");
+    }
+
+    #[test]
+    fn selected_groups_defaults_to_all_when_empty() {
+        let groups = normalized_selected_groups(&[]);
+        assert!(groups.contains(&"templates".to_string()));
+        assert!(groups.contains(&"appearance".to_string()));
+        assert!(groups.len() >= 9);
+    }
+
+    #[test]
+    fn selected_groups_normalizes_aliases_and_deduplicates() {
+        let input = vec![
+            "Ghost Follower".to_string(),
+            "ghost-follower".to_string(),
+            "appearance".to_string(),
+            "invalid".to_string(),
+        ];
+        let groups = normalized_selected_groups(&input);
+        assert_eq!(groups, vec!["ghost_follower".to_string(), "appearance".to_string()]);
+    }
+
+    #[test]
+    fn appearance_integration_save_restart_reenforce_is_deterministic() {
+        let saved_rules = vec![
+            AppearanceTransparencyRuleDto {
+                app_process: "cursor".to_string(),
+                opacity: 200,
+                enabled: true,
+            },
+            AppearanceTransparencyRuleDto {
+                app_process: "cursor.exe".to_string(),
+                opacity: 120,
+                enabled: true,
+            },
+            AppearanceTransparencyRuleDto {
+                app_process: "code.exe".to_string(),
+                opacity: 180,
+                enabled: true,
+            },
+        ];
+
+        // Simulate startup/enforcement after restart by recomputing effective rules.
+        let first_start = effective_rules_for_enforcement(saved_rules.clone());
+        let second_start = effective_rules_for_enforcement(saved_rules);
+        assert_eq!(first_start.len(), 2);
+        assert_eq!(second_start.len(), 2);
+        assert_eq!(first_start[0].app_process, second_start[0].app_process);
+        assert_eq!(first_start[0].opacity, second_start[0].opacity);
+        assert_eq!(first_start[1].app_process, second_start[1].app_process);
+        assert_eq!(first_start[1].opacity, second_start[1].opacity);
+    }
+
+    #[test]
+    fn appearance_stress_many_rules_remains_stable() {
+        let mut rules = Vec::new();
+        for i in 0..5000u32 {
+            let base = format!("app{}", i % 300);
+            rules.push(AppearanceTransparencyRuleDto {
+                app_process: if i % 2 == 0 { base.clone() } else { format!("{base}.exe") },
+                opacity: 20 + (i % 236),
+                enabled: i % 5 != 0,
+            });
+        }
+
+        let first = effective_rules_for_enforcement(rules.clone());
+        let second = effective_rules_for_enforcement(rules);
+        assert_eq!(first.len(), second.len());
+        for idx in 0..first.len() {
+            assert_eq!(first[idx].app_process, second[idx].app_process);
+            assert_eq!(first[idx].opacity, second[idx].opacity);
+            assert!(first[idx].enabled);
+        }
+        assert!(first.len() <= 300);
     }
 }
