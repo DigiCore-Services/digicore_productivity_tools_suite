@@ -7,7 +7,7 @@ type TAURI_CHANNEL<T> = (response: T) => void
 /**
  * Serializable view of AppState for frontend. Excludes mpsc::Receiver and other non-serializable fields.
  */
-export type AppStateDto = { library_path: string; library: Partial<{ [key in string]: Snippet[] }>; categories: string[]; selected_category: number | null; status: string; sync_url: string; sync_status: string; expansion_paused: boolean; template_date_format: string; template_time_format: string; discovery_enabled: boolean; discovery_threshold: number; discovery_lookback: number; discovery_min_len: number; discovery_max_len: number; discovery_excluded_apps: string; discovery_excluded_window_titles: string; ghost_suggestor_enabled: boolean; ghost_suggestor_debounce_ms: number; ghost_suggestor_display_secs: number; ghost_suggestor_offset_x: number; ghost_suggestor_offset_y: number; ghost_follower_enabled: boolean; ghost_follower_edge_right: boolean; ghost_follower_monitor_anchor: number; ghost_follower_search: string; ghost_follower_hover_preview: boolean; ghost_follower_collapse_delay_secs: number; clip_history_max_depth: number; script_library_run_disabled: boolean; script_library_run_allowlist: string }
+export type AppStateDto = { library_path: string; library: Partial<{ [key in string]: Snippet[] }>; categories: string[]; selected_category: number | null; status: string; sync_url: string; sync_status: string; expansion_paused: boolean; template_date_format: string; template_time_format: string; discovery_enabled: boolean; discovery_threshold: number; discovery_lookback: number; discovery_min_len: number; discovery_max_len: number; discovery_excluded_apps: string; discovery_excluded_window_titles: string; ghost_suggestor_enabled: boolean; ghost_suggestor_debounce_ms: number; ghost_suggestor_display_secs: number; ghost_suggestor_snooze_duration_mins: number; ghost_suggestor_offset_x: number; ghost_suggestor_offset_y: number; ghost_follower_enabled: boolean; ghost_follower_edge_right: boolean; ghost_follower_monitor_anchor: number; ghost_follower_search: string; ghost_follower_hover_preview: boolean; ghost_follower_collapse_delay_secs: number; ghost_follower_opacity: number; clip_history_max_depth: number; script_library_run_disabled: boolean; script_library_run_allowlist: string }
 
 /**
  * Clipboard entry DTO (Instant not serializable).
@@ -17,7 +17,7 @@ export type ClipEntryDto = { content: string; process_name: string; window_title
 /**
  * Config update DTO. All fields optional; only provided fields are updated.
  */
-export type ConfigUpdateDto = { expansion_paused: boolean | null; template_date_format: string | null; template_time_format: string | null; sync_url: string | null; discovery_enabled: boolean | null; discovery_threshold: number | null; discovery_lookback: number | null; discovery_min_len: number | null; discovery_max_len: number | null; discovery_excluded_apps: string | null; discovery_excluded_window_titles: string | null; ghost_suggestor_enabled: boolean | null; ghost_suggestor_debounce_ms: number | null; ghost_suggestor_display_secs: number | null; ghost_suggestor_offset_x: number | null; ghost_suggestor_offset_y: number | null; ghost_follower_enabled: boolean | null; ghost_follower_edge_right: boolean | null; ghost_follower_monitor_anchor: number | null; ghost_follower_search: string | null; ghost_follower_hover_preview: boolean | null; ghost_follower_collapse_delay_secs: number | null; clip_history_max_depth: number | null; script_library_run_disabled: boolean | null; script_library_run_allowlist: string | null }
+export type ConfigUpdateDto = { expansion_paused: boolean | null; template_date_format: string | null; template_time_format: string | null; sync_url: string | null; discovery_enabled: boolean | null; discovery_threshold: number | null; discovery_lookback: number | null; discovery_min_len: number | null; discovery_max_len: number | null; discovery_excluded_apps: string | null; discovery_excluded_window_titles: string | null; ghost_suggestor_enabled: boolean | null; ghost_suggestor_debounce_ms: number | null; ghost_suggestor_display_secs: number | null; ghost_suggestor_snooze_duration_mins: number | null; ghost_suggestor_offset_x: number | null; ghost_suggestor_offset_y: number | null; ghost_follower_enabled: boolean | null; ghost_follower_edge_right: boolean | null; ghost_follower_monitor_anchor: number | null; ghost_follower_search: string | null; ghost_follower_hover_preview: boolean | null; ghost_follower_collapse_delay_secs: number | null; ghost_follower_opacity: number | null; clip_history_max_depth: number | null; script_library_run_disabled: boolean | null; script_library_run_allowlist: string | null }
 
 /**
  * Diagnostic entry DTO for Log tab.
@@ -41,7 +41,27 @@ edge_right: boolean;
 /**
  * True when monitor is Primary (positioner works best for primary).
  */
-monitor_primary: boolean }
+monitor_primary: boolean; 
+/**
+ * Configured max clipboard history depth (e.g. 100, 20).
+ */
+clip_history_max_depth: number; 
+/**
+ * True when ribbon should auto-collapse (no activity for collapse_delay_secs).
+ */
+should_collapse: boolean; 
+/**
+ * Seconds of inactivity before auto-collapsing. 0 = disabled.
+ */
+collapse_delay_secs: number; 
+/**
+ * Opacity 0.0-1.0 (10-100% from config).
+ */
+opacity: number; 
+/**
+ * True when position is from user drag (saved); use position directly, skip positioner.
+ */
+saved_position: boolean }
 
 /**
  * Ghost Suggestor state for overlay.
@@ -73,8 +93,9 @@ export type SuggestionDto = { trigger: string; content_preview: string; category
  */
 export type UiPrefsDto = { last_tab: number; column_order: string[] }
 
-const ARGS_MAP = { '':'{"add_snippet":["category","snippet"],"cancel_variable_input":[],"clear_clipboard_history":[],"clear_diagnostic_logs":[],"copy_to_clipboard":["text"],"delete_clip_entry":["index"],"delete_snippet":["category","snippet_idx"],"get_app_state":[],"get_clipboard_entries":[],"get_diagnostic_logs":[],"get_expansion_stats":[],"get_ghost_follower_state":["search_filter"],"get_ghost_suggestor_state":[],"get_pending_variable_input":[],"get_script_library_js":[],"get_ui_prefs":[],"ghost_follower_insert":["trigger","content"],"ghost_follower_request_edit":["category","snippet_idx"],"ghost_follower_request_promote":["content","trigger"],"ghost_follower_request_view_full":["content"],"ghost_follower_set_search":["filter"],"ghost_follower_toggle_pin":["category","snippet_idx"],"ghost_suggestor_accept":[],"ghost_suggestor_create_snippet":[],"ghost_suggestor_cycle_forward":[],"ghost_suggestor_dismiss":[],"greet":["name"],"load_library":[],"reset_expansion_stats":[],"save_library":[],"save_script_library_js":["content"],"save_settings":[],"save_ui_prefs":["last_tab","column_order"],"set_library_path":["path"],"submit_variable_input":["values"],"update_config":["config"],"update_snippet":["category","snippet_idx","snippet"]}' }
+const ARGS_MAP = { '':'{"add_snippet":["category","snippet"],"bring_main_window_to_foreground":[],"cancel_variable_input":[],"clear_clipboard_history":[],"clear_diagnostic_logs":[],"copy_to_clipboard":["text"],"delete_clip_entry":["index"],"delete_snippet":["category","snippet_idx"],"get_app_state":[],"get_clipboard_entries":[],"get_diagnostic_logs":[],"get_expansion_stats":[],"get_ghost_follower_state":["search_filter"],"get_ghost_suggestor_state":[],"get_pending_variable_input":[],"get_script_library_js":[],"get_ui_prefs":[],"ghost_follower_capture_target_window":[],"ghost_follower_hide":[],"ghost_follower_insert":["trigger","content"],"ghost_follower_request_edit":["category","snippet_idx"],"ghost_follower_request_promote":["content","trigger"],"ghost_follower_request_view_full":["content"],"ghost_follower_restore_always_on_top":[],"ghost_follower_save_position":["x","y"],"ghost_follower_set_collapsed":["collapsed"],"ghost_follower_set_opacity":["opacity_pct"],"ghost_follower_set_search":["filter"],"ghost_follower_set_size":["width","height"],"ghost_follower_toggle_pin":["category","snippet_idx"],"ghost_follower_touch":[],"ghost_suggestor_accept":[],"ghost_suggestor_create_snippet":[],"ghost_suggestor_cycle_forward":[],"ghost_suggestor_dismiss":[],"ghost_suggestor_ignore":["phrase"],"ghost_suggestor_snooze":[],"greet":["name"],"load_library":[],"reset_expansion_stats":[],"save_library":[],"save_script_library_js":["content"],"save_settings":[],"save_ui_prefs":["last_tab","column_order"],"set_library_path":["path"],"submit_variable_input":["values"],"update_config":["config"],"update_snippet":["category","snippet_idx","snippet"]}' }
 export type Router = { "": {add_snippet: (category: string, snippet: Snippet) => Promise<null>, 
+bring_main_window_to_foreground: () => Promise<null>, 
 cancel_variable_input: () => Promise<null>, 
 clear_clipboard_history: () => Promise<null>, 
 clear_diagnostic_logs: () => Promise<null>, 
@@ -90,16 +111,26 @@ get_ghost_suggestor_state: () => Promise<GhostSuggestorStateDto>,
 get_pending_variable_input: () => Promise<PendingVariableInputDto | null>, 
 get_script_library_js: () => Promise<string>, 
 get_ui_prefs: () => Promise<UiPrefsDto>, 
+ghost_follower_capture_target_window: () => Promise<null>, 
+ghost_follower_hide: () => Promise<null>, 
 ghost_follower_insert: (trigger: string, content: string) => Promise<null>, 
 ghost_follower_request_edit: (category: string, snippetIdx: number) => Promise<null>, 
 ghost_follower_request_promote: (content: string, trigger: string) => Promise<null>, 
 ghost_follower_request_view_full: (content: string) => Promise<null>, 
+ghost_follower_restore_always_on_top: () => Promise<null>, 
+ghost_follower_save_position: (x: number, y: number) => Promise<null>, 
+ghost_follower_set_collapsed: (collapsed: boolean) => Promise<null>, 
+ghost_follower_set_opacity: (opacityPct: number) => Promise<null>, 
 ghost_follower_set_search: (filter: string) => Promise<null>, 
+ghost_follower_set_size: (width: number, height: number) => Promise<null>, 
 ghost_follower_toggle_pin: (category: string, snippetIdx: number) => Promise<null>, 
+ghost_follower_touch: () => Promise<null>, 
 ghost_suggestor_accept: () => Promise<[string, string] | null>, 
 ghost_suggestor_create_snippet: () => Promise<[string, string] | null>, 
 ghost_suggestor_cycle_forward: () => Promise<number>, 
 ghost_suggestor_dismiss: () => Promise<null>, 
+ghost_suggestor_ignore: (phrase: string) => Promise<null>, 
+ghost_suggestor_snooze: () => Promise<null>, 
 greet: (name: string) => Promise<string>, 
 load_library: () => Promise<number>, 
 reset_expansion_stats: () => Promise<null>, 

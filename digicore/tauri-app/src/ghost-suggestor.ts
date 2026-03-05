@@ -4,7 +4,8 @@
  */
 import { getTaurpc } from "@/lib/taurpc";
 import { listen } from "@tauri-apps/api/event";
-import { LogicalPosition } from "@tauri-apps/api/dpi";
+import { resolveTheme, applyThemeToDocument } from "@/lib/theme";
+import { PhysicalPosition } from "@tauri-apps/api/dpi";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 
 let fallbackInterval: ReturnType<typeof setInterval> | null = null;
@@ -44,73 +45,116 @@ function render(state: {
 async function refresh() {
   try {
     const state = await api.get_ghost_suggestor_state();
-    render(state);
     const w = getCurrentWebviewWindow();
+    console.log(
+      "[GhostSuggestor] refresh: has_suggestions=",
+      state?.has_suggestions,
+      "suggestions=",
+      state?.suggestions?.length ?? 0,
+      "position=",
+      state?.position,
+      "window=",
+      w ? "exists" : "null"
+    );
+    render(state);
     if (w) {
-      if (state?.should_passthrough) {
-        try {
-          await w.setIgnoreCursorEvents(true);
-        } catch {
-          /* ignore */
-        }
-      } else {
-        try {
-          await w.setIgnoreCursorEvents(false);
-        } catch {
-          /* ignore */
-        }
-      }
       if (state?.has_suggestions && state.position) {
-        await w.setPosition(new LogicalPosition(state.position[0], state.position[1]));
+        console.log("[GhostSuggestor] refresh: setting position", state.position);
+        await w.setPosition(new PhysicalPosition(state.position[0], state.position[1]));
       }
       if (state?.has_suggestions) {
+        console.log("[GhostSuggestor] refresh: calling w.show()");
         await w.show();
+        try {
+          await w.setFocus();
+        } catch (e) {
+          console.warn("[GhostSuggestor] refresh: setFocus failed", e);
+        }
       } else {
         await w.hide();
       }
+    } else {
+      console.warn("[GhostSuggestor] refresh: getCurrentWebviewWindow returned null");
     }
-  } catch {
-    /* ignore */
+  } catch (e) {
+    console.error("[GhostSuggestor] refresh error:", e);
   }
 }
 
 async function init() {
-  const btnAccept = document.getElementById("btn-accept");
-  const btnCreate = document.getElementById("btn-create");
+  const pref =
+    (typeof localStorage !== "undefined" &&
+      localStorage.getItem("digicore-theme")) ||
+    "light";
+  applyThemeToDocument(resolveTheme(pref));
+  listen<{ theme: "dark" | "light" }>("digicore-theme-changed", (e) => {
+    applyThemeToDocument(e.payload.theme);
+  }).catch(() => {});
+
+  const btnSnooze = document.getElementById("btn-snooze");
+  const btnPromote = document.getElementById("btn-promote");
   const btnIgnore = document.getElementById("btn-ignore");
 
-  if (btnAccept) {
-    btnAccept.addEventListener("click", async () => {
-      const r = await api.ghost_suggestor_accept();
-      if (r) {
-        const w = getCurrentWebviewWindow();
-        if (w) await w.hide();
-      }
-      await refresh();
-    });
+  if (!btnSnooze || !btnPromote || !btnIgnore) {
+    console.error("[GhostSuggestor] Button elements not found");
+    return;
   }
 
-  if (btnCreate) {
-    btnCreate.addEventListener("click", async () => {
+  btnSnooze.addEventListener("click", async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    try {
+      await api.ghost_suggestor_snooze();
+      const w = getCurrentWebviewWindow();
+      if (w) await w.hide();
+      await refresh();
+    } catch (err) {
+      console.error("[GhostSuggestor] Snooze error:", err);
+    }
+  });
+
+  btnPromote.addEventListener("click", async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    try {
       await api.ghost_suggestor_create_snippet();
       const w = getCurrentWebviewWindow();
       if (w) await w.hide();
       await refresh();
-    });
-  }
+    } catch (err) {
+      console.error("[GhostSuggestor] Promote error:", err);
+    }
+  });
 
-  if (btnIgnore) {
-    btnIgnore.addEventListener("click", async () => {
-      await api.ghost_suggestor_dismiss();
+  btnIgnore.addEventListener("click", async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    try {
+      const state = await api.get_ghost_suggestor_state();
+      const idx = state?.selected_index ?? 0;
+      const phrase =
+        state?.suggestions?.[idx]?.trigger ?? state?.suggestions?.[0]?.trigger ?? "";
+      await api.ghost_suggestor_ignore(phrase);
       const w = getCurrentWebviewWindow();
       if (w) await w.hide();
       await refresh();
-    });
-  }
+    } catch (err) {
+      console.error("[GhostSuggestor] Ignore error:", err);
+    }
+  });
 
-  await listen("ghost-suggestor-update", () => refresh());
+  await listen("ghost-suggestor-update", () => {
+    console.log("[GhostSuggestor] received ghost-suggestor-update event");
+    refresh();
+  });
+  console.log("[GhostSuggestor] init: listener registered, doing initial refresh");
   await refresh();
   fallbackInterval = setInterval(refresh, 3000);
+  console.log("[GhostSuggestor] init: complete, fallback poll every 3s");
 }
 
-init();
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", () => init());
+} else {
+  init();
+}

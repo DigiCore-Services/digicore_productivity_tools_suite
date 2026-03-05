@@ -14,6 +14,7 @@ interface ClipboardTabProps {
     prefill?: { content: string; trigger: string }
   ) => void;
   onOpenClipClearConfirm: () => void;
+  onOpenClipEntryDeleteConfirm: (idx: number) => void;
 }
 
 export function ClipboardTab({
@@ -22,26 +23,36 @@ export function ClipboardTab({
   onOpenViewFull,
   onOpenSnippetEditor,
   onOpenClipClearConfirm,
+  onOpenClipEntryDeleteConfirm,
 }: ClipboardTabProps) {
   const [entries, setEntries] = useState<ClipEntry[]>([]);
   const [status, setStatus] = useState("");
   const [loading, setLoading] = useState(false);
+  const [maxDepth, setMaxDepth] = useState<number | null>(null);
 
   const loadEntries = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await getTaurpc().get_clipboard_entries();
+      const [data, state] = await Promise.all([
+        getTaurpc().get_clipboard_entries(),
+        appState ? Promise.resolve(null) : getTaurpc().get_app_state().catch(() => null),
+      ]);
       setEntries(data);
+      if (state) setMaxDepth(state.clip_history_max_depth ?? 20);
     } catch (e) {
       setStatus("Error: " + String(e));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [appState]);
 
   useEffect(() => {
     loadEntries();
   }, [loadEntries, refreshTrigger]);
+
+  useEffect(() => {
+    if (appState?.clip_history_max_depth != null) setMaxDepth(appState.clip_history_max_depth);
+  }, [appState?.clip_history_max_depth]);
 
   const handleCopy = async (idx: number) => {
     const entry = entries[idx];
@@ -59,14 +70,8 @@ export function ClipboardTab({
     if (entry) onOpenViewFull(entry.content);
   };
 
-  const handleDelete = async (idx: number) => {
-    try {
-      await getTaurpc().delete_clip_entry(idx);
-      await loadEntries();
-      setStatus("Entry deleted.");
-    } catch (e) {
-      setStatus("Error: " + String(e));
-    }
+  const handleDeleteClick = (idx: number) => {
+    onOpenClipEntryDeleteConfirm(idx);
   };
 
   const handlePromote = async (idx: number) => {
@@ -83,7 +88,7 @@ export function ClipboardTab({
     });
   };
 
-  const depth = appState?.clip_history_max_depth ?? 20;
+  const depth = appState?.clip_history_max_depth ?? maxDepth ?? 20;
 
   return (
     <div className="p-4 border border-[var(--dc-border)] rounded mt-2">
@@ -107,7 +112,7 @@ export function ClipboardTab({
       </p>
       <div>
         <p className="mb-2">
-          Real-time Clipboard History (Last {depth})
+          Real-time Clipboard History: {entries.length} of {depth} entries
         </p>
         {loading ? (
           <p>Loading...</p>
@@ -171,7 +176,7 @@ export function ClipboardTab({
                         {
                           id: "delete",
                           text: "Delete",
-                          onClick: () => handleDelete(i),
+                          onClick: () => handleDeleteClick(i),
                         },
                       ]);
                     }}
@@ -205,7 +210,7 @@ export function ClipboardTab({
                         View
                       </button>
                       <button
-                        onClick={() => handleDelete(i)}
+                        onClick={() => handleDeleteClick(i)}
                         className="px-2.5 py-1 text-sm mr-1"
                       >
                         Delete

@@ -1,9 +1,8 @@
 import React, { useCallback, useEffect, useState, lazy, Suspense } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { getTaurpc } from "./lib/taurpc";
-import { emitTo, listen } from "@tauri-apps/api/event";
+import { emit, listen } from "@tauri-apps/api/event";
 import { onOpenUrl } from "@tauri-apps/plugin-deep-link";
-import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import {
   Library,
   Settings,
@@ -39,10 +38,15 @@ import {
   DeleteConfirm,
   ViewFull,
   ClipClearConfirm,
+  ClipEntryDeleteConfirm,
   VariableInput,
 } from "./components/modals";
 import { CommandPalette } from "./components/CommandPalette";
-import { initNotificationActionListener } from "./lib/notifications";
+import {
+  initNotificationActionListener,
+  notify,
+  notifyDiscoverySuggestion,
+} from "./lib/notifications";
 import { syncLibraryToSqlite } from "./lib/sqliteSync";
 
 const DEFAULT_COLUMNS = [
@@ -85,6 +89,8 @@ function App() {
   } | null>(null);
 
   const [clipClearConfirmVisible, setClipClearConfirmVisible] = useState(false);
+  const [clipEntryDeleteConfirmVisible, setClipEntryDeleteConfirmVisible] = useState(false);
+  const [clipEntryDeleteConfirmIdx, setClipEntryDeleteConfirmIdx] = useState(-1);
 
   const [variableInputVisible, setVariableInputVisible] = useState(false);
   const [variableInputData, setVariableInputData] =
@@ -93,6 +99,11 @@ function App() {
   const [commandPaletteVisible, setCommandPaletteVisible] = useState(false);
 
   const [clipboardRefreshTrigger, setClipboardRefreshTrigger] = useState(0);
+
+  const [discoveryBanner, setDiscoveryBanner] = useState<{
+    phrase: string;
+    count: number;
+  } | null>(null);
 
   const loadAppState = useCallback(async () => {
     try {
@@ -132,9 +143,14 @@ function App() {
     []
   );
 
+  const restoreGhostFollowerAlwaysOnTop = useCallback(() => {
+    getTaurpc().ghost_follower_restore_always_on_top().catch(() => {});
+  }, []);
+
   const closeSnippetEditor = useCallback(() => {
     setSnippetEditorVisible(false);
-  }, []);
+    restoreGhostFollowerAlwaysOnTop();
+  }, [restoreGhostFollowerAlwaysOnTop]);
 
   const handleSnippetSave = useCallback(
     async (snippet: Snippet) => {
@@ -188,6 +204,12 @@ function App() {
     setDeleteConfirmVisible(true);
   }, []);
 
+  const openClipEntryDeleteConfirm = useCallback((idx: number) => {
+    setActiveTab(2);
+    setClipEntryDeleteConfirmIdx(idx);
+    setClipEntryDeleteConfirmVisible(true);
+  }, []);
+
   const handleDeleteConfirm = useCallback(async () => {
     try {
       await getTaurpc().delete_snippet(deleteConfirmCat, deleteConfirmIdx);
@@ -206,7 +228,7 @@ function App() {
     } catch (e) {
       setLibraryStatusFn("Delete failed: " + String(e), true);
     }
-  }, [deleteConfirmCat, deleteConfirmIdx, loadAppState, setLibraryStatusFn]);
+  }, [deleteConfirmCat, deleteConfirmIdx, loadAppState, setLibraryStatusFn, restoreGhostFollowerAlwaysOnTop]);
 
   const openViewFull = useCallback(
     (
@@ -219,6 +241,19 @@ function App() {
     },
     []
   );
+
+  const handleClipEntryDeleteConfirm = useCallback(async () => {
+    try {
+      await getTaurpc().delete_clip_entry(clipEntryDeleteConfirmIdx);
+      setClipEntryDeleteConfirmVisible(false);
+      setClipEntryDeleteConfirmIdx(-1);
+      restoreGhostFollowerAlwaysOnTop();
+      setClipboardRefreshTrigger((n) => n + 1);
+      setLibraryStatusFn("Entry deleted.");
+    } catch (e) {
+      setLibraryStatusFn("Delete failed: " + String(e), true);
+    }
+  }, [clipEntryDeleteConfirmIdx, setLibraryStatusFn, restoreGhostFollowerAlwaysOnTop]);
 
   const handleClipClearConfirm = useCallback(async () => {
     try {
@@ -293,6 +328,7 @@ function App() {
             : "light")
         : pref;
     document.documentElement.dataset.theme = resolved;
+    emit("digicore-theme-changed", { theme: resolved }).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -307,14 +343,30 @@ function App() {
     };
   }, [showVariableInputModal]);
 
+  const bringMainToForeground = useCallback(async () => {
+    try {
+      const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
+      const win = await WebviewWindow.getByLabel("main");
+      if (win) {
+        await win.show();
+        await win.setFocus();
+        await win.unminimize();
+      }
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
   useEffect(() => {
     const unlistens: (() => void)[] = [];
-    listen<string>("ghost-follower-view-full", (e) => {
+    listen<string>("ghost-follower-view-full", async (e) => {
+      await bringMainToForeground();
       openViewFull(e.payload ?? "");
     }).then((fn) => unlistens.push(fn));
     listen<{ category: string; snippetIdx: number }>(
       "ghost-follower-edit",
-      (e) => {
+      async (e) => {
+        await bringMainToForeground();
         const { category, snippetIdx } = e.payload ?? {};
         if (category != null && snippetIdx != null) {
           openSnippetEditor("edit", category, snippetIdx);
@@ -323,7 +375,8 @@ function App() {
     ).then((fn) => unlistens.push(fn));
     listen<{ content: string; trigger: string }>(
       "ghost-follower-promote",
-      (e) => {
+      async (e) => {
+        await bringMainToForeground();
         const { content, trigger } = e.payload ?? {};
         if (content != null && trigger != null) {
           const cats = appState?.categories ?? ["General"];
@@ -334,8 +387,33 @@ function App() {
         }
       }
     ).then((fn) => unlistens.push(fn));
+    listen<{ category: string; snippetIdx: number }>(
+      "ghost-follower-delete-snippet",
+      async (e) => {
+        await bringMainToForeground();
+        const { category, snippetIdx } = e.payload ?? {};
+        if (category != null && snippetIdx != null) {
+          setActiveTab(0);
+          openDeleteConfirm(category, snippetIdx);
+        }
+      }
+    ).then((fn) => unlistens.push(fn));
+    listen<{ index: number }>("ghost-follower-delete-clip", async (e) => {
+      await bringMainToForeground();
+      const { index } = e.payload ?? {};
+      if (typeof index === "number" && index >= 0) {
+        openClipEntryDeleteConfirm(index);
+      }
+    }).then((fn) => unlistens.push(fn));
     return () => unlistens.forEach((u) => u());
-  }, [openViewFull, openSnippetEditor, appState?.categories]);
+  }, [
+    bringMainToForeground,
+    openViewFull,
+    openSnippetEditor,
+    openDeleteConfirm,
+    openClipEntryDeleteConfirm,
+    appState?.categories,
+  ]);
 
   useEffect(() => {
     let cleanup: (() => void) | undefined;
@@ -375,6 +453,92 @@ function App() {
       unlisten?.();
     };
   }, [appState, loadAppState]);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    listen("window-closed-to-tray", () => {
+      notify("DigiCore Text Expander", "Running in background. Right-click tray icon to open.");
+    }).then((fn) => {
+      unlisten = fn;
+    });
+    return () => unlisten?.();
+  }, []);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    listen("discovery-suggestion", (e) => {
+      const [phrase, count] = (e.payload as [string, number]) ?? ["", 0];
+      if (phrase) {
+        setDiscoveryBanner({ phrase, count });
+        notifyDiscoverySuggestion(phrase, count);
+      }
+    }).then((fn) => {
+      unlisten = fn;
+    });
+    return () => unlisten?.();
+  }, []);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    listen("discovery-action-snooze", async () => {
+      setDiscoveryBanner(null);
+      try {
+        await getTaurpc().ghost_suggestor_snooze();
+      } catch {
+        /* ignore */
+      }
+    }).then((fn) => {
+      unlisten = fn;
+    });
+    return () => unlisten?.();
+  }, []);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    listen("discovery-action-ignore", async () => {
+      setDiscoveryBanner(null);
+      try {
+        const state = await getTaurpc().get_ghost_suggestor_state();
+        const phrase =
+          state?.suggestions?.[0]?.trigger ?? state?.suggestions?.[state?.selected_index ?? 0]?.trigger ?? "";
+        if (phrase) await getTaurpc().ghost_suggestor_ignore(phrase);
+      } catch {
+        /* ignore */
+      }
+    }).then((fn) => {
+      unlisten = fn;
+    });
+    return () => unlisten?.();
+  }, []);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    listen("discovery-action-promote", async () => {
+      setDiscoveryBanner(null);
+      try {
+        const { getCurrentWindow } = await import("@tauri-apps/api/window");
+        const win = getCurrentWindow();
+        await win.show();
+        await win.setFocus();
+        await win.unminimize();
+        const result = await getTaurpc().ghost_suggestor_create_snippet();
+        if (result) {
+          const [, content] = result;
+          setActiveTab(0);
+          const cats = appState?.categories ?? ["General"];
+          openSnippetEditor("add", cats[0] || "General", -1, {
+            trigger: "",
+            content,
+          });
+        }
+      } catch {
+        /* ignore */
+      }
+    }).then((fn) => {
+      unlisten = fn;
+    });
+    return () => unlisten?.();
+  }, [appState?.categories, openSnippetEditor]);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -481,35 +645,7 @@ function App() {
     })();
   }, [loadAppState]);
 
-  useEffect(() => {
-    try {
-      new WebviewWindow("ghost-suggestor", {
-        url: "ghost-suggestor.html",
-        title: "Ghost Suggestor",
-        width: 320,
-        height: 260,
-        decorations: false,
-        transparent: true,
-        alwaysOnTop: true,
-        visible: false,
-      });
-      const followerWin = new WebviewWindow("ghost-follower", {
-        url: "ghost-follower.html",
-        title: "Ghost Follower",
-        width: 280,
-        height: 420,
-        decorations: false,
-        transparent: true,
-        alwaysOnTop: true,
-        visible: false,
-      });
-      followerWin.once("tauri://created", () => {
-        setTimeout(() => emitTo("ghost-follower", "ghost-follower-update"), 800);
-      });
-    } catch {
-      /* ghost windows may fail in dev without Tauri */
-    }
-  }, []);
+  // Ghost windows are created from Rust (lib.rs setup) for correct URL resolution.
 
   const tabs = [
     { id: "library", label: "Text Expansion Library", icon: Library },
@@ -581,6 +717,71 @@ function App() {
         })}
       </nav>
       </div>
+      {discoveryBanner && (
+        <div className="mx-5 mt-2 mb-0 p-3 rounded-lg bg-[var(--dc-accent)]/10 border border-[var(--dc-accent)]/30 flex items-center justify-between gap-4">
+          <span className="text-sm text-[var(--dc-text)] truncate flex-1">
+            <strong>Discovery (typed {discoveryBanner.count}x):</strong>{" "}
+            &quot;{discoveryBanner.phrase.length > 50
+              ? discoveryBanner.phrase.slice(0, 47) + "..."
+              : discoveryBanner.phrase}
+            &quot;
+          </span>
+          <div className="flex gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={async () => {
+                setDiscoveryBanner(null);
+                try {
+                  await getTaurpc().ghost_suggestor_snooze();
+                } catch {
+                  /* ignore */
+                }
+              }}
+              className="px-3 py-1.5 text-xs font-medium rounded-md bg-[var(--dc-bg-alt)] border border-[var(--dc-border)] hover:bg-[var(--dc-bg-tertiary)]"
+            >
+              Snooze
+            </button>
+            <button
+              type="button"
+              onClick={async () => {
+                setDiscoveryBanner(null);
+                try {
+                  const result = await getTaurpc().ghost_suggestor_create_snippet();
+                  if (result) {
+                    const [, content] = result;
+                    setActiveTab(0);
+                    const cats = appState?.categories ?? ["General"];
+                    openSnippetEditor("add", cats[0] || "General", -1, {
+                      trigger: "",
+                      content,
+                    });
+                  }
+                } catch {
+                  /* ignore */
+                }
+              }}
+              className="px-3 py-1.5 text-xs font-medium rounded-md bg-[var(--dc-accent)] text-white hover:opacity-90"
+            >
+              Promote to Snippet
+            </button>
+            <button
+              type="button"
+              onClick={async () => {
+                const phrase = discoveryBanner.phrase;
+                setDiscoveryBanner(null);
+                try {
+                  await getTaurpc().ghost_suggestor_ignore(phrase);
+                } catch {
+                  /* ignore */
+                }
+              }}
+              className="px-3 py-1.5 text-xs font-medium rounded-md bg-[var(--dc-bg-alt)] border border-[var(--dc-border)] hover:bg-[var(--dc-bg-tertiary)]"
+            >
+              Ignore
+            </button>
+          </div>
+        </div>
+      )}
       <div className="flex-1 overflow-auto p-5 pt-4">
       <AnimatePresence mode="wait">
         {activeTab === 0 && (
@@ -627,7 +828,7 @@ function App() {
           transition={{ duration: 0.2 }}
         >
           <Suspense fallback={<div className="py-8 text-[var(--dc-text-muted)]">Loading...</div>}>
-            <ConfigTab appState={appState} onConfigLoaded={() => {}} />
+            <ConfigTab appState={appState} onConfigLoaded={(state) => setAppState(state)} />
           </Suspense>
         </motion.div>
       )}
@@ -649,6 +850,7 @@ function App() {
             onOpenViewFull={openViewFull}
             onOpenSnippetEditor={openSnippetEditor}
             onOpenClipClearConfirm={() => setClipClearConfirmVisible(true)}
+            onOpenClipEntryDeleteConfirm={openClipEntryDeleteConfirm}
           />
           </Suspense>
         </motion.div>
@@ -719,7 +921,10 @@ function App() {
         visible={deleteConfirmVisible}
         message={deleteConfirmMessage}
         onConfirm={handleDeleteConfirm}
-        onCancel={() => setDeleteConfirmVisible(false)}
+        onCancel={() => {
+          setDeleteConfirmVisible(false);
+          restoreGhostFollowerAlwaysOnTop();
+        }}
       />
 
       <ViewFull
@@ -728,6 +933,7 @@ function App() {
         onClose={() => {
           setViewFullVisible(false);
           setViewFullEditMeta(null);
+          restoreGhostFollowerAlwaysOnTop();
         }}
         onEdit={
           viewFullEditMeta
@@ -745,6 +951,17 @@ function App() {
         visible={clipClearConfirmVisible}
         onConfirm={handleClipClearConfirm}
         onCancel={() => setClipClearConfirmVisible(false)}
+      />
+
+      <ClipEntryDeleteConfirm
+        visible={clipEntryDeleteConfirmVisible}
+        message="Are you sure you want to delete this clipboard entry?"
+        onConfirm={handleClipEntryDeleteConfirm}
+        onCancel={() => {
+          setClipEntryDeleteConfirmVisible(false);
+          setClipEntryDeleteConfirmIdx(-1);
+          restoreGhostFollowerAlwaysOnTop();
+        }}
       />
 
       <VariableInput

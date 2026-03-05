@@ -16,8 +16,11 @@ import { emit } from "@tauri-apps/api/event";
 
 const CHANNEL_LIBRARY = "digicore-library";
 const ACTION_TYPE_LIBRARY = "digicore-library-actions";
+const CHANNEL_DISCOVERY = "digicore-discovery";
+const ACTION_TYPE_DISCOVERY = "digicore-discovery-actions";
 
 let actionTypesRegistered = false;
+let discoveryActionTypesRegistered = false;
 
 async function ensurePermission(): Promise<boolean> {
   let granted = await isPermissionGranted();
@@ -55,6 +58,31 @@ async function ensureActionTypes(): Promise<void> {
   }
 }
 
+async function ensureDiscoveryActionTypes(): Promise<void> {
+  if (discoveryActionTypesRegistered) return;
+  try {
+    await createChannel({
+      id: CHANNEL_DISCOVERY,
+      name: "DigiCore Discovery",
+      importance: Importance.Default,
+      visibility: Visibility.Private,
+    });
+    await registerActionTypes([
+      {
+        id: ACTION_TYPE_DISCOVERY,
+        actions: [
+          { id: "discovery-snooze", title: "Snooze", foreground: false },
+          { id: "discovery-promote", title: "Promote to Snippet", foreground: true },
+          { id: "discovery-ignore", title: "Ignore", foreground: false },
+        ],
+      },
+    ]);
+    discoveryActionTypesRegistered = true;
+  } catch {
+    /* ignore */
+  }
+}
+
 /**
  * Send a notification with optional "View Library" action.
  * When action is clicked, emits "notification-view-library" for App to handle.
@@ -83,6 +111,31 @@ export async function notify(
   }
 }
 
+/**
+ * Send Discovery suggestion notification (typed phrase repeated, lower-right toast).
+ * Shows Snooze, Promote to Snippet, Ignore buttons.
+ */
+export async function notifyDiscoverySuggestion(
+  phrase: string,
+  count: number
+): Promise<void> {
+  const granted = await ensurePermission();
+  if (!granted) return;
+  try {
+    await ensureDiscoveryActionTypes();
+    const body =
+      phrase.length > 60 ? `${phrase.slice(0, 57)}...` : phrase;
+    sendNotification({
+      title: `Discovery (typed ${count}x)`,
+      body: `"${body}"`,
+      channelId: CHANNEL_DISCOVERY,
+      actionTypeId: ACTION_TYPE_DISCOVERY,
+    });
+  } catch {
+    /* ignore */
+  }
+}
+
 /** Payload from onAction when user clicks a notification action. */
 interface ActionPayload {
   action?: { id?: string };
@@ -95,8 +148,15 @@ interface ActionPayload {
 export async function initNotificationActionListener(): Promise<() => void> {
   const listener = await onAction((notification) => {
     const payload = notification as ActionPayload;
-    if (payload.action?.id === "view-library") {
+    const actionId = payload.action?.id;
+    if (actionId === "view-library") {
       emit("notification-view-library", {});
+    } else if (actionId === "discovery-snooze") {
+      emit("discovery-action-snooze", {});
+    } else if (actionId === "discovery-promote") {
+      emit("discovery-action-promote", {});
+    } else if (actionId === "discovery-ignore") {
+      emit("discovery-action-ignore", {});
     }
   });
   return () => {

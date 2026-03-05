@@ -12,6 +12,7 @@
   "app": {
     "withGlobalTauri": true,
     "trayIcon": {
+      "id": "default",
       "iconPath": "icons/icon.ico",
       "iconAsTemplate": false,
       "menuOnLeftClick": false

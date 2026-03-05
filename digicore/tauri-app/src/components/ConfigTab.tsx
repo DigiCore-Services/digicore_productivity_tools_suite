@@ -1,7 +1,10 @@
 import { useEffect, useState } from "react";
+import { emit } from "@tauri-apps/api/event";
 import { getTaurpc } from "@/lib/taurpc";
+import { resolveTheme, applyThemeToDocument } from "@/lib/theme";
 import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
+import { normalizeAppState } from "@/lib/normalizeState";
 import type { AppState } from "../types";
 
 type TauriAutostart = {
@@ -36,6 +39,7 @@ export function ConfigTab({ appState, onConfigLoaded }: ConfigTabProps) {
   const [ghostSuggestorEnabled, setGhostSuggestorEnabled] = useState(false);
   const [ghostSuggestorDebounce, setGhostSuggestorDebounce] = useState(80);
   const [ghostSuggestorDisplay, setGhostSuggestorDisplay] = useState(10);
+  const [ghostSuggestorSnooze, setGhostSuggestorSnooze] = useState(5);
   const [ghostSuggestorOffsetX, setGhostSuggestorOffsetX] = useState(0);
   const [ghostSuggestorOffsetY, setGhostSuggestorOffsetY] = useState(0);
   const [ghostFollowerEnabled, setGhostFollowerEnabled] = useState(false);
@@ -45,7 +49,7 @@ export function ConfigTab({ appState, onConfigLoaded }: ConfigTabProps) {
     "right"
   );
   const [ghostFollowerMonitor, setGhostFollowerMonitor] = useState("0");
-  const [ghostFollowerSearch, setGhostFollowerSearch] = useState("");
+  const [ghostFollowerOpacity, setGhostFollowerOpacity] = useState(100);
   const [clipMaxDepth, setClipMaxDepth] = useState(20);
   const [expansionPaused, setExpansionPaused] = useState(false);
   const [autostart, setAutostart] = useState(false);
@@ -68,6 +72,7 @@ export function ConfigTab({ appState, onConfigLoaded }: ConfigTabProps) {
       setGhostSuggestorEnabled(!!appState.ghost_suggestor_enabled);
       setGhostSuggestorDebounce(appState.ghost_suggestor_debounce_ms ?? 80);
       setGhostSuggestorDisplay(appState.ghost_suggestor_display_secs ?? 10);
+      setGhostSuggestorSnooze(appState.ghost_suggestor_snooze_duration_mins ?? 5);
       setGhostSuggestorOffsetX(appState.ghost_suggestor_offset_x ?? 0);
       setGhostSuggestorOffsetY(appState.ghost_suggestor_offset_y ?? 0);
       setGhostFollowerEnabled(!!appState.ghost_follower_enabled);
@@ -77,7 +82,6 @@ export function ConfigTab({ appState, onConfigLoaded }: ConfigTabProps) {
       setGhostFollowerMonitor(
         String(appState.ghost_follower_monitor_anchor ?? 0)
       );
-      setGhostFollowerSearch(appState.ghost_follower_search || "");
       setClipMaxDepth(appState.clip_history_max_depth ?? 20);
       setExpansionPaused(!!appState.expansion_paused);
       setTheme(
@@ -109,6 +113,8 @@ export function ConfigTab({ appState, onConfigLoaded }: ConfigTabProps) {
     try {
       await getTaurpc().update_config(partial as Parameters<ReturnType<typeof getTaurpc>["update_config"]>[0]);
       await getTaurpc().save_settings();
+      const dto = await getTaurpc().get_app_state();
+      onConfigLoaded(normalizeAppState(dto));
       setStatus("Settings saved.");
       setStatusError(false);
     } catch (e) {
@@ -118,13 +124,9 @@ export function ConfigTab({ appState, onConfigLoaded }: ConfigTabProps) {
   };
 
   const applyTheme = (pref: string) => {
-    const resolved =
-      pref === "system"
-        ? (window.matchMedia("(prefers-color-scheme: dark)").matches
-            ? "dark"
-            : "light")
-        : pref;
-    document.documentElement.dataset.theme = resolved;
+    const resolved = resolveTheme(pref);
+    applyThemeToDocument(resolved);
+    emit("digicore-theme-changed", { theme: resolved }).catch(() => {});
   };
 
   useEffect(() => {
@@ -318,6 +320,17 @@ export function ConfigTab({ appState, onConfigLoaded }: ConfigTabProps) {
           max={120}
           className={inputCls}
         />
+        <label className="block mt-2">Snooze duration (min, 1-120):</label>
+        <input
+          type="number"
+          value={ghostSuggestorSnooze}
+          onChange={(e) =>
+            setGhostSuggestorSnooze(parseInt(e.target.value, 10))
+          }
+          min={1}
+          max={120}
+          className={inputCls}
+        />
         <label className="block mt-2">Offset X:</label>
         <input
           type="number"
@@ -342,6 +355,7 @@ export function ConfigTab({ appState, onConfigLoaded }: ConfigTabProps) {
               ghost_suggestor_enabled: ghostSuggestorEnabled,
               ghost_suggestor_debounce_ms: ghostSuggestorDebounce,
               ghost_suggestor_display_secs: ghostSuggestorDisplay,
+              ghost_suggestor_snooze_duration_mins: ghostSuggestorSnooze,
               ghost_suggestor_offset_x: ghostSuggestorOffsetX,
               ghost_suggestor_offset_y: ghostSuggestorOffsetY,
             })
@@ -404,12 +418,18 @@ export function ConfigTab({ appState, onConfigLoaded }: ConfigTabProps) {
           <option value="1">Secondary</option>
           <option value="2">Current</option>
         </select>
-        <label className="block mt-2">Search filter:</label>
+        <label className="block mt-2">Transparency: {ghostFollowerOpacity}%</label>
         <input
-          type="text"
-          value={ghostFollowerSearch}
-          onChange={(e) => setGhostFollowerSearch(e.target.value)}
-          className={inputCls}
+          type="range"
+          min={10}
+          max={100}
+          value={ghostFollowerOpacity}
+          onChange={(e) => {
+            const v = parseInt(e.target.value, 10);
+            setGhostFollowerOpacity(v);
+            getTaurpc().ghost_follower_set_opacity(v).catch(() => {});
+          }}
+          className="w-full mt-1"
         />
         <button
           onClick={() =>
@@ -419,7 +439,7 @@ export function ConfigTab({ appState, onConfigLoaded }: ConfigTabProps) {
               ghost_follower_collapse_delay_secs: ghostFollowerCollapse,
               ghost_follower_edge_right: ghostFollowerEdge === "right",
               ghost_follower_monitor_anchor: parseInt(ghostFollowerMonitor, 10),
-              ghost_follower_search: ghostFollowerSearch,
+              ghost_follower_opacity: ghostFollowerOpacity,
             })
           }
           className="mt-2 px-3 py-1.5 bg-[var(--dc-accent)] text-white rounded"
@@ -523,6 +543,7 @@ export function ConfigTab({ appState, onConfigLoaded }: ConfigTabProps) {
               ghost_suggestor_enabled: ghostSuggestorEnabled,
               ghost_suggestor_debounce_ms: ghostSuggestorDebounce,
               ghost_suggestor_display_secs: ghostSuggestorDisplay,
+              ghost_suggestor_snooze_duration_mins: ghostSuggestorSnooze,
               ghost_suggestor_offset_x: ghostSuggestorOffsetX,
               ghost_suggestor_offset_y: ghostSuggestorOffsetY,
               ghost_follower_enabled: ghostFollowerEnabled,
@@ -530,7 +551,7 @@ export function ConfigTab({ appState, onConfigLoaded }: ConfigTabProps) {
               ghost_follower_collapse_delay_secs: ghostFollowerCollapse,
               ghost_follower_edge_right: ghostFollowerEdge === "right",
               ghost_follower_monitor_anchor: parseInt(ghostFollowerMonitor, 10),
-              ghost_follower_search: ghostFollowerSearch,
+              ghost_follower_opacity: ghostFollowerOpacity,
               clip_history_max_depth: clipMaxDepth,
             });
           }}

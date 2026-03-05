@@ -30,6 +30,7 @@ export interface AppState {
   ghost_suggestor_enabled: boolean;
   ghost_suggestor_debounce_ms: number;
   ghost_suggestor_display_secs: number;
+  ghost_suggestor_snooze_duration_mins: number;
   ghost_suggestor_offset_x: number;
   ghost_suggestor_offset_y: number;
   ghost_follower_enabled: boolean;
@@ -38,6 +39,7 @@ export interface AppState {
   ghost_follower_search: string;
   ghost_follower_hover_preview: boolean;
   ghost_follower_collapse_delay_secs: number;
+  ghost_follower_opacity: number;
   clip_history_max_depth: number;
   script_library_run_disabled: boolean;
   script_library_run_allowlist: string;
