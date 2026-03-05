@@ -17,6 +17,26 @@ pub mod keys {
     pub const SCRIPT_LIBRARY_RUN_DISABLED: &str = "script_library_run_disabled";
     pub const SCRIPT_LIBRARY_RUN_ALLOWLIST: &str = "script_library_run_allowlist";
     pub const GHOST_SUGGESTOR_DISPLAY_SECS: &str = "ghost_suggestor_display_secs";
+    pub const GHOST_SUGGESTOR_SNOOZE_DURATION_MINS: &str = "ghost_suggestor_snooze_duration_mins";
+    pub const GHOST_SUGGESTOR_ENABLED: &str = "ghost_suggestor_enabled";
+    pub const GHOST_SUGGESTOR_DEBOUNCE_MS: &str = "ghost_suggestor_debounce_ms";
+    pub const GHOST_SUGGESTOR_OFFSET_X: &str = "ghost_suggestor_offset_x";
+    pub const GHOST_SUGGESTOR_OFFSET_Y: &str = "ghost_suggestor_offset_y";
+    pub const DISCOVERY_ENABLED: &str = "discovery_enabled";
+    pub const DISCOVERY_THRESHOLD: &str = "discovery_threshold";
+    pub const DISCOVERY_LOOKBACK: &str = "discovery_lookback";
+    pub const DISCOVERY_MIN_LEN: &str = "discovery_min_len";
+    pub const DISCOVERY_MAX_LEN: &str = "discovery_max_len";
+    pub const DISCOVERY_EXCLUDED_APPS: &str = "discovery_excluded_apps";
+    pub const DISCOVERY_EXCLUDED_WINDOW_TITLES: &str = "discovery_excluded_window_titles";
+    pub const GHOST_FOLLOWER_ENABLED: &str = "ghost_follower_enabled";
+    pub const GHOST_FOLLOWER_EDGE_RIGHT: &str = "ghost_follower_edge_right";
+    pub const GHOST_FOLLOWER_MONITOR_ANCHOR: &str = "ghost_follower_monitor_anchor";
+    pub const GHOST_FOLLOWER_HOVER_PREVIEW: &str = "ghost_follower_hover_preview";
+    pub const GHOST_FOLLOWER_COLLAPSE_DELAY_SECS: &str = "ghost_follower_collapse_delay_secs";
+    pub const GHOST_FOLLOWER_OPACITY: &str = "ghost_follower_opacity";
+    pub const GHOST_FOLLOWER_POSITION_X: &str = "ghost_follower_position_x";
+    pub const GHOST_FOLLOWER_POSITION_Y: &str = "ghost_follower_position_y";
     pub const CLIP_HISTORY_MAX_DEPTH: &str = "clip_history_max_depth";
     pub const EXPANSION_PAUSED: &str = "expansion_paused";
     /// Tauri UI: last active tab index (0-3).

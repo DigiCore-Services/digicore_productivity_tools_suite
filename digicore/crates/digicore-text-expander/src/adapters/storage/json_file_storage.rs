@@ -46,6 +46,16 @@ impl JsonFileStorageAdapter {
         })?;
         std::fs::write(&self.path, json)
     }
+
+    /// Persist only if safe. Returns false if file exists but cache is empty (parse likely failed);
+    /// in that case persisting would overwrite and lose library_path and other keys.
+    pub fn persist_if_safe(&self) -> std::io::Result<bool> {
+        if self.path.exists() && self.cache.is_empty() {
+            return Ok(false);
+        }
+        self.persist()?;
+        Ok(true)
+    }
 }
 
 impl StoragePort for JsonFileStorageAdapter {

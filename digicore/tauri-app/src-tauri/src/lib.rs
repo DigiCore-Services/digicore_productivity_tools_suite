@@ -7,7 +7,7 @@
 
 mod api;
 
-use crate::api::Api;
+use crate::api::{save_all_on_exit, Api};
 use digicore_core::domain::Snippet;
 use digicore_text_expander::adapters::storage::JsonFileStorageAdapter;
 use digicore_text_expander::application::app_state::AppState;
@@ -15,15 +15,16 @@ use digicore_text_expander::application::clipboard_history::{self, ClipboardHist
 use digicore_text_expander::application::ghost_suggestor;
 use digicore_text_expander::application::template_processor::{self, InteractiveVarType};
 use digicore_text_expander::application::variable_input;
+use digicore_text_expander::application::discovery;
 use digicore_text_expander::drivers::hotstring::{
-    start_listener, sync_ghost_config, GhostConfig,
+    start_listener, sync_discovery_config, sync_ghost_config, GhostConfig,
 };
 use digicore_text_expander::ports::{storage_keys, StoragePort};
 use digicore_text_expander::services::sync_service::SyncResult;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tauri::menu::{Menu, MenuItem};
-use tauri::{Emitter, Manager};
+use tauri::{Emitter, Listener, Manager};
 use tauri_plugin_sql::{Migration, MigrationKind};
 
 /// Serializable view of AppState for frontend. Excludes mpsc::Receiver and other non-serializable fields.
@@ -49,6 +50,7 @@ pub struct AppStateDto {
     pub ghost_suggestor_enabled: bool,
     pub ghost_suggestor_debounce_ms: u32,
     pub ghost_suggestor_display_secs: u32,
+    pub ghost_suggestor_snooze_duration_mins: u32,
     pub ghost_suggestor_offset_x: i32,
     pub ghost_suggestor_offset_y: i32,
     pub ghost_follower_enabled: bool,
@@ -57,9 +59,17 @@ pub struct AppStateDto {
     pub ghost_follower_search: String,
     pub ghost_follower_hover_preview: bool,
     pub ghost_follower_collapse_delay_secs: u32,
+    pub ghost_follower_opacity: u32,
     pub clip_history_max_depth: u32,
     pub script_library_run_disabled: bool,
     pub script_library_run_allowlist: String,
+}
+
+fn parse_comma_list(s: &str) -> Vec<String> {
+    s.split(',')
+        .map(|x| x.trim().to_string())
+        .filter(|x| !x.is_empty())
+        .collect()
 }
 
 fn sync_result_to_string(r: &SyncResult) -> String {
@@ -93,6 +103,7 @@ fn app_state_to_dto(state: &AppState) -> AppStateDto {
         ghost_suggestor_enabled: state.ghost_suggestor_enabled,
         ghost_suggestor_debounce_ms: state.ghost_suggestor_debounce_ms as u32,
         ghost_suggestor_display_secs: state.ghost_suggestor_display_secs as u32,
+        ghost_suggestor_snooze_duration_mins: state.ghost_suggestor_snooze_duration_mins as u32,
         ghost_suggestor_offset_x: state.ghost_suggestor_offset_x,
         ghost_suggestor_offset_y: state.ghost_suggestor_offset_y,
         ghost_follower_enabled: state.ghost_follower_enabled,
@@ -101,6 +112,7 @@ fn app_state_to_dto(state: &AppState) -> AppStateDto {
         ghost_follower_search: state.ghost_follower_search.clone(),
         ghost_follower_hover_preview: state.ghost_follower_hover_preview,
         ghost_follower_collapse_delay_secs: state.ghost_follower_collapse_delay_secs as u32,
+        ghost_follower_opacity: state.ghost_follower_opacity,
         clip_history_max_depth: state.clip_history_max_depth as u32,
         script_library_run_disabled: state.script_library_run_disabled,
         script_library_run_allowlist: state.script_library_run_allowlist.clone(),
@@ -138,15 +150,98 @@ fn init_app_state_from_storage() -> AppState {
         .get(storage_keys::GHOST_SUGGESTOR_DISPLAY_SECS)
         .and_then(|s| s.parse().ok())
         .unwrap_or(10u64);
+    let ghost_suggestor_snooze_duration_mins = storage
+        .get(storage_keys::GHOST_SUGGESTOR_SNOOZE_DURATION_MINS)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(5u64)
+        .clamp(1, 120);
     let clip_history_max_depth = storage
         .get(storage_keys::CLIP_HISTORY_MAX_DEPTH)
         .and_then(|s| s.parse().ok())
         .unwrap_or(20usize)
         .clamp(5, 100);
+    let ghost_follower_enabled = storage
+        .get(storage_keys::GHOST_FOLLOWER_ENABLED)
+        .map(|v| v == "true")
+        .unwrap_or(true);
+    let ghost_follower_edge_right = storage
+        .get(storage_keys::GHOST_FOLLOWER_EDGE_RIGHT)
+        .map(|v| v == "true")
+        .unwrap_or(true);
+    let ghost_follower_monitor_anchor = storage
+        .get(storage_keys::GHOST_FOLLOWER_MONITOR_ANCHOR)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0u32)
+        .min(2);
+    let ghost_follower_hover_preview = storage
+        .get(storage_keys::GHOST_FOLLOWER_HOVER_PREVIEW)
+        .map(|v| v == "true")
+        .unwrap_or(true);
+    let ghost_follower_collapse_delay_secs = storage
+        .get(storage_keys::GHOST_FOLLOWER_COLLAPSE_DELAY_SECS)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(5u64)
+        .min(60);
+    let ghost_follower_opacity = storage
+        .get(storage_keys::GHOST_FOLLOWER_OPACITY)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(100u32)
+        .clamp(10, 100);
+    let ghost_follower_position = storage
+        .get(storage_keys::GHOST_FOLLOWER_POSITION_X)
+        .and_then(|sx| sx.parse().ok())
+        .and_then(|x: i32| {
+            storage
+                .get(storage_keys::GHOST_FOLLOWER_POSITION_Y)
+                .and_then(|sy| sy.parse().ok())
+                .map(|y: i32| (x, y))
+        });
     let expansion_paused = storage
         .get(storage_keys::EXPANSION_PAUSED)
         .map(|v| v == "true")
         .unwrap_or(false);
+    let ghost_suggestor_enabled = storage
+        .get(storage_keys::GHOST_SUGGESTOR_ENABLED)
+        .map(|v| v == "true")
+        .unwrap_or(true);
+    let ghost_suggestor_debounce_ms = storage
+        .get(storage_keys::GHOST_SUGGESTOR_DEBOUNCE_MS)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(50u64);
+    let ghost_suggestor_offset_x = storage
+        .get(storage_keys::GHOST_SUGGESTOR_OFFSET_X)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+    let ghost_suggestor_offset_y = storage
+        .get(storage_keys::GHOST_SUGGESTOR_OFFSET_Y)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(20);
+    let discovery_enabled = storage
+        .get(storage_keys::DISCOVERY_ENABLED)
+        .map(|v| v == "true")
+        .unwrap_or(false);
+    let discovery_threshold = storage
+        .get(storage_keys::DISCOVERY_THRESHOLD)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(2u32);
+    let discovery_lookback = storage
+        .get(storage_keys::DISCOVERY_LOOKBACK)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(60u32);
+    let discovery_min_len = storage
+        .get(storage_keys::DISCOVERY_MIN_LEN)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(3usize);
+    let discovery_max_len = storage
+        .get(storage_keys::DISCOVERY_MAX_LEN)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(50usize);
+    let discovery_excluded_apps = storage
+        .get(storage_keys::DISCOVERY_EXCLUDED_APPS)
+        .unwrap_or_default();
+    let discovery_excluded_window_titles = storage
+        .get(storage_keys::DISCOVERY_EXCLUDED_WINDOW_TITLES)
+        .unwrap_or_default();
 
     let mut state = AppState::new();
     state.library_path = library_path;
@@ -154,10 +249,29 @@ fn init_app_state_from_storage() -> AppState {
     state.template_date_format = template_date_format;
     state.template_time_format = template_time_format;
     state.ghost_suggestor_display_secs = ghost_suggestor_display_secs;
+    state.ghost_suggestor_snooze_duration_mins = ghost_suggestor_snooze_duration_mins;
     state.script_library_run_disabled = run_disabled;
     state.script_library_run_allowlist = run_allowlist;
     state.clip_history_max_depth = clip_history_max_depth;
+    state.ghost_follower_enabled = ghost_follower_enabled;
+    state.ghost_follower_edge_right = ghost_follower_edge_right;
+    state.ghost_follower_monitor_anchor = ghost_follower_monitor_anchor as usize;
+    state.ghost_follower_hover_preview = ghost_follower_hover_preview;
+    state.ghost_follower_collapse_delay_secs = ghost_follower_collapse_delay_secs;
+    state.ghost_follower_opacity = ghost_follower_opacity;
+    state.ghost_follower_position = ghost_follower_position;
     state.expansion_paused = expansion_paused;
+    state.ghost_suggestor_enabled = ghost_suggestor_enabled;
+    state.ghost_suggestor_debounce_ms = ghost_suggestor_debounce_ms;
+    state.ghost_suggestor_offset_x = ghost_suggestor_offset_x;
+    state.ghost_suggestor_offset_y = ghost_suggestor_offset_y;
+    state.discovery_enabled = discovery_enabled;
+    state.discovery_threshold = discovery_threshold;
+    state.discovery_lookback = discovery_lookback;
+    state.discovery_min_len = discovery_min_len;
+    state.discovery_max_len = discovery_max_len;
+    state.discovery_excluded_apps = discovery_excluded_apps;
+    state.discovery_excluded_window_titles = discovery_excluded_window_titles;
     state
 }
 
@@ -174,6 +288,7 @@ pub fn run() {
         suggestor_enabled: app_state.ghost_suggestor_enabled,
         suggestor_debounce_ms: app_state.ghost_suggestor_debounce_ms,
         suggestor_display_secs: app_state.ghost_suggestor_display_secs,
+        suggestor_snooze_duration_mins: app_state.ghost_suggestor_snooze_duration_mins,
         suggestor_offset_x: app_state.ghost_suggestor_offset_x,
         suggestor_offset_y: app_state.ghost_suggestor_offset_y,
         follower_enabled: app_state.ghost_follower_enabled,
@@ -187,6 +302,24 @@ pub fn run() {
         enabled: true,
         max_depth: app_state.clip_history_max_depth,
     });
+    log::info!(
+        "[Startup] sync_discovery_config: enabled={} threshold={}",
+        app_state.discovery_enabled,
+        app_state.discovery_threshold
+    );
+    sync_discovery_config(
+        app_state.discovery_enabled,
+        discovery::DiscoveryConfig {
+            threshold: app_state.discovery_threshold,
+            lookback_minutes: app_state.discovery_lookback,
+            min_phrase_len: app_state.discovery_min_len,
+            max_phrase_len: app_state.discovery_max_len,
+            excluded_apps: parse_comma_list(&app_state.discovery_excluded_apps),
+            excluded_window_titles: parse_comma_list(&app_state.discovery_excluded_window_titles),
+        },
+    );
+    let app_state = Arc::new(Mutex::new(app_state));
+    let state_for_exit = app_state.clone();
     let prevent_default = if cfg!(debug_assertions) {
         tauri_plugin_prevent_default::debug()
     } else {
@@ -234,6 +367,15 @@ pub fn run() {
                 .build(),
         )
         .plugin(tauri_plugin_window_state::Builder::new().build())
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == "main" {
+                    api.prevent_close();
+                    let _ = window.emit("window-closed-to-tray", ());
+                    let _ = window.hide();
+                }
+            }
+        })
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             if let Some(win) = app.get_webview_window("main") {
                 let _ = win.set_focus();
@@ -331,48 +473,98 @@ pub fn run() {
             let handle = app.handle().clone();
             let handle_cb = handle.clone();
             let cb = std::sync::Arc::new(move || {
+                log::info!("[GhostSuggestor] on_change: emitting ghost-suggestor-update");
                 let _ = handle_cb.emit("ghost-suggestor-update", ());
             });
             ghost_suggestor::set_on_change_callback(Some(cb));
 
-            // Tray menu: Show, Pause, Add Snippet, Quit
+            // Discovery: use notification toast instead of overlay. Set callback to emit for frontend.
+            let handle_discovery = app.handle().clone();
+            discovery::set_suggestion_callback(move |phrase, count| {
+                ghost_suggestor::set_pending_discovery_for_notification(phrase.to_string(), count);
+                let _ = handle_discovery.emit("discovery-suggestion", (phrase.to_string(), count));
+            });
+
+            // Create Ghost Follower and Suggestor windows from Rust (avoids URL/path issues).
+            // Use a thread to avoid Windows deadlocks when creating windows.
+            let handle_for_ghost = app.handle().clone();
+            std::thread::spawn(move || {
+                use tauri::WebviewUrl;
+                let _ = (|| -> Result<(), Box<dyn std::error::Error>> {
+                    let suggestor = tauri::WebviewWindowBuilder::new(
+                        &handle_for_ghost,
+                        "ghost-suggestor",
+                        WebviewUrl::App("ghost-suggestor.html".into()),
+                    )
+                    .title("Ghost Suggestor")
+                    .inner_size(320.0, 260.0)
+                    .decorations(true)
+                    .transparent(false)
+                    .always_on_top(true)
+                    .visible(false)
+                    .build()?;
+                    log::info!("[GhostSuggestor] window created from Rust");
+                    let handle_suggestor = handle_for_ghost.clone();
+                    suggestor.once("tauri://created", move |_| {
+                        log::info!("[GhostSuggestor] webview ready, can receive ghost-suggestor-update events");
+                        let _ = handle_suggestor.emit("ghost-suggestor-update", ());
+                    });
+
+                    let follower = tauri::WebviewWindowBuilder::new(
+                        &handle_for_ghost,
+                        "ghost-follower",
+                        WebviewUrl::App("ghost-follower.html".into()),
+                    )
+                    .title("Ghost Follower")
+                    .inner_size(280.0, 420.0)
+                    .decorations(true)
+                    .transparent(true)
+                    .always_on_top(true)
+                    .visible(true)
+                    .build()?;
+
+                    log::info!("[GhostFollower] window created from Rust");
+                    let handle_emit = handle_for_ghost.clone();
+                    follower.once("tauri://created", move |_| {
+                        log::info!("[GhostFollower] webview ready, emitting update");
+                        let _ = handle_emit.emit("ghost-follower-update", ());
+                    });
+
+                    Ok(())
+                })();
+            });
+
+            // Tray menu: View Management Console, View Ghost Follower, Exit
             if let Some(tray) = app.tray_by_id("default") {
-                let show_i = MenuItem::with_id(&handle, "show", "Show", true, None::<&str>);
-                let pause_i =
-                    MenuItem::with_id(&handle, "pause", "Pause expansion", true, None::<&str>);
-                let add_i =
-                    MenuItem::with_id(&handle, "add_snippet", "Add Snippet", true, None::<&str>);
-                let quit_i = MenuItem::with_id(&handle, "quit", "Quit", true, None::<&str>);
-                if let (Ok(show), Ok(pause), Ok(add), Ok(quit)) = (show_i, pause_i, add_i, quit_i) {
+                let console_i =
+                    MenuItem::with_id(&handle, "view_console", "View Management Console", true, None::<&str>);
+                let follower_i =
+                    MenuItem::with_id(&handle, "view_follower", "Display Ghost Follower", true, None::<&str>);
+                let quit_i =
+                    MenuItem::with_id(&handle, "quit", "Exit application", true, None::<&str>);
+                if let (Ok(console), Ok(follower), Ok(quit)) = (console_i, follower_i, quit_i) {
                     let items: Vec<&dyn tauri::menu::IsMenuItem<_>> =
-                        vec![&show, &pause, &add, &quit];
+                        vec![&console, &follower, &quit];
                     if let Ok(m) = Menu::with_items(&handle, &items) {
                         let _ = tray.set_menu(Some(m));
-                        let _ = tray.set_show_menu_on_left_click(true);
+                        let _ = tray.set_show_menu_on_left_click(false);
                     }
                 }
             }
 
             app.on_menu_event(move |app_handle, event| match event.id.as_ref() {
-                "show" => {
+                "view_console" => {
                     if let Some(win) = app_handle.get_webview_window("main") {
                         let _ = win.show();
                         let _ = win.set_focus();
                         let _ = win.unminimize();
                     }
                 }
-                "pause" => {
-                    use digicore_text_expander::application::expansion_engine::{
-                        is_expansion_paused, set_expansion_paused,
-                    };
-                    set_expansion_paused(!is_expansion_paused());
-                    let _ = app_handle.emit("ghost-follower-update", ());
-                }
-                "add_snippet" => {
-                    let _ = app_handle.emit("tray-add-snippet", ());
-                    if let Some(win) = app_handle.get_webview_window("main") {
+                "view_follower" => {
+                    if let Some(win) = app_handle.get_webview_window("ghost-follower") {
                         let _ = win.show();
                         let _ = win.set_focus();
+                        let _ = win.unminimize();
                     }
                 }
                 "quit" => {
@@ -385,13 +577,18 @@ pub fn run() {
         })
         .invoke_handler(taurpc::create_ipc_handler(
             api::ApiImpl {
-                state: Arc::new(Mutex::new(app_state)),
+                state: app_state,
                 app_handle,
             }
             .into_handler(),
         ))
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(move |_app_handle, event| {
+            if let tauri::RunEvent::ExitRequested { .. } = event {
+                save_all_on_exit(&state_for_exit);
+            }
+        });
 }
 
 /// UI preferences DTO for frontend.
@@ -418,6 +615,7 @@ pub struct ConfigUpdateDto {
     pub ghost_suggestor_enabled: Option<bool>,
     pub ghost_suggestor_debounce_ms: Option<u32>,
     pub ghost_suggestor_display_secs: Option<u32>,
+    pub ghost_suggestor_snooze_duration_mins: Option<u32>,
     pub ghost_suggestor_offset_x: Option<i32>,
     pub ghost_suggestor_offset_y: Option<i32>,
     pub ghost_follower_enabled: Option<bool>,
@@ -426,6 +624,7 @@ pub struct ConfigUpdateDto {
     pub ghost_follower_search: Option<String>,
     pub ghost_follower_hover_preview: Option<bool>,
     pub ghost_follower_collapse_delay_secs: Option<u32>,
+    pub ghost_follower_opacity: Option<u32>,
     pub clip_history_max_depth: Option<u32>,
     pub script_library_run_disabled: Option<bool>,
     pub script_library_run_allowlist: Option<String>,
@@ -469,6 +668,16 @@ pub struct GhostFollowerStateDto {
     pub edge_right: bool,
     /// True when monitor is Primary (positioner works best for primary).
     pub monitor_primary: bool,
+    /// Configured max clipboard history depth (e.g. 100, 20).
+    pub clip_history_max_depth: u32,
+    /// True when ribbon should auto-collapse (no activity for collapse_delay_secs).
+    pub should_collapse: bool,
+    /// Seconds of inactivity before auto-collapsing. 0 = disabled.
+    pub collapse_delay_secs: u32,
+    /// Opacity 0.0-1.0 (10-100% from config).
+    pub opacity: f64,
+    /// True when position is from user drag (saved); use position directly, skip positioner.
+    pub saved_position: bool,
 }
 
 #[taurpc::ipc_type]

@@ -9,22 +9,150 @@ use digicore_text_expander::adapters::storage::JsonFileStorageAdapter;
 use digicore_text_expander::application::clipboard_history::{self, ClipboardHistoryConfig};
 use digicore_text_expander::application::expansion_diagnostics;
 use digicore_text_expander::application::expansion_stats;
+use digicore_text_expander::application::discovery;
 use digicore_text_expander::application::ghost_follower;
 use digicore_text_expander::application::ghost_suggestor;
 use digicore_text_expander::application::scripting::{get_scripting_config, set_global_library};
 use digicore_text_expander::application::template_processor::{self, InteractiveVarType};
 use digicore_text_expander::application::variable_input;
-use digicore_text_expander::drivers::hotstring::{sync_ghost_config, update_library, GhostConfig};
+use digicore_text_expander::drivers::hotstring::{
+    sync_discovery_config, sync_ghost_config, update_library, GhostConfig,
+};
+use digicore_text_expander::application::app_state::AppState;
 use digicore_text_expander::ports::{storage_keys, StoragePort};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 
 use crate::{
     ClipEntryDto, DiagnosticEntryDto, InteractiveVarDto, PinnedSnippetDto,
     PendingVariableInputDto as PendingVarDto, SuggestionDto,
 };
+
+/// Persists app state to JSON storage. Used by save_settings and save_all_on_exit.
+fn persist_settings_to_storage(state: &AppState) -> Result<(), String> {
+    let mut storage = JsonFileStorageAdapter::load();
+    storage.set(storage_keys::LIBRARY_PATH, &state.library_path);
+    storage.set(storage_keys::SYNC_URL, &state.sync_url);
+    storage.set(
+        storage_keys::TEMPLATE_DATE_FORMAT,
+        &state.template_date_format,
+    );
+    storage.set(
+        storage_keys::TEMPLATE_TIME_FORMAT,
+        &state.template_time_format,
+    );
+    storage.set(
+        storage_keys::SCRIPT_LIBRARY_RUN_DISABLED,
+        &state.script_library_run_disabled.to_string(),
+    );
+    storage.set(
+        storage_keys::SCRIPT_LIBRARY_RUN_ALLOWLIST,
+        &state.script_library_run_allowlist,
+    );
+    storage.set(
+        storage_keys::GHOST_SUGGESTOR_DISPLAY_SECS,
+        &state.ghost_suggestor_display_secs.to_string(),
+    );
+    storage.set(
+        storage_keys::GHOST_SUGGESTOR_SNOOZE_DURATION_MINS,
+        &state.ghost_suggestor_snooze_duration_mins.to_string(),
+    );
+    storage.set(
+        storage_keys::CLIP_HISTORY_MAX_DEPTH,
+        &state.clip_history_max_depth.to_string(),
+    );
+    storage.set(
+        storage_keys::GHOST_FOLLOWER_ENABLED,
+        &state.ghost_follower_enabled.to_string(),
+    );
+    storage.set(
+        storage_keys::GHOST_FOLLOWER_EDGE_RIGHT,
+        &state.ghost_follower_edge_right.to_string(),
+    );
+    storage.set(
+        storage_keys::GHOST_FOLLOWER_MONITOR_ANCHOR,
+        &state.ghost_follower_monitor_anchor.to_string(),
+    );
+    storage.set(
+        storage_keys::GHOST_FOLLOWER_HOVER_PREVIEW,
+        &state.ghost_follower_hover_preview.to_string(),
+    );
+    storage.set(
+        storage_keys::GHOST_FOLLOWER_COLLAPSE_DELAY_SECS,
+        &state.ghost_follower_collapse_delay_secs.to_string(),
+    );
+    storage.set(
+        storage_keys::GHOST_FOLLOWER_OPACITY,
+        &state.ghost_follower_opacity.to_string(),
+    );
+    if let Some((px, py)) = state.ghost_follower_position {
+        storage.set(storage_keys::GHOST_FOLLOWER_POSITION_X, &px.to_string());
+        storage.set(storage_keys::GHOST_FOLLOWER_POSITION_Y, &py.to_string());
+    }
+    storage.set(
+        storage_keys::EXPANSION_PAUSED,
+        &state.expansion_paused.to_string(),
+    );
+    storage.set(
+        storage_keys::GHOST_SUGGESTOR_ENABLED,
+        &state.ghost_suggestor_enabled.to_string(),
+    );
+    storage.set(
+        storage_keys::GHOST_SUGGESTOR_DEBOUNCE_MS,
+        &state.ghost_suggestor_debounce_ms.to_string(),
+    );
+    storage.set(
+        storage_keys::GHOST_SUGGESTOR_OFFSET_X,
+        &state.ghost_suggestor_offset_x.to_string(),
+    );
+    storage.set(
+        storage_keys::GHOST_SUGGESTOR_OFFSET_Y,
+        &state.ghost_suggestor_offset_y.to_string(),
+    );
+    storage.set(
+        storage_keys::DISCOVERY_ENABLED,
+        &state.discovery_enabled.to_string(),
+    );
+    storage.set(
+        storage_keys::DISCOVERY_THRESHOLD,
+        &state.discovery_threshold.to_string(),
+    );
+    storage.set(
+        storage_keys::DISCOVERY_LOOKBACK,
+        &state.discovery_lookback.to_string(),
+    );
+    storage.set(
+        storage_keys::DISCOVERY_MIN_LEN,
+        &state.discovery_min_len.to_string(),
+    );
+    storage.set(
+        storage_keys::DISCOVERY_MAX_LEN,
+        &state.discovery_max_len.to_string(),
+    );
+    storage.set(
+        storage_keys::DISCOVERY_EXCLUDED_APPS,
+        &state.discovery_excluded_apps,
+    );
+    storage.set(
+        storage_keys::DISCOVERY_EXCLUDED_WINDOW_TITLES,
+        &state.discovery_excluded_window_titles,
+    );
+    storage.persist().map_err(|e| e.to_string())
+}
+
+/// Saves settings and library to disk. Call on app exit to persist unsaved changes.
+pub fn save_all_on_exit(state: &Arc<Mutex<AppState>>) {
+    if let Ok(mut guard) = state.lock() {
+        if let Err(e) = persist_settings_to_storage(&*guard) {
+            log::warn!("[Exit] persist_settings failed: {}", e);
+        }
+        if let Err(e) = guard.try_save_library() {
+            log::warn!("[Exit] try_save_library failed: {}", e);
+        }
+    }
+}
 
 // Export to frontend src/ (outside src-tauri) to avoid watcher rebuild loop
 #[taurpc::procedures(export_to = "../src/bindings.ts")]
@@ -53,13 +181,24 @@ pub trait Api {
     async fn save_script_library_js(content: String) -> Result<(), String>;
     async fn get_ghost_suggestor_state() -> Result<GhostSuggestorStateDto, String>;
     async fn ghost_suggestor_accept() -> Result<Option<(String, String)>, String>;
+    async fn ghost_suggestor_snooze() -> Result<(), String>;
     async fn ghost_suggestor_dismiss() -> Result<(), String>;
+    async fn ghost_suggestor_ignore(phrase: String) -> Result<(), String>;
     async fn ghost_suggestor_create_snippet() -> Result<Option<(String, String)>, String>;
     async fn ghost_suggestor_cycle_forward() -> Result<u32, String>;
     async fn get_ghost_follower_state(search_filter: Option<String>)
         -> Result<GhostFollowerStateDto, String>;
     async fn ghost_follower_insert(trigger: String, content: String) -> Result<(), String>;
     async fn ghost_follower_set_search(filter: String) -> Result<(), String>;
+    async fn bring_main_window_to_foreground() -> Result<(), String>;
+    async fn ghost_follower_restore_always_on_top() -> Result<(), String>;
+    async fn ghost_follower_capture_target_window() -> Result<(), String>;
+    async fn ghost_follower_touch() -> Result<(), String>;
+    async fn ghost_follower_set_collapsed(collapsed: bool) -> Result<(), String>;
+    async fn ghost_follower_set_size(width: f64, height: f64) -> Result<(), String>;
+    async fn ghost_follower_set_opacity(opacity_pct: u32) -> Result<(), String>;
+    async fn ghost_follower_save_position(x: i32, y: i32) -> Result<(), String>;
+    async fn ghost_follower_hide() -> Result<(), String>;
     async fn ghost_follower_request_view_full(content: String) -> Result<(), String>;
     async fn ghost_follower_request_edit(category: String, snippet_idx: u32) -> Result<(), String>;
     async fn ghost_follower_request_promote(content: String, trigger: String) -> Result<(), String>;
@@ -84,6 +223,24 @@ fn get_app(app: &Arc<Mutex<Option<AppHandle>>>) -> AppHandle {
         .unwrap()
         .clone()
         .expect("AppHandle not yet set (setup not run)")
+}
+
+fn bring_main_to_foreground(app: &AppHandle) {
+    if let Some(win) = app.get_webview_window("main") {
+        let _ = win.show();
+        let _ = win.unminimize();
+        let _ = win.set_focus();
+    }
+}
+
+/// Lowers Ghost Follower's always_on_top so the main window can appear above it,
+/// then brings the main window to foreground. Call ghost_follower_restore_always_on_top
+/// when the modal is closed.
+fn bring_main_to_foreground_above_ghost_follower(app: &AppHandle) {
+    if let Some(ghost) = app.get_webview_window("ghost-follower") {
+        let _ = ghost.set_always_on_top(false);
+    }
+    bring_main_to_foreground(app);
 }
 
 fn var_type_to_string(t: &InteractiveVarType) -> &'static str {
@@ -128,38 +285,7 @@ impl Api for ApiImpl {
 
     async fn save_settings(self) -> Result<(), String> {
         let guard = self.state.lock().map_err(|e| e.to_string())?;
-        let mut storage = JsonFileStorageAdapter::load();
-        storage.set(storage_keys::LIBRARY_PATH, &guard.library_path);
-        storage.set(storage_keys::SYNC_URL, &guard.sync_url);
-        storage.set(
-            storage_keys::TEMPLATE_DATE_FORMAT,
-            &guard.template_date_format,
-        );
-        storage.set(
-            storage_keys::TEMPLATE_TIME_FORMAT,
-            &guard.template_time_format,
-        );
-        storage.set(
-            storage_keys::SCRIPT_LIBRARY_RUN_DISABLED,
-            &guard.script_library_run_disabled.to_string(),
-        );
-        storage.set(
-            storage_keys::SCRIPT_LIBRARY_RUN_ALLOWLIST,
-            &guard.script_library_run_allowlist,
-        );
-        storage.set(
-            storage_keys::GHOST_SUGGESTOR_DISPLAY_SECS,
-            &guard.ghost_suggestor_display_secs.to_string(),
-        );
-        storage.set(
-            storage_keys::CLIP_HISTORY_MAX_DEPTH,
-            &guard.clip_history_max_depth.to_string(),
-        );
-        storage.set(
-            storage_keys::EXPANSION_PAUSED,
-            &guard.expansion_paused.to_string(),
-        );
-        storage.persist().map_err(|e| e.to_string())
+        persist_settings_to_storage(&*guard)
     }
 
     async fn get_ui_prefs(self) -> Result<UiPrefsDto, String> {
@@ -272,6 +398,9 @@ impl Api for ApiImpl {
         if let Some(v) = config.ghost_suggestor_display_secs {
             guard.ghost_suggestor_display_secs = v as u64;
         }
+        if let Some(v) = config.ghost_suggestor_snooze_duration_mins {
+            guard.ghost_suggestor_snooze_duration_mins = v.clamp(1, 120) as u64;
+        }
         if let Some(v) = config.ghost_suggestor_offset_x {
             guard.ghost_suggestor_offset_x = v;
         }
@@ -296,6 +425,9 @@ impl Api for ApiImpl {
         if let Some(v) = config.ghost_follower_collapse_delay_secs {
             guard.ghost_follower_collapse_delay_secs = v as u64;
         }
+        if let Some(v) = config.ghost_follower_opacity {
+            guard.ghost_follower_opacity = v.clamp(10, 100);
+        }
         if let Some(v) = config.clip_history_max_depth {
             let depth = v.clamp(5, 100) as usize;
             guard.clip_history_max_depth = depth;
@@ -310,10 +442,32 @@ impl Api for ApiImpl {
         if let Some(ref v) = config.script_library_run_allowlist {
             guard.script_library_run_allowlist = v.clone();
         }
+        sync_discovery_config(
+            guard.discovery_enabled,
+            discovery::DiscoveryConfig {
+                threshold: guard.discovery_threshold,
+                lookback_minutes: guard.discovery_lookback,
+                min_phrase_len: guard.discovery_min_len,
+                max_phrase_len: guard.discovery_max_len,
+                excluded_apps: guard
+                    .discovery_excluded_apps
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect(),
+                excluded_window_titles: guard
+                    .discovery_excluded_window_titles
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect(),
+            },
+        );
         sync_ghost_config(GhostConfig {
             suggestor_enabled: guard.ghost_suggestor_enabled,
             suggestor_debounce_ms: guard.ghost_suggestor_debounce_ms,
             suggestor_display_secs: guard.ghost_suggestor_display_secs,
+            suggestor_snooze_duration_mins: guard.ghost_suggestor_snooze_duration_mins,
             suggestor_offset_x: guard.ghost_suggestor_offset_x,
             suggestor_offset_y: guard.ghost_suggestor_offset_y,
             follower_enabled: guard.ghost_follower_enabled,
@@ -399,6 +553,14 @@ function greet(name) { return "Hello, " + name + "!"; }
         let suggestions = ghost_suggestor::get_suggestions();
         let selected = ghost_suggestor::get_selected_index();
         let has_suggestions = !suggestions.is_empty();
+        let first_trigger = suggestions.first().map(|s| s.snippet.trigger.len()).unwrap_or(0);
+        log::info!(
+            "[GhostSuggestor] get_ghost_suggestor_state: suggestions={} has_suggestions={} selected={} first_trigger_len={}",
+            suggestions.len(),
+            has_suggestions,
+            selected,
+            first_trigger
+        );
         let should_auto_hide = ghost_suggestor::should_auto_hide();
         let should_passthrough = should_auto_hide || !has_suggestions;
         if should_auto_hide && has_suggestions {
@@ -410,10 +572,20 @@ function greet(name) { return "Hello, " + name + "!"; }
         let position = {
             let pos = digicore_text_expander::platform::windows_caret::get_caret_screen_position();
             let cfg = ghost_suggestor::get_config();
-            pos.map(|(x, y)| (x + cfg.offset_x, y + cfg.offset_y))
+            let raw = pos.map(|(x, y)| (x + cfg.offset_x, y + cfg.offset_y));
+            raw.map(|(x, y)| {
+                digicore_text_expander::platform::windows_monitor::clamp_position_to_work_area(
+                    x, y, 320, 260,
+                )
+            })
         };
         #[cfg(not(target_os = "windows"))]
         let position: Option<(i32, i32)> = None;
+        log::info!(
+            "[GhostSuggestor] get_ghost_suggestor_state: returning has_suggestions={} position={:?}",
+            has_suggestions,
+            position
+        );
         Ok(GhostSuggestorStateDto {
             has_suggestions,
             suggestions: suggestions
@@ -438,7 +610,18 @@ function greet(name) { return "Hello, " + name + "!"; }
         Ok(ghost_suggestor::accept_selected())
     }
 
+    async fn ghost_suggestor_snooze(self) -> Result<(), String> {
+        ghost_suggestor::snooze();
+        Ok(())
+    }
+
     async fn ghost_suggestor_dismiss(self) -> Result<(), String> {
+        ghost_suggestor::dismiss();
+        Ok(())
+    }
+
+    async fn ghost_suggestor_ignore(self, phrase: String) -> Result<(), String> {
+        discovery::add_ignored_phrase(&phrase);
         ghost_suggestor::dismiss();
         Ok(())
     }
@@ -470,29 +653,62 @@ function greet(name) { return "Hello, " + name + "!"; }
         let pinned = ghost_follower::get_pinned_snippets(filter);
         let cfg = ghost_follower::get_config();
         let enabled = ghost_follower::is_enabled();
+        log::info!(
+            "[GhostFollower] get_ghost_follower_state: enabled={}, pinned_count={}, filter_len={}",
+            enabled,
+            pinned.len(),
+            filter.len()
+        );
 
         #[cfg(target_os = "windows")]
-        let position = {
-            let work = match cfg.monitor_anchor {
-                ghost_follower::MonitorAnchor::Primary => {
-                    digicore_text_expander::platform::windows_monitor::get_primary_monitor_work_area()
-                }
-                ghost_follower::MonitorAnchor::Secondary => {
-                    digicore_text_expander::platform::windows_monitor::get_secondary_monitor_work_area()
-                        .unwrap_or_else(digicore_text_expander::platform::windows_monitor::get_primary_monitor_work_area)
-                }
-                ghost_follower::MonitorAnchor::Current => {
-                    digicore_text_expander::platform::windows_monitor::get_current_monitor_work_area()
-                }
-            };
-            let (x, _y) = match cfg.edge {
-                ghost_follower::FollowerEdge::Right => (work.right - 280, work.top + 20),
-                ghost_follower::FollowerEdge::Left => (work.left, work.top + 20),
-            };
-            Some((x, work.top + 20))
+        let (position, saved_position) = {
+            let saved = self
+                .state
+                .lock()
+                .ok()
+                .and_then(|g| g.ghost_follower_position);
+            let use_saved = saved.map_or(false, |(x, y)| {
+                x >= -20000 && x <= 20000 && y >= -20000 && y <= 20000
+            });
+            if use_saved {
+                (saved, true)
+            } else {
+                let work = match cfg.monitor_anchor {
+                    ghost_follower::MonitorAnchor::Primary => {
+                        digicore_text_expander::platform::windows_monitor::get_primary_monitor_work_area()
+                    }
+                    ghost_follower::MonitorAnchor::Secondary => {
+                        digicore_text_expander::platform::windows_monitor::get_secondary_monitor_work_area()
+                            .unwrap_or_else(digicore_text_expander::platform::windows_monitor::get_primary_monitor_work_area)
+                    }
+                    ghost_follower::MonitorAnchor::Current => {
+                        digicore_text_expander::platform::windows_monitor::get_current_monitor_work_area()
+                    }
+                };
+                let (x, _y) = match cfg.edge {
+                    ghost_follower::FollowerEdge::Right => (work.right - 280, work.top + 20),
+                    ghost_follower::FollowerEdge::Left => (work.left, work.top + 20),
+                };
+                (Some((x, work.top + 20)), false)
+            }
         };
         #[cfg(not(target_os = "windows"))]
-        let position: Option<(i32, i32)> = None;
+        let (position, saved_position): (Option<(i32, i32)>, bool) = (None, false);
+
+        let clip_max = self
+            .state
+            .lock()
+            .map_err(|e| e.to_string())?
+            .clip_history_max_depth as u32;
+
+        let collapse_delay = cfg.collapse_delay_secs as u32;
+        let should_collapse = ghost_follower::should_collapse(cfg.collapse_delay_secs);
+
+        let opacity = self
+            .state
+            .lock()
+            .map(|g| (g.ghost_follower_opacity as f64 / 100.0).clamp(0.1, 1.0))
+            .unwrap_or(1.0);
 
         Ok(GhostFollowerStateDto {
             enabled,
@@ -514,11 +730,83 @@ function greet(name) { return "Hello, " + name + "!"; }
             position,
             edge_right: cfg.edge == ghost_follower::FollowerEdge::Right,
             monitor_primary: cfg.monitor_anchor == ghost_follower::MonitorAnchor::Primary,
+            clip_history_max_depth: clip_max,
+            should_collapse,
+            collapse_delay_secs: collapse_delay,
+            opacity,
+            saved_position,
         })
     }
 
     async fn ghost_follower_insert(self, _trigger: String, content: String) -> Result<(), String> {
-        digicore_text_expander::drivers::hotstring::request_expansion(content);
+        digicore_text_expander::drivers::hotstring::request_expansion_from_ghost_follower(content);
+        Ok(())
+    }
+
+    async fn bring_main_window_to_foreground(self) -> Result<(), String> {
+        let app = get_app(&self.app_handle);
+        bring_main_to_foreground_above_ghost_follower(&app);
+        Ok(())
+    }
+
+    async fn ghost_follower_restore_always_on_top(self) -> Result<(), String> {
+        if let Some(ghost) = get_app(&self.app_handle).get_webview_window("ghost-follower") {
+            let _ = ghost.set_always_on_top(true);
+        }
+        Ok(())
+    }
+
+    async fn ghost_follower_capture_target_window(self) -> Result<(), String> {
+        digicore_text_expander::application::ghost_follower::capture_target_window();
+        Ok(())
+    }
+
+    async fn ghost_follower_touch(self) -> Result<(), String> {
+        ghost_follower::touch();
+        Ok(())
+    }
+
+    async fn ghost_follower_set_collapsed(self, collapsed: bool) -> Result<(), String> {
+        ghost_follower::set_collapsed(collapsed);
+        Ok(())
+    }
+
+    async fn ghost_follower_set_size(self, width: f64, height: f64) -> Result<(), String> {
+        use tauri::LogicalSize;
+        if let Some(win) = get_app(&self.app_handle).get_webview_window("ghost-follower") {
+            let _ = win.set_size(LogicalSize::new(width, height));
+        }
+        Ok(())
+    }
+
+    async fn ghost_follower_set_opacity(self, opacity_pct: u32) -> Result<(), String> {
+        let val = opacity_pct.clamp(10, 100);
+        if let Ok(mut guard) = self.state.lock() {
+            guard.ghost_follower_opacity = val;
+        }
+        let _ = get_app(&self.app_handle).emit("ghost-follower-update", ());
+        Ok(())
+    }
+
+    async fn ghost_follower_save_position(self, x: i32, y: i32) -> Result<(), String> {
+        let sane = x >= -20000 && x <= 20000 && y >= -20000 && y <= 20000;
+        if !sane {
+            return Ok(());
+        }
+        if let Ok(mut guard) = self.state.lock() {
+            guard.ghost_follower_position = Some((x, y));
+        }
+        let mut storage = JsonFileStorageAdapter::load();
+        storage.set(storage_keys::GHOST_FOLLOWER_POSITION_X, &x.to_string());
+        storage.set(storage_keys::GHOST_FOLLOWER_POSITION_Y, &y.to_string());
+        let _ = storage.persist_if_safe().map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    async fn ghost_follower_hide(self) -> Result<(), String> {
+        if let Some(win) = get_app(&self.app_handle).get_webview_window("ghost-follower") {
+            let _ = win.hide();
+        }
         Ok(())
     }
 
@@ -529,7 +817,9 @@ function greet(name) { return "Hello, " + name + "!"; }
     }
 
     async fn ghost_follower_request_view_full(self, content: String) -> Result<(), String> {
-        let _ = get_app(&self.app_handle).emit("ghost-follower-view-full", content);
+        let app = get_app(&self.app_handle);
+        bring_main_to_foreground_above_ghost_follower(&app);
+        let _ = app.emit("ghost-follower-view-full", content);
         Ok(())
     }
 
@@ -538,7 +828,9 @@ function greet(name) { return "Hello, " + name + "!"; }
         category: String,
         snippet_idx: u32,
     ) -> Result<(), String> {
-        let _ = get_app(&self.app_handle).emit(
+        let app = get_app(&self.app_handle);
+        bring_main_to_foreground_above_ghost_follower(&app);
+        let _ = app.emit(
             "ghost-follower-edit",
             serde_json::json!({ "category": category, "snippetIdx": snippet_idx as usize }),
         );
@@ -550,7 +842,9 @@ function greet(name) { return "Hello, " + name + "!"; }
         content: String,
         trigger: String,
     ) -> Result<(), String> {
-        let _ = get_app(&self.app_handle).emit(
+        let app = get_app(&self.app_handle);
+        bring_main_to_foreground_above_ghost_follower(&app);
+        let _ = app.emit(
             "ghost-follower-promote",
             serde_json::json!({ "content": content, "trigger": trigger }),
         );
