@@ -22,8 +22,13 @@ pub fn set_on_change_callback(cb: Option<Arc<dyn Fn() + Send + Sync>>) {
 fn notify_change() {
     if let Ok(guard) = ON_CHANGE.lock() {
         if let Some(ref f) = *guard {
+            log::info!("[GhostSuggestor] notify_change: invoking callback (will emit ghost-suggestor-update)");
             f();
+        } else {
+            log::warn!("[GhostSuggestor] notify_change: NO callback set (Tauri not wired?)");
         }
+    } else {
+        log::warn!("[GhostSuggestor] notify_change: failed to lock ON_CHANGE");
     }
 }
 
@@ -36,6 +41,8 @@ pub struct GhostSuggestorConfig {
     pub debounce_ms: u64,
     /// Display duration in seconds (0 = no auto-hide). AHK parity: configurable.
     pub display_duration_secs: u64,
+    /// Snooze duration in minutes when user clicks Snooze (default 5).
+    pub snooze_duration_mins: u64,
     /// Offset X from caret (F46).
     pub offset_x: i32,
     /// Offset Y from caret (F46).
@@ -48,6 +55,7 @@ impl Default for GhostSuggestorConfig {
             enabled: true,
             debounce_ms: 50,
             display_duration_secs: 10,
+            snooze_duration_mins: 5,
             offset_x: 0,
             offset_y: 20,
         }
@@ -73,6 +81,10 @@ struct SuggestorState {
     debounce_timer: Option<Instant>,
     /// When overlay was first shown (for display_duration auto-hide).
     overlay_shown_at: Option<Instant>,
+    /// When snoozed until (user clicked Snooze). No suggestions shown until this time passes.
+    snoozed_until: Option<Instant>,
+    /// Pending Discovery suggestion (phrase, count) - from repeated typing, not library.
+    pending_discovery: Option<(String, u32)>,
 }
 
 /// Pending action from overlay buttons (Create Snippet, Ignore).
@@ -94,7 +106,51 @@ pub fn start(config: GhostSuggestorConfig, library: HashMap<String, Vec<Snippet>
         last_buffer_change: Instant::now(),
         debounce_timer: None,
         overlay_shown_at: None,
+        snoozed_until: None,
+        pending_discovery: None,
     })));
+}
+
+/// Set pending Discovery suggestion for notification flow (no overlay).
+/// Use when Discovery triggers and we show a toast notification instead of overlay.
+pub fn set_pending_discovery_for_notification(phrase: String, count: u32) {
+    if let Ok(guard) = SUGGESTOR_STATE.lock() {
+        if let Some(ref state) = *guard {
+            if let Ok(mut s) = state.lock() {
+                s.pending_discovery = Some((phrase, count));
+                s.buffer.clear();
+                s.suggestions.clear();
+                s.selected_index = 0;
+                s.overlay_shown_at = None;
+            }
+        }
+    }
+}
+
+/// Inject a Discovery suggestion (repeated phrase). Shows in overlay with Snooze/Promote/Ignore.
+/// Deprecated for Discovery: use set_pending_discovery_for_notification + emit instead.
+pub fn inject_discovery_suggestion(phrase: String, count: u32) {
+    log::info!(
+        "[GhostSuggestor] inject_discovery_suggestion: phrase len={} count={}",
+        phrase.len(),
+        count
+    );
+    if let Ok(guard) = SUGGESTOR_STATE.lock() {
+        if let Some(ref state) = *guard {
+            if let Ok(mut s) = state.lock() {
+                s.pending_discovery = Some((phrase.clone(), count));
+                s.buffer.clear();
+                s.suggestions.clear();
+                s.selected_index = 0;
+                s.overlay_shown_at = None;
+                log::info!("[GhostSuggestor] inject_discovery_suggestion: pending_discovery set");
+            }
+        } else {
+            log::warn!("[GhostSuggestor] inject_discovery_suggestion: SUGGESTOR_STATE is None (not started?)");
+        }
+    }
+    notify_change();
+    log::info!("[GhostSuggestor] inject_discovery_suggestion: notify_change() called");
 }
 
 /// Stop Ghost Suggestor.
@@ -256,7 +312,8 @@ fn recompute_suggestions(s: &mut SuggestorState) {
     });
 }
 
-/// Get current suggestions (for overlay display).
+/// Get current suggestions (for overlay display). Returns empty when snoozed.
+/// Includes pending Discovery suggestion (repeated phrase) when present.
 pub fn get_suggestions() -> Vec<Suggestion> {
     let guard = match SUGGESTOR_STATE.lock() {
         Ok(g) => g,
@@ -272,6 +329,16 @@ pub fn get_suggestions() -> Vec<Suggestion> {
         Ok(s) => s,
         Err(_) => return vec![],
     };
+    if s.snoozed_until.map(|u| Instant::now() < u).unwrap_or(false) {
+        return vec![];
+    }
+    if let Some((ref phrase, count)) = s.pending_discovery {
+        let snip = Snippet::new(phrase.clone(), phrase.clone());
+        return vec![Suggestion {
+            snippet: snip,
+            category: format!("Discovery (typed {}x)", count),
+        }];
+    }
     s.suggestions.clone()
 }
 
@@ -291,7 +358,12 @@ pub fn get_selected_index() -> usize {
         Ok(s) => s,
         Err(_) => return 0,
     };
-    s.selected_index.min(s.suggestions.len().saturating_sub(1))
+    let len = if s.pending_discovery.is_some() {
+        1
+    } else {
+        s.suggestions.len()
+    };
+    s.selected_index.min(len.saturating_sub(1))
 }
 
 /// Cycle selection (Ctrl+Tab). Returns new index.
@@ -361,6 +433,14 @@ pub fn accept_selected() -> Option<(String, String)> {
         Ok(s) => s,
         Err(_) => return None,
     };
+
+    if let Some((phrase, _)) = s.pending_discovery.take() {
+        s.buffer.clear();
+        s.suggestions.clear();
+        s.selected_index = 0;
+        notify_change();
+        return Some((phrase.clone(), phrase));
+    }
 
     let idx = s.selected_index.min(s.suggestions.len().saturating_sub(1));
     let suggestion = s.suggestions.get(idx).cloned()?;
@@ -449,6 +529,57 @@ pub fn take_pending_create_snippet() -> Option<(String, String)> {
 /// Ignore/Snooze (dismiss for now; same as Cancel).
 pub fn ignore() {
     dismiss();
+}
+
+/// Snooze: dismiss overlay and suppress suggestions for configurable duration.
+pub fn snooze() {
+    let guard = match SUGGESTOR_STATE.lock() {
+        Ok(g) => g,
+        Err(_) => return,
+    };
+    let state = match guard.as_ref() {
+        Some(s) => s.clone(),
+        None => return,
+    };
+    drop(guard);
+
+    let mut s = match state.lock() {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+
+    s.pending_discovery = None;
+    let mins = s.config.snooze_duration_mins.max(1);
+    s.snoozed_until = Some(Instant::now() + Duration::from_secs(mins * 60));
+    s.buffer.clear();
+    s.suggestions.clear();
+    s.selected_index = 0;
+    s.debounce_timer = None;
+    s.overlay_shown_at = None;
+    notify_change();
+}
+
+/// Check if currently snoozed (suggestions should not show).
+pub fn is_snoozed() -> bool {
+    let guard = match SUGGESTOR_STATE.lock() {
+        Ok(g) => g,
+        Err(_) => return false,
+    };
+    let state = match guard.as_ref() {
+        Some(s) => s.clone(),
+        None => return false,
+    };
+    drop(guard);
+
+    let s = match state.lock() {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+
+    match s.snoozed_until {
+        Some(until) => Instant::now() < until,
+        None => false,
+    }
 }
 
 /// Check if suggestor has active suggestions (Tab should be consumed).

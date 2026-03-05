@@ -997,6 +997,7 @@ impl TextExpanderApp {
             enabled: self.ghost_suggestor_enabled,
             debounce_ms: self.ghost_suggestor_debounce_ms,
             display_duration_secs: self.ghost_suggestor_display_secs,
+            snooze_duration_mins: 5,
             offset_x: self.ghost_suggestor_offset_x,
             offset_y: self.ghost_suggestor_offset_y,
         });

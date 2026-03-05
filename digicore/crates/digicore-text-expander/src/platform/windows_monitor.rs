@@ -76,6 +76,25 @@ pub fn get_secondary_monitor_work_area() -> Option<WorkArea> {
     }
 }
 
+/// Clamp (x, y) so a window of size (w, h) stays within the work area of the monitor containing the point.
+/// Use for overlay positioning to avoid placing the window off-screen.
+pub fn clamp_position_to_work_area(x: i32, y: i32, w: i32, h: i32) -> (i32, i32) {
+    let work = get_work_area_for_point(x, y);
+    let x_max = (work.right - w).max(work.left);
+    let y_max = (work.bottom - h).max(work.top);
+    let x = x.clamp(work.left, x_max);
+    let y = y.clamp(work.top, y_max);
+    (x, y)
+}
+
+fn get_work_area_for_point(x: i32, y: i32) -> WorkArea {
+    unsafe {
+        let pt = POINT { x, y };
+        let hmon = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
+        get_monitor_work_area(hmon)
+    }
+}
+
 /// Get work area of the monitor containing the cursor.
 /// Falls back to primary if API fails.
 pub fn get_current_monitor_work_area() -> WorkArea {

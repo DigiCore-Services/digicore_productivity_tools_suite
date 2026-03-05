@@ -82,8 +82,46 @@ static FOLLOWER_SEARCH: Mutex<String> = Mutex::new(String::new());
 static FOLLOWER_COLLAPSED: Mutex<bool> = Mutex::new(false);
 static FOLLOWER_LAST_ACTIVE: Mutex<Option<std::time::Instant>> = Mutex::new(None);
 
+/// Last foreground window before user interacted with Ghost Follower (for insert-at-cursor).
+#[cfg(target_os = "windows")]
+static FOLLOWER_LAST_TARGET_HWND: Mutex<Option<isize>> = Mutex::new(None);
+
+/// Capture the current foreground window as the insert target. Call when mouse enters
+/// Ghost Follower while it does not have focus (user moving from target app).
+#[cfg(target_os = "windows")]
+pub fn capture_target_window() {
+    if let Some(hwnd) = crate::platform::windows_window::get_foreground_hwnd() {
+        if let Ok(mut guard) = FOLLOWER_LAST_TARGET_HWND.lock() {
+            *guard = Some(hwnd);
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn capture_target_window() {}
+
+/// Take the stored target window for insert. Returns None if not captured.
+#[cfg(target_os = "windows")]
+pub fn take_target_hwnd() -> Option<isize> {
+    if let Ok(mut guard) = FOLLOWER_LAST_TARGET_HWND.lock() {
+        guard.take()
+    } else {
+        None
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn take_target_hwnd() -> Option<isize> {
+    None
+}
+
 /// Start Ghost Follower with config and library.
 pub fn start(config: GhostFollowerConfig, library: HashMap<String, Vec<Snippet>>) {
+    log::info!(
+        "[GhostFollower] start: enabled={}, pinned_count={}",
+        config.enabled,
+        collect_pinned(&library).len()
+    );
     FOLLOWER_ENABLED.store(config.enabled, Ordering::SeqCst);
     let pinned = collect_pinned(&library);
     *FOLLOWER_STATE.lock().unwrap() = Some(Arc::new(Mutex::new(FollowerState {
@@ -113,6 +151,12 @@ pub fn update_library(library: HashMap<String, Vec<Snippet>>) {
 
 /// Update config.
 pub fn update_config(config: GhostFollowerConfig) {
+    log::info!(
+        "[GhostFollower] update_config: enabled={}, edge={:?}, monitor={:?}",
+        config.enabled,
+        config.edge,
+        config.monitor_anchor
+    );
     FOLLOWER_ENABLED.store(config.enabled, Ordering::SeqCst);
     if let Ok(guard) = FOLLOWER_STATE.lock() {
         if let Some(ref state) = *guard {

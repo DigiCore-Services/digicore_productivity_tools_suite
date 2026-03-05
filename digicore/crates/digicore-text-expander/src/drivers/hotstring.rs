@@ -91,17 +91,42 @@ pub fn request_expansion(content: String) {
         variable_input::set_pending_from_ghost(content);
         return;
     }
-    do_request_expansion(content);
+    do_request_expansion(content, None);
+}
+
+/// Request expansion with optional target window for restore-before-paste.
+pub fn request_expansion_with_target(content: String, target_hwnd: Option<isize>) {
+    if variable_input::has_interactive_vars(&content) {
+        variable_input::set_pending_from_ghost_with_target(content, target_hwnd);
+        return;
+    }
+    do_request_expansion(content, target_hwnd);
+}
+
+/// Request expansion from Ghost Follower double-click. Restores focus to the target
+/// window (Sublime, Outlook, etc.) before pasting so content inserts at cursor.
+pub fn request_expansion_from_ghost_follower(content: String) {
+    let target_hwnd = ghost_follower::take_target_hwnd();
+    if variable_input::has_interactive_vars(&content) {
+        variable_input::set_pending_from_ghost_with_target(content, target_hwnd);
+        return;
+    }
+    do_request_expansion(content, target_hwnd);
 }
 
 /// Perform expansion (no interactive vars). Used after VariableInputModal OK.
-fn do_request_expansion(content: String) {
+/// target_hwnd: when Some, restore focus to this window before paste (for insert-at-cursor).
+fn do_request_expansion(content: String, target_hwnd: Option<isize>) {
     crate::application::clipboard_history::suppress_for_duration(std::time::Duration::from_secs(2));
     if let Ok(guard) = HOTSTRING_STATE.lock() {
         if let Some(ref state) = *guard {
             let state = state.clone();
             std::thread::spawn(move || {
                 if let Ok(g) = state.lock() {
+                    #[cfg(target_os = "windows")]
+                    if let Some(hwnd) = target_hwnd {
+                        crate::platform::windows_window::restore_foreground_window(hwnd);
+                    }
                     let current_clip = g.clipboard.get_text().ok();
                     let clip_history: Vec<String> = clipboard_history::get_entries()
                         .iter()
@@ -154,6 +179,7 @@ pub struct GhostConfig {
     pub suggestor_enabled: bool,
     pub suggestor_debounce_ms: u64,
     pub suggestor_display_secs: u64,
+    pub suggestor_snooze_duration_mins: u64,
     pub suggestor_offset_x: i32,
     pub suggestor_offset_y: i32,
     pub follower_enabled: bool,
@@ -170,6 +196,7 @@ impl Default for GhostConfig {
             suggestor_enabled: true,
             suggestor_debounce_ms: 50,
             suggestor_display_secs: 10,
+            suggestor_snooze_duration_mins: 5,
             suggestor_offset_x: 0,
             suggestor_offset_y: 20,
             follower_enabled: true,
@@ -182,12 +209,31 @@ impl Default for GhostConfig {
     }
 }
 
+/// Sync Discovery config from host state. Starts/stops Discovery.
+/// Suggestion callback is set by Tauri setup (notification toast flow).
+pub fn sync_discovery_config(enabled: bool, config: discovery::DiscoveryConfig) {
+    log::info!(
+        "[Hotstring] sync_discovery_config: enabled={} threshold={} lookback={}",
+        enabled,
+        config.threshold,
+        config.lookback_minutes
+    );
+    if enabled {
+        discovery::start(config);
+        log::info!("[Hotstring] sync_discovery_config: Discovery started");
+    } else {
+        discovery::stop();
+        log::info!("[Hotstring] sync_discovery_config: Discovery stopped");
+    }
+}
+
 /// Sync Ghost Suggestor and Ghost Follower config from host state.
 pub fn sync_ghost_config(config: GhostConfig) {
     ghost_suggestor::update_config(ghost_suggestor::GhostSuggestorConfig {
         enabled: config.suggestor_enabled,
         debounce_ms: config.suggestor_debounce_ms,
         display_duration_secs: config.suggestor_display_secs,
+        snooze_duration_mins: config.suggestor_snooze_duration_mins,
         offset_x: config.suggestor_offset_x,
         offset_y: config.suggestor_offset_y,
     });
@@ -231,6 +277,13 @@ fn on_key(state: Arc<Mutex<HotstringState>>, vk_code: u16, ch: Option<char>) -> 
 
     if let Ok(ctx) = guard.window.get_active() {
         discovery::set_window_context(&ctx.process_name, &ctx.title);
+    }
+    if vk_code == VK_RETURN || vk_code == VK_TAB {
+        log::info!(
+            "[Hotstring] on_key: Enter/Tab vk={} calling discovery::on_key (buffer len={})",
+            vk_code,
+            guard.buffer.len()
+        );
     }
     discovery::on_key(vk_code, ch);
 

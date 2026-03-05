@@ -99,6 +99,7 @@ pub struct AppState {
     pub ghost_suggestor_enabled: bool,
     pub ghost_suggestor_debounce_ms: u64,
     pub ghost_suggestor_display_secs: u64,
+    pub ghost_suggestor_snooze_duration_mins: u64,
     pub ghost_suggestor_offset_x: i32,
     pub ghost_suggestor_offset_y: i32,
 
@@ -109,6 +110,10 @@ pub struct AppState {
     pub ghost_follower_search: String,
     pub ghost_follower_hover_preview: bool,
     pub ghost_follower_collapse_delay_secs: u64,
+    /// Opacity 10-100 (percent). 100 = fully opaque.
+    pub ghost_follower_opacity: u32,
+    /// Saved window position (x, y) when user drags. None = use edge/monitor.
+    pub ghost_follower_position: Option<(i32, i32)>,
     pub clip_history_max_depth: usize,
 
     // Templates (F16-F20)
@@ -184,6 +189,7 @@ impl Default for AppState {
             ghost_suggestor_enabled: true,
             ghost_suggestor_debounce_ms: 50,
             ghost_suggestor_display_secs: 10,
+            ghost_suggestor_snooze_duration_mins: 5,
             ghost_suggestor_offset_x: 0,
             ghost_suggestor_offset_y: 20,
             ghost_follower_enabled: true,
@@ -192,6 +198,8 @@ impl Default for AppState {
             ghost_follower_search: String::new(),
             ghost_follower_hover_preview: true,
             ghost_follower_collapse_delay_secs: 5,
+            ghost_follower_opacity: 100,
+            ghost_follower_position: None,
             clip_history_max_depth: 20,
             template_date_format: "%Y-%m-%d".to_string(),
             template_time_format: "%H:%M".to_string(),

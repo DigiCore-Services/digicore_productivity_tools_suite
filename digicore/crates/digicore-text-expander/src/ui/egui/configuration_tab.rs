@@ -120,6 +120,7 @@ pub fn render(app: &mut TextExpanderApp, ui: &mut egui::Ui) {
                         enabled: app.ghost_suggestor_enabled,
                         debounce_ms: app.ghost_suggestor_debounce_ms,
                         display_duration_secs: app.ghost_suggestor_display_secs,
+                        snooze_duration_mins: 5,
                         offset_x: app.ghost_suggestor_offset_x,
                         offset_y: app.ghost_suggestor_offset_y,
                     });
@@ -142,6 +143,7 @@ pub fn render(app: &mut TextExpanderApp, ui: &mut egui::Ui) {
                         enabled: app.ghost_suggestor_enabled,
                         debounce_ms: app.ghost_suggestor_debounce_ms,
                         display_duration_secs: app.ghost_suggestor_display_secs,
+                        snooze_duration_mins: 5,
                         offset_x: app.ghost_suggestor_offset_x,
                         offset_y: app.ghost_suggestor_offset_y,
                     });

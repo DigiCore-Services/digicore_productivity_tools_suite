@@ -208,7 +208,7 @@ pub fn process_viewport_result(result: ViewportModalResult) {
                 if let Some(ref tx) = state.response_tx {
                     let _ = tx.send((Some(processed), hwnd));
                 } else {
-                    crate::drivers::hotstring::request_expansion(processed);
+                    crate::drivers::hotstring::request_expansion_with_target(processed, hwnd);
                 }
             }
             ViewportModalResult::Cancel => {
@@ -235,6 +235,24 @@ static PENDING: Mutex<Option<PendingExpansion>> = Mutex::new(None);
 
 /// Set pending expansion from Ghost Follower (no response channel).
 pub fn set_pending_from_ghost(content: String) {
+    set_pending_from_ghost_with_target(content, None);
+}
+
+/// Set pending expansion from Ghost Follower with target window for insert-at-cursor.
+#[cfg(target_os = "windows")]
+pub fn set_pending_from_ghost_with_target(content: String, target_hwnd: Option<isize>) {
+    if let Ok(mut g) = PENDING.lock() {
+        *g = Some(PendingExpansion {
+            content,
+            trigger_len: None,
+            target_hwnd,
+            response_tx: None,
+        });
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn set_pending_from_ghost_with_target(content: String, _target_hwnd: Option<isize>) {
     if let Ok(mut g) = PENDING.lock() {
         *g = Some(PendingExpansion {
             content,
