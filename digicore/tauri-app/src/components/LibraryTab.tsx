@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { getTaurpc } from "@/lib/taurpc";
 import { normalizeAppState } from "@/lib/normalizeState";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, confirm } from "@tauri-apps/plugin-dialog";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { FolderOpen, Save, Search, Plus, Pencil, Trash2, FolderSearch, Pin } from "lucide-react";
 import { showNativeContextMenu } from "@/lib/nativeContextMenu";
@@ -139,7 +139,18 @@ export function LibraryTab({
       const snips = library[cat];
       if (!snips || idx >= snips.length) return;
       const s = snips[idx];
-      const newPinned = (s.pinned || "false") === "true" ? "false" : "true";
+      const isPinned = (s.pinned || "false").toLowerCase() === "true";
+      if (isPinned) {
+        const confirmed = await confirm(
+          "Are you sure you want to unpin this snippet?",
+          { title: "Confirm Unpin", kind: "warning" }
+        );
+        if (!confirmed) {
+          setStatus("Unpin cancelled.");
+          return;
+        }
+      }
+      const newPinned = isPinned ? "false" : "true";
       try {
         await getTaurpc().update_snippet(cat, idx, {
           ...s,
@@ -479,6 +490,7 @@ export function LibraryTab({
                       showNativeContextMenu(e.clientX, e.clientY, [
                         {
                           id: "view-full",
+                          icon: "👁",
                           text: "View Full Snippet Content",
                           onClick: () =>
                             onOpenViewFull(row.s.content || "", {
@@ -488,11 +500,13 @@ export function LibraryTab({
                         },
                         {
                           id: "pin",
+                          icon: isPinned ? "📌" : "📍",
                           text: isPinned ? "Unpin Snippet" : "Pin Snippet",
                           onClick: () => handleTogglePin(row.cat, row.idx),
                         },
                         {
                           id: "copy",
+                          icon: "⧉",
                           text: "Copy Full Content to Clipboard",
                           onClick: async () => {
                             try {
@@ -507,12 +521,14 @@ export function LibraryTab({
                         },
                         {
                           id: "edit",
+                          icon: "✎",
                           text: "Edit Snippet",
                           onClick: () =>
                             onOpenSnippetEditor("edit", row.cat, row.idx),
                         },
                         {
                           id: "delete",
+                          icon: "🗑",
                           text: "Delete Snippet",
                           onClick: () =>
                             onOpenDeleteConfirm(row.cat, row.idx),
@@ -533,7 +549,15 @@ export function LibraryTab({
                               : "var(--dc-bg)",
                         }}
                       >
-                        <div className="border-r border-[var(--dc-border)] p-1.5 flex items-center justify-center">
+                        <div
+                          className="border-r border-[var(--dc-border)] p-1.5 flex items-center justify-center cursor-pointer"
+                          onClick={() => handleTogglePin(row.cat, row.idx)}
+                          title={
+                            (row.s.pinned || "false").toLowerCase() === "true"
+                              ? "Unpin Snippet"
+                              : "Pin Snippet"
+                          }
+                        >
                           {(row.s.pinned || "false").toLowerCase() === "true" ? (
                             <span title="Pinned"><Pin className="w-3.5 h-3.5 text-amber-500 fill-amber-500" aria-hidden /></span>
                           ) : (
@@ -663,6 +687,7 @@ export function LibraryTab({
                     showNativeContextMenu(e.clientX, e.clientY, [
                       {
                         id: "view-full",
+                        icon: "👁",
                         text: "View Full Snippet Content",
                         onClick: () =>
                           onOpenViewFull(s.content || "", {
@@ -672,11 +697,13 @@ export function LibraryTab({
                       },
                       {
                         id: "pin",
+                        icon: isPinned ? "📌" : "📍",
                         text: isPinned ? "Unpin Snippet" : "Pin Snippet",
                         onClick: () => handleTogglePin(cat, idx),
                       },
                       {
                         id: "copy",
+                        icon: "⧉",
                         text: "Copy Full Content to Clipboard",
                         onClick: async () => {
                           try {
@@ -691,18 +718,28 @@ export function LibraryTab({
                       },
                       {
                         id: "edit",
+                        icon: "✎",
                         text: "Edit Snippet",
                         onClick: () => onOpenSnippetEditor("edit", cat, idx),
                       },
                       {
                         id: "delete",
+                        icon: "🗑",
                         text: "Delete Snippet",
                         onClick: () => onOpenDeleteConfirm(cat, idx),
                       },
                     ]);
                   }}
                 >
-                  <td className="border border-[var(--dc-border)] p-1.5 w-[28px] text-center">
+                  <td
+                    className="border border-[var(--dc-border)] p-1.5 w-[28px] text-center cursor-pointer"
+                    onClick={() => handleTogglePin(cat, idx)}
+                    title={
+                      (s.pinned || "false").toLowerCase() === "true"
+                        ? "Unpin Snippet"
+                        : "Pin Snippet"
+                    }
+                  >
                     {(s.pinned || "false").toLowerCase() === "true" ? (
                       <span title="Pinned"><Pin className="w-3.5 h-3.5 mx-auto text-amber-500 fill-amber-500" aria-hidden /></span>
                     ) : (

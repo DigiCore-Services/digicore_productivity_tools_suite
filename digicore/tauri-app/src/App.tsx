@@ -3,11 +3,13 @@ import { motion, AnimatePresence } from "framer-motion";
 import { getTaurpc } from "./lib/taurpc";
 import { emit, listen } from "@tauri-apps/api/event";
 import { onOpenUrl } from "@tauri-apps/plugin-deep-link";
+import { confirm as confirmDialog } from "@tauri-apps/plugin-dialog";
 import {
   Library,
   Settings,
   ClipboardList,
   Code,
+  Droplets,
   BarChart3,
   FileText,
 } from "lucide-react";
@@ -22,6 +24,9 @@ const ClipboardTab = lazy(() =>
 );
 const ScriptTab = lazy(() =>
   import("./components/ScriptTab").then((m) => ({ default: m.ScriptTab }))
+);
+const AppearanceTab = lazy(() =>
+  import("./components/AppearanceTab").then((m) => ({ default: m.AppearanceTab }))
 );
 const AnalyticsTab = lazy(() =>
   import("./components/AnalyticsTab").then((m) => ({ default: m.AnalyticsTab }))
@@ -86,6 +91,12 @@ function App() {
   const [viewFullEditMeta, setViewFullEditMeta] = useState<{
     category: string;
     snippetIdx: number;
+    source?: "library" | "ghost-pinned";
+  } | null>(null);
+  const [viewFullClipboardMeta, setViewFullClipboardMeta] = useState<{
+    index: number;
+    canPromote: boolean;
+    trigger?: string;
   } | null>(null);
 
   const [clipClearConfirmVisible, setClipClearConfirmVisible] = useState(false);
@@ -104,6 +115,44 @@ function App() {
     phrase: string;
     count: number;
   } | null>(null);
+  const normalizeContentForMatch = useCallback((value: string) => {
+    return (value || "").replace(/\r\n/g, "\n").trim();
+  }, []);
+  const snippetExists = useCallback(
+    (content: string) => {
+      const normalizedContent = normalizeContentForMatch(content);
+      if (!normalizedContent) return false;
+      const library = appState?.library ?? {};
+      return Object.values(library).some((snippets) =>
+        snippets.some(
+          (snippet) =>
+            normalizeContentForMatch(snippet.content || "") === normalizedContent
+        )
+      );
+    },
+    [appState?.library, normalizeContentForMatch]
+  );
+  const findSnippetByContent = useCallback(
+    (content: string): { category: string; snippetIdx: number; pinned: boolean } | null => {
+      const normalizedContent = normalizeContentForMatch(content);
+      if (!normalizedContent) return null;
+      const library = appState?.library ?? {};
+      for (const [category, snippets] of Object.entries(library)) {
+        for (let i = 0; i < snippets.length; i += 1) {
+          const snippet = snippets[i];
+          if (normalizeContentForMatch(snippet.content || "") === normalizedContent) {
+            return {
+              category,
+              snippetIdx: i,
+              pinned: (snippet.pinned || "false").toLowerCase() === "true",
+            };
+          }
+        }
+      }
+      return null;
+    },
+    [appState?.library, normalizeContentForMatch]
+  );
 
   const loadAppState = useCallback(async () => {
     try {
@@ -233,14 +282,115 @@ function App() {
   const openViewFull = useCallback(
     (
       content: string,
-      editMeta?: { category: string; snippetIdx: number } | null
+      meta?:
+        | { category: string; snippetIdx: number; source?: "library" | "ghost-pinned" }
+        | { index: number; canPromote: boolean; trigger?: string }
+        | null
     ) => {
+      // TODO(ui-view-full-actions): Keep source-aware action routing centralized here.
       setViewFullContent(content);
-      setViewFullEditMeta(editMeta ?? null);
+      if (meta && "category" in meta) {
+        setViewFullEditMeta(meta);
+        setViewFullClipboardMeta(null);
+      } else if (meta && "index" in meta) {
+        setViewFullClipboardMeta(meta);
+        setViewFullEditMeta(null);
+      } else {
+        setViewFullEditMeta(null);
+        setViewFullClipboardMeta(null);
+      }
       setViewFullVisible(true);
     },
     []
   );
+
+  const handleViewFullCopy = useCallback(async () => {
+    try {
+      await getTaurpc().copy_to_clipboard(viewFullContent);
+      setLibraryStatusFn("Copied to clipboard!");
+    } catch (e) {
+      setLibraryStatusFn("Error: " + String(e), true);
+    }
+  }, [viewFullContent, setLibraryStatusFn]);
+
+  const handleViewFullPromote = useCallback(() => {
+    if (!viewFullClipboardMeta?.canPromote) return;
+    const categories = appState?.categories || ["General"];
+    const trigger =
+      viewFullClipboardMeta.trigger ||
+      (viewFullContent || "").slice(0, 20).replace(/\s/g, "").trim() ||
+      "clip";
+    setViewFullVisible(false);
+    setViewFullEditMeta(null);
+    setViewFullClipboardMeta(null);
+    openSnippetEditor("add", categories[0] || "General", -1, {
+      content: viewFullContent,
+      trigger,
+    });
+  }, [viewFullClipboardMeta, appState?.categories, viewFullContent, openSnippetEditor]);
+
+  const handleViewFullDelete = useCallback(() => {
+    if (viewFullClipboardMeta == null) return;
+    const idx = viewFullClipboardMeta.index;
+    setViewFullVisible(false);
+    setViewFullEditMeta(null);
+    setViewFullClipboardMeta(null);
+    openClipEntryDeleteConfirm(idx);
+  }, [viewFullClipboardMeta, openClipEntryDeleteConfirm]);
+
+  const handleViewFullDeleteSnippet = useCallback(() => {
+    if (!viewFullEditMeta) return;
+    const { category, snippetIdx } = viewFullEditMeta;
+    setViewFullVisible(false);
+    setViewFullEditMeta(null);
+    setViewFullClipboardMeta(null);
+    openDeleteConfirm(category, snippetIdx);
+  }, [viewFullEditMeta, openDeleteConfirm]);
+
+  const handleViewFullPinPromoted = useCallback(async () => {
+    const match = findSnippetByContent(viewFullContent);
+    if (!match) {
+      setLibraryStatusFn("No promoted snippet found to pin.", true);
+      return;
+    }
+    if (match.pinned) {
+      setLibraryStatusFn("Snippet already pinned.");
+      return;
+    }
+    try {
+      await getTaurpc().ghost_follower_toggle_pin(match.category, match.snippetIdx);
+      setLibraryStatusFn("Snippet pinned.");
+      await loadAppState();
+    } catch (e) {
+      setLibraryStatusFn("Pin failed: " + String(e), true);
+    }
+  }, [findSnippetByContent, viewFullContent, setLibraryStatusFn, loadAppState]);
+
+  const handleViewFullUnpinSnippet = useCallback(async () => {
+    if (!viewFullEditMeta) return;
+    const { category, snippetIdx } = viewFullEditMeta;
+    const snippet = appState?.library?.[category]?.[snippetIdx];
+    const isPinned = (snippet?.pinned || "false").toLowerCase() === "true";
+    if (!isPinned) {
+      setLibraryStatusFn("Snippet is already unpinned.");
+      return;
+    }
+    const confirmed = await confirmDialog(
+      "Are you sure you want to unpin this snippet?",
+      { title: "Confirm Unpin", kind: "warning" }
+    );
+    if (!confirmed) {
+      setLibraryStatusFn("Unpin cancelled.");
+      return;
+    }
+    try {
+      await getTaurpc().ghost_follower_toggle_pin(category, snippetIdx);
+      setLibraryStatusFn("Snippet unpinned.");
+      await loadAppState();
+    } catch (e) {
+      setLibraryStatusFn("Unpin failed: " + String(e), true);
+    }
+  }, [viewFullEditMeta, appState?.library, setLibraryStatusFn, loadAppState]);
 
   const handleClipEntryDeleteConfirm = useCallback(async () => {
     try {
@@ -359,9 +509,49 @@ function App() {
 
   useEffect(() => {
     const unlistens: (() => void)[] = [];
-    listen<string>("ghost-follower-view-full", async (e) => {
+    listen<
+      | string
+      | {
+          content?: string;
+          source?: "pinned" | "clipboard";
+          category?: string;
+          snippetIdx?: number;
+          index?: number;
+          trigger?: string;
+        }
+    >("ghost-follower-view-full", async (e) => {
       await bringMainToForeground();
-      openViewFull(e.payload ?? "");
+      const payload = e.payload;
+      if (typeof payload === "string") {
+        openViewFull(payload ?? "");
+        return;
+      }
+      if (!payload) {
+        openViewFull("");
+        return;
+      }
+      if (
+        payload.source === "pinned" &&
+        payload.category != null &&
+        payload.snippetIdx != null
+      ) {
+        openViewFull(payload.content ?? "", {
+          category: payload.category,
+          snippetIdx: payload.snippetIdx,
+          source: "ghost-pinned",
+        });
+        return;
+      }
+      if (payload.source === "clipboard" && payload.index != null) {
+        const content = payload.content ?? "";
+        openViewFull(content, {
+          index: payload.index,
+          canPromote: !snippetExists(content),
+          trigger: payload.trigger,
+        });
+        return;
+      }
+      openViewFull(payload.content ?? "");
     }).then((fn) => unlistens.push(fn));
     listen<{ category: string; snippetIdx: number }>(
       "ghost-follower-edit",
@@ -405,6 +595,10 @@ function App() {
         openClipEntryDeleteConfirm(index);
       }
     }).then((fn) => unlistens.push(fn));
+    listen<{ text?: string }>("ghost-follower-status", (e) => {
+      const text = e.payload?.text;
+      if (text) setLibraryStatusFn(text);
+    }).then((fn) => unlistens.push(fn));
     return () => unlistens.forEach((u) => u());
   }, [
     bringMainToForeground,
@@ -413,6 +607,8 @@ function App() {
     openDeleteConfirm,
     openClipEntryDeleteConfirm,
     appState?.categories,
+    snippetExists,
+    setLibraryStatusFn,
   ]);
 
   useEffect(() => {
@@ -632,7 +828,7 @@ function App() {
           if (!cols.includes(c)) cols.push(c);
         }
         setColumnOrder(cols);
-        const lastTab = Math.min(0 | (prefs.last_tab ?? 0), 5);
+        const lastTab = Math.min(0 | (prefs.last_tab ?? 0), 6);
         setActiveTab(lastTab);
       } catch {
         /* ignore */
@@ -652,6 +848,7 @@ function App() {
     { id: "config", label: "Configurations and Settings", icon: Settings },
     { id: "clipboard", label: "Clipboard History", icon: ClipboardList },
     { id: "script", label: "Scripting Engine Library", icon: Code },
+    { id: "appearance", label: "Appearance", icon: Droplets },
     { id: "analytics", label: "Statistics", icon: BarChart3 },
     { id: "log", label: "Log", icon: FileText },
   ];
@@ -873,6 +1070,22 @@ function App() {
       )}
       {activeTab === 4 && (
         <motion.div
+          key="appearance"
+          id="panel-appearance"
+          role="tabpanel"
+          aria-labelledby="tab-appearance"
+          initial={{ opacity: 0, x: -10 }}
+          animate={{ opacity: 1, x: 0 }}
+          exit={{ opacity: 0, x: 10 }}
+          transition={{ duration: 0.2 }}
+        >
+          <Suspense fallback={<div className="py-8 text-[var(--dc-text-muted)]">Loading...</div>}>
+            <AppearanceTab />
+          </Suspense>
+        </motion.div>
+      )}
+      {activeTab === 5 && (
+        <motion.div
           key="analytics"
           initial={{ opacity: 0, x: -10 }}
           animate={{ opacity: 1, x: 0 }}
@@ -884,7 +1097,7 @@ function App() {
           </Suspense>
         </motion.div>
       )}
-      {activeTab === 5 && (
+      {activeTab === 6 && (
         <motion.div
           key="log"
           id="panel-log"
@@ -933,6 +1146,7 @@ function App() {
         onClose={() => {
           setViewFullVisible(false);
           setViewFullEditMeta(null);
+          setViewFullClipboardMeta(null);
           restoreGhostFollowerAlwaysOnTop();
         }}
         onEdit={
@@ -945,6 +1159,30 @@ function App() {
             : undefined
         }
         editMeta={viewFullEditMeta}
+        onPromote={viewFullClipboardMeta ? handleViewFullPromote : undefined}
+        onPin={
+          viewFullClipboardMeta && !viewFullClipboardMeta.canPromote
+            ? handleViewFullPinPromoted
+            : undefined
+        }
+        onUnpin={
+          viewFullEditMeta?.source === "ghost-pinned"
+            ? handleViewFullUnpinSnippet
+            : undefined
+        }
+        onCopy={handleViewFullCopy}
+        onDelete={
+          viewFullClipboardMeta
+            ? handleViewFullDelete
+            : viewFullEditMeta
+            ? handleViewFullDeleteSnippet
+            : undefined
+        }
+        canPin={(() => {
+          const match = findSnippetByContent(viewFullContent);
+          return !match?.pinned;
+        })()}
+        canPromote={viewFullClipboardMeta?.canPromote ?? true}
       />
 
       <ClipClearConfirm

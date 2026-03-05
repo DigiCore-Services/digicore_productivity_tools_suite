@@ -1,6 +1,6 @@
 import { motion, AnimatePresence } from "framer-motion";
 import { Button } from "@/components/ui/button";
-import { Pencil } from "lucide-react";
+import { ArrowUpToLine, Copy, Pencil, Pin, PinOff, Trash2 } from "lucide-react";
 
 interface ViewFullProps {
   visible: boolean;
@@ -9,6 +9,13 @@ interface ViewFullProps {
   /** When from Library tab: edit metadata to show Edit button. */
   onEdit?: (category: string, snippetIdx: number) => void;
   editMeta?: { category: string; snippetIdx: number } | null;
+  onPromote?: () => void;
+  onCopy?: () => void;
+  onDelete?: () => void;
+  onPin?: () => void;
+  onUnpin?: () => void;
+  canPin?: boolean;
+  canPromote?: boolean;
 }
 
 export function ViewFull({
@@ -17,6 +24,13 @@ export function ViewFull({
   onClose,
   onEdit,
   editMeta,
+  onPromote,
+  onCopy,
+  onDelete,
+  onPin,
+  onUnpin,
+  canPin = true,
+  canPromote = true,
 }: ViewFullProps) {
   const handleEdit = () => {
     if (onEdit && editMeta) {
@@ -50,10 +64,63 @@ export function ViewFull({
               <Button variant="secondary" size="sm" onClick={onClose}>
                 Close
               </Button>
+              {onPin && (
+                <Button
+                  size="sm"
+                  onClick={onPin}
+                  disabled={!canPin}
+                  variant={canPin ? "default" : "secondary"}
+                  title={canPin ? "Pin snippet" : "Already pinned"}
+                >
+                  <Pin className="w-3 h-3 mr-1" aria-hidden />
+                  {canPin ? "Pin" : "Pinned"}
+                </Button>
+              )}
+              {onUnpin && (
+                <Button
+                  size="sm"
+                  onClick={onUnpin}
+                  variant="secondary"
+                  title="Unpin snippet"
+                >
+                  <PinOff className="w-3 h-3 mr-1" aria-hidden />
+                  Unpin
+                </Button>
+              )}
+              {onPromote && (
+                <Button
+                  size="sm"
+                  onClick={onPromote}
+                  disabled={!canPromote}
+                  variant={canPromote ? "default" : "secondary"}
+                  title={canPromote ? "Promote to snippet" : "Already promoted"}
+                >
+                  <ArrowUpToLine className="w-3 h-3 mr-1" aria-hidden />
+                  {canPromote ? "Promote" : "Promoted"}
+                </Button>
+              )}
               {onEdit && editMeta && (
-                <Button size="sm" onClick={handleEdit}>
+                <Button size="sm" onClick={handleEdit} title="Edit snippet">
                   <Pencil className="w-3 h-3 mr-1" aria-hidden />
                   Edit
+                </Button>
+              )}
+              {onCopy && (
+                <Button size="sm" variant="secondary" onClick={onCopy} title="Copy full content">
+                  <Copy className="w-3 h-3 mr-1" aria-hidden />
+                  Copy
+                </Button>
+              )}
+              {onDelete && (
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={onDelete}
+                  className="text-[var(--dc-error)]"
+                  title="Delete with confirmation"
+                >
+                  <Trash2 className="w-3 h-3 mr-1" aria-hidden />
+                  Delete
                 </Button>
               )}
             </div>

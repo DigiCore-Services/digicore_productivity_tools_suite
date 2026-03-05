@@ -9,6 +9,8 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 export interface NativeContextMenuAction {
   id: string;
   text: string;
+  icon?: string;
+  enabled?: boolean;
   onClick: () => void;
 }
 
@@ -21,7 +23,8 @@ export async function showNativeContextMenu(
     actions.map((a) =>
       MenuItem.new({
         id: a.id,
-        text: a.text,
+        text: a.icon ? `${a.icon} ${a.text}` : a.text,
+        enabled: a.enabled ?? true,
         action: a.onClick,
       })
     )
