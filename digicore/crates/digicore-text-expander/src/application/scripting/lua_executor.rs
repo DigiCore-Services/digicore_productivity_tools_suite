@@ -5,6 +5,7 @@
 
 use super::config::get_config;
 use std::fs;
+use std::path::Path;
 use std::process::Command;
 
 /// Execute Lua code. Returns stdout or error string.
@@ -21,8 +22,14 @@ pub fn execute_lua(code: &str) -> String {
         cfg.lua.path.trim()
     };
 
+    let mut combined = load_lua_library(&cfg.lua.library_path);
+    if !combined.is_empty() && !combined.ends_with('\n') {
+        combined.push('\n');
+    }
+    combined.push_str(code);
+
     let tmp = std::env::temp_dir().join(format!("digicore_lua_{}.lua", std::process::id()));
-    if fs::write(&tmp, code).is_err() {
+    if fs::write(&tmp, combined).is_err() {
         return "[Lua Error: failed to write temp file]".to_string();
     }
 
@@ -45,4 +52,15 @@ pub fn execute_lua(code: &str) -> String {
         }
         Err(e) => format!("[Lua Error: {}]", e),
     }
+}
+
+fn load_lua_library(path: &str) -> String {
+    if path.trim().is_empty() {
+        return String::new();
+    }
+    let full = dirs::config_dir()
+        .unwrap_or_else(|| Path::new(".").into())
+        .join("DigiCore")
+        .join(path);
+    std::fs::read_to_string(full).unwrap_or_default()
 }

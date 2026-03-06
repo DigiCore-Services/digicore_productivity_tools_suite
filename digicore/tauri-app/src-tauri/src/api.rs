@@ -2,17 +2,25 @@
 
 use crate::{
     app_state_to_dto, AppearanceTransparencyRuleDto, ConfigUpdateDto, ExpansionStatsDto, GhostFollowerStateDto,
-    GhostSuggestorStateDto, SettingsBundlePreviewDto, SettingsImportResultDto, UiPrefsDto,
+    GhostSuggestorStateDto, ScriptingDslConfigDto, ScriptingEngineConfigDto, ScriptingHttpConfigDto,
+    ScriptingDetachedSignatureExportDto, ScriptingLuaConfigDto, ScriptingProfileDiffEntryDto,
+    ScriptingProfileDryRunDto, ScriptingProfileImportResultDto, ScriptingProfilePreviewDto,
+    ScriptingSignerRegistryDto,
+    ScriptingPyConfigDto, SettingsBundlePreviewDto, SettingsImportResultDto, SnippetLogicTestResultDto,
+    UiPrefsDto,
 };
 use digicore_core::domain::Snippet;
 use digicore_text_expander::adapters::storage::JsonFileStorageAdapter;
 use digicore_text_expander::application::clipboard_history::{self, ClipboardHistoryConfig};
 use digicore_text_expander::application::expansion_diagnostics;
+use digicore_text_expander::application::expansion_engine::set_expansion_paused;
 use digicore_text_expander::application::expansion_stats;
 use digicore_text_expander::application::discovery;
 use digicore_text_expander::application::ghost_follower;
 use digicore_text_expander::application::ghost_suggestor;
-use digicore_text_expander::application::scripting::{get_scripting_config, set_global_library};
+use digicore_text_expander::application::scripting::{
+    get_scripting_config, set_global_library, set_scripting_config,
+};
 use digicore_text_expander::application::template_processor::{self, InteractiveVarType};
 use digicore_text_expander::application::variable_input;
 use digicore_text_expander::drivers::hotstring::{
@@ -24,6 +32,10 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
 use tauri::{AppHandle, Emitter, Manager};
+use base64::Engine;
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use rand::RngCore;
+use sha2::{Digest, Sha256};
 #[cfg(target_os = "windows")]
 use windows::core::BOOL;
 #[cfg(target_os = "windows")]
@@ -99,6 +111,17 @@ const SETTINGS_GROUP_CORE: &str = "core";
 const SETTINGS_GROUP_SCRIPT_RUNTIME: &str = "script_runtime";
 const SETTINGS_GROUP_APPEARANCE: &str = "appearance";
 
+const SCRIPTING_PROFILE_GROUP_JAVASCRIPT: &str = "javascript";
+const SCRIPTING_PROFILE_GROUP_PYTHON: &str = "python";
+const SCRIPTING_PROFILE_GROUP_LUA: &str = "lua";
+const SCRIPTING_PROFILE_GROUP_HTTP: &str = "http";
+const SCRIPTING_PROFILE_GROUP_DSL: &str = "dsl";
+const SCRIPTING_PROFILE_GROUP_RUN: &str = "run";
+const SCRIPTING_PROFILE_SCHEMA_V2: &str = "2.0.0";
+const SCRIPTING_PROFILE_SIGN_ALGO: &str = "ed25519-sha256-v1";
+const SCRIPTING_PROFILE_SIGNING_KEY_STORAGE: &str = "scripting_profile_signing_key_b64";
+const SCRIPTING_PROFILE_SIGNER_REGISTRY_STORAGE: &str = "scripting_profile_signer_registry_json";
+
 fn all_settings_groups() -> Vec<&'static str> {
     vec![
         SETTINGS_GROUP_TEMPLATES,
@@ -141,6 +164,502 @@ fn normalized_selected_groups(groups: &[String]) -> Vec<String> {
         }
     }
     out
+}
+
+fn all_scripting_profile_groups() -> Vec<&'static str> {
+    vec![
+        SCRIPTING_PROFILE_GROUP_JAVASCRIPT,
+        SCRIPTING_PROFILE_GROUP_PYTHON,
+        SCRIPTING_PROFILE_GROUP_LUA,
+        SCRIPTING_PROFILE_GROUP_HTTP,
+        SCRIPTING_PROFILE_GROUP_DSL,
+        SCRIPTING_PROFILE_GROUP_RUN,
+    ]
+}
+
+fn normalize_scripting_profile_group(raw: &str) -> Option<&'static str> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "javascript" | "js" => Some(SCRIPTING_PROFILE_GROUP_JAVASCRIPT),
+        "python" | "py" => Some(SCRIPTING_PROFILE_GROUP_PYTHON),
+        "lua" => Some(SCRIPTING_PROFILE_GROUP_LUA),
+        "http" | "weather" | "http_weather" | "http-weather" => Some(SCRIPTING_PROFILE_GROUP_HTTP),
+        "dsl" => Some(SCRIPTING_PROFILE_GROUP_DSL),
+        "run" | "run_security" | "run-security" | "run security" => Some(SCRIPTING_PROFILE_GROUP_RUN),
+        _ => None,
+    }
+}
+
+fn normalized_selected_scripting_profile_groups(groups: &[String]) -> Vec<String> {
+    let mut out = Vec::<String>::new();
+    if groups.is_empty() {
+        return all_scripting_profile_groups()
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+    }
+    for g in groups {
+        if let Some(n) = normalize_scripting_profile_group(g) {
+            if !out.iter().any(|v| v == n) {
+                out.push(n.to_string());
+            }
+        }
+    }
+    out
+}
+
+#[derive(Clone)]
+struct ParsedScriptingProfileBundle {
+    schema_version_used: String,
+    selected_groups: Vec<String>,
+    groups_obj: serde_json::Map<String, serde_json::Value>,
+    warnings: Vec<String>,
+    valid: bool,
+    signed_bundle: bool,
+    signature_valid: bool,
+    migrated_from_schema: Option<String>,
+    signature_key_id: Option<String>,
+    signer_fingerprint: Option<String>,
+    signer_trusted: bool,
+    signer_unknown: bool,
+    trust_on_first_use: bool,
+}
+
+#[derive(Clone, Debug)]
+struct ScriptingSignerRegistryState {
+    allow_unknown_signers: bool,
+    trust_on_first_use: bool,
+    trusted_fingerprints: Vec<String>,
+    blocked_fingerprints: Vec<String>,
+    trusted_first_seen_utc: HashMap<String, String>,
+}
+
+fn normalize_fingerprint(value: &str) -> String {
+    value
+        .trim()
+        .to_ascii_lowercase()
+        .chars()
+        .filter(|c| c.is_ascii_hexdigit())
+        .collect::<String>()
+}
+
+fn load_scripting_signer_registry() -> ScriptingSignerRegistryState {
+    let storage = JsonFileStorageAdapter::load();
+    if let Some(raw) = storage.get(SCRIPTING_PROFILE_SIGNER_REGISTRY_STORAGE) {
+        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&raw) {
+            let allow_unknown_signers = parsed
+                .get("allow_unknown_signers")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
+            let trust_on_first_use = parsed
+                .get("trust_on_first_use")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let trusted_fingerprints = parsed
+                .get("trusted_fingerprints")
+                .and_then(|v| v.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str())
+                        .map(normalize_fingerprint)
+                        .filter(|s| !s.is_empty())
+                        .collect::<Vec<String>>()
+                })
+                .unwrap_or_default();
+            let blocked_fingerprints = parsed
+                .get("blocked_fingerprints")
+                .and_then(|v| v.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str())
+                        .map(normalize_fingerprint)
+                        .filter(|s| !s.is_empty())
+                        .collect::<Vec<String>>()
+                })
+                .unwrap_or_default();
+            let trusted_first_seen_utc = parsed
+                .get("trusted_first_seen_utc")
+                .and_then(|v| v.as_object())
+                .map(|obj| {
+                    obj.iter()
+                        .filter_map(|(k, v)| v.as_str().map(|s| (normalize_fingerprint(k), s.to_string())))
+                        .filter(|(k, _)| !k.is_empty())
+                        .collect::<HashMap<String, String>>()
+                })
+                .unwrap_or_default();
+            return ScriptingSignerRegistryState {
+                allow_unknown_signers,
+                trust_on_first_use,
+                trusted_fingerprints,
+                blocked_fingerprints,
+                trusted_first_seen_utc,
+            };
+        }
+    }
+    ScriptingSignerRegistryState {
+        allow_unknown_signers: true,
+        trust_on_first_use: false,
+        trusted_fingerprints: Vec::new(),
+        blocked_fingerprints: Vec::new(),
+        trusted_first_seen_utc: HashMap::new(),
+    }
+}
+
+fn save_scripting_signer_registry(dto: &ScriptingSignerRegistryState) -> Result<(), String> {
+    let mut storage = JsonFileStorageAdapter::load();
+    let normalized = ScriptingSignerRegistryState {
+        allow_unknown_signers: dto.allow_unknown_signers,
+        trust_on_first_use: dto.trust_on_first_use,
+        trusted_fingerprints: dto
+            .trusted_fingerprints
+            .iter()
+            .map(|s| normalize_fingerprint(s))
+            .filter(|s| !s.is_empty())
+            .collect(),
+        blocked_fingerprints: dto
+            .blocked_fingerprints
+            .iter()
+            .map(|s| normalize_fingerprint(s))
+            .filter(|s| !s.is_empty())
+            .collect(),
+        trusted_first_seen_utc: dto
+            .trusted_first_seen_utc
+            .iter()
+            .map(|(k, v)| (normalize_fingerprint(k), v.clone()))
+            .filter(|(k, _)| !k.is_empty())
+            .collect(),
+    };
+    let serialized = serde_json::to_string(&serde_json::json!({
+        "allow_unknown_signers": normalized.allow_unknown_signers,
+        "trust_on_first_use": normalized.trust_on_first_use,
+        "trusted_fingerprints": normalized.trusted_fingerprints,
+        "blocked_fingerprints": normalized.blocked_fingerprints,
+        "trusted_first_seen_utc": normalized.trusted_first_seen_utc
+    }))
+    .map_err(|e| e.to_string())?;
+    storage.set(SCRIPTING_PROFILE_SIGNER_REGISTRY_STORAGE, &serialized);
+    storage
+        .persist_if_safe()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+fn upsert_trust_on_first_use_signer(signer_fingerprint: &str, source: &str) -> Result<bool, String> {
+    let signer = normalize_fingerprint(signer_fingerprint);
+    if signer.is_empty() {
+        return Ok(false);
+    }
+    let mut state = load_scripting_signer_registry();
+    if !state.trust_on_first_use {
+        return Ok(false);
+    }
+    if state.blocked_fingerprints.iter().any(|v| v == &signer) {
+        return Ok(false);
+    }
+    if state.trusted_fingerprints.iter().any(|v| v == &signer) {
+        return Ok(false);
+    }
+    state.trusted_fingerprints.push(signer.clone());
+    state
+        .trusted_first_seen_utc
+        .entry(signer.clone())
+        .or_insert_with(now_unix_secs_string);
+    save_scripting_signer_registry(&state)?;
+    diag_log(
+        "info",
+        format!(
+            "[ScriptingSignerTOFU][AUDIT] First trust established signer={} at={} source={}",
+            signer,
+            state
+                .trusted_first_seen_utc
+                .get(&signer)
+                .cloned()
+                .unwrap_or_else(now_unix_secs_string),
+            source
+        ),
+    );
+    Ok(true)
+}
+
+fn now_unix_secs_string() -> String {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs().to_string())
+        .unwrap_or_else(|_| "0".to_string())
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    let digest = hasher.finalize();
+    let mut out = String::with_capacity(digest.len() * 2);
+    for b in digest {
+        out.push_str(&format!("{:02x}", b));
+    }
+    out
+}
+
+fn summarize_for_diff(value: &str) -> String {
+    let clean = value.replace('\r', "");
+    let max = 140usize;
+    if clean.len() <= max {
+        return clean;
+    }
+    format!("{}... (len={})", &clean[..max], clean.len())
+}
+
+fn get_or_create_scripting_profile_signing_key() -> Result<SigningKey, String> {
+    let mut storage = JsonFileStorageAdapter::load();
+    if let Some(existing) = storage.get(SCRIPTING_PROFILE_SIGNING_KEY_STORAGE) {
+        let raw = base64::engine::general_purpose::STANDARD
+            .decode(existing.as_bytes())
+            .map_err(|e| e.to_string())?;
+        let key_bytes: [u8; 32] = raw
+            .as_slice()
+            .try_into()
+            .map_err(|_| "Invalid signing key length in storage.".to_string())?;
+        return Ok(SigningKey::from_bytes(&key_bytes));
+    }
+
+    let mut key_bytes = [0u8; 32];
+    rand::rngs::OsRng.fill_bytes(&mut key_bytes);
+    let encoded = base64::engine::general_purpose::STANDARD.encode(key_bytes);
+    storage.set(SCRIPTING_PROFILE_SIGNING_KEY_STORAGE, &encoded);
+    storage
+        .persist_if_safe()
+        .map_err(|e| format!("Failed to persist scripting profile signing key: {e}"))?;
+    Ok(SigningKey::from_bytes(&key_bytes))
+}
+
+fn verify_scripting_profile_signature(
+    selected_groups: &[String],
+    groups_obj: &serde_json::Map<String, serde_json::Value>,
+    integrity: &serde_json::Map<String, serde_json::Value>,
+) -> Result<(bool, String, String, Option<String>), String> {
+    let algorithm = integrity
+        .get("algorithm")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+    if algorithm != SCRIPTING_PROFILE_SIGN_ALGO {
+        return Err(format!(
+            "Unsupported scripting profile signature algorithm '{algorithm}'."
+        ));
+    }
+    let public_key_b64 = integrity
+        .get("public_key_b64")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Missing integrity.public_key_b64".to_string())?;
+    let signature_b64 = integrity
+        .get("signature_b64")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Missing integrity.signature_b64".to_string())?;
+    let key_id = integrity
+        .get("key_id")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let payload_sha256 = integrity
+        .get("payload_sha256")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Missing integrity.payload_sha256".to_string())?;
+
+    let sign_payload = serde_json::json!({
+        "schema_version": SCRIPTING_PROFILE_SCHEMA_V2,
+        "selected_groups": selected_groups,
+        "groups": groups_obj
+    });
+    let sign_bytes = serde_json::to_vec(&sign_payload).map_err(|e| e.to_string())?;
+    let computed_hash = sha256_hex(&sign_bytes);
+    if computed_hash != payload_sha256 {
+        return Ok((
+            false,
+            computed_hash,
+            "hash-mismatch".to_string(),
+            key_id,
+        ));
+    }
+
+    let pk_bytes = base64::engine::general_purpose::STANDARD
+        .decode(public_key_b64.as_bytes())
+        .map_err(|e| e.to_string())?;
+    let pk_arr: [u8; 32] = pk_bytes
+        .as_slice()
+        .try_into()
+        .map_err(|_| "Invalid integrity public key length.".to_string())?;
+    let verifying_key = VerifyingKey::from_bytes(&pk_arr).map_err(|e| e.to_string())?;
+    let signer_fingerprint = sha256_hex(&verifying_key.to_bytes());
+    if let Some(expected_key_id) = key_id.as_deref() {
+        let actual_key_id = signer_fingerprint
+            .chars()
+            .take(16)
+            .collect::<String>();
+        if expected_key_id.trim().to_ascii_lowercase() != actual_key_id {
+            return Ok((false, computed_hash, signer_fingerprint, key_id));
+        }
+    }
+
+    let sig_bytes = base64::engine::general_purpose::STANDARD
+        .decode(signature_b64.as_bytes())
+        .map_err(|e| e.to_string())?;
+    let sig_arr: [u8; 64] = sig_bytes
+        .as_slice()
+        .try_into()
+        .map_err(|_| "Invalid integrity signature length.".to_string())?;
+    let signature = Signature::from_bytes(&sig_arr);
+    Ok((
+        verifying_key.verify(&sign_bytes, &signature).is_ok(),
+        computed_hash,
+        signer_fingerprint,
+        key_id,
+    ))
+}
+
+fn parse_scripting_profile_bundle(
+    path: &str,
+) -> Result<ParsedScriptingProfileBundle, String> {
+    let raw = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let root: serde_json::Value = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+
+    let schema = root
+        .get("schema_version")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+
+    let mut warnings = Vec::new();
+    let mut valid = true;
+    let mut signed_bundle = false;
+    let mut signature_valid = false;
+    let mut migrated_from_schema = None;
+    let mut signature_key_id: Option<String> = None;
+    let mut signer_fingerprint: Option<String> = None;
+
+    let groups_obj = root
+        .get("groups")
+        .and_then(|v| v.as_object())
+        .ok_or_else(|| "Missing or invalid 'groups' object.".to_string())?
+        .clone();
+
+    let mut selected_groups = root
+        .get("selected_groups")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect::<Vec<String>>()
+        })
+        .unwrap_or_default();
+    if selected_groups.is_empty() {
+        selected_groups = groups_obj.keys().cloned().collect();
+    }
+
+    if schema.starts_with("1.") {
+        migrated_from_schema = Some(schema.clone());
+        warnings.push(format!(
+            "Legacy profile schema '{schema}' detected; auto-migrated to {SCRIPTING_PROFILE_SCHEMA_V2} compatibility mode."
+        ));
+        warnings.push(
+            "Legacy 1.x profile is unsigned. Signature verification unavailable for this file."
+                .to_string(),
+        );
+    } else if schema == SCRIPTING_PROFILE_SCHEMA_V2 {
+        match root.get("integrity").and_then(|v| v.as_object()) {
+            Some(integrity) => {
+                signed_bundle = true;
+                match verify_scripting_profile_signature(&selected_groups, &groups_obj, integrity) {
+                    Ok((ok, computed_hash, signer_fp, key_id)) => {
+                        signature_valid = ok;
+                        signer_fingerprint = Some(signer_fp);
+                        signature_key_id = key_id;
+                        if !ok {
+                            valid = false;
+                            warnings.push(
+                                "Signature verification failed or payload hash mismatch."
+                                    .to_string(),
+                            );
+                            warnings.push(format!("Computed payload_sha256={computed_hash}"));
+                        }
+                    }
+                    Err(err) => {
+                        valid = false;
+                        warnings.push(format!("Signature verification error: {err}"));
+                    }
+                }
+            }
+            None => {
+                valid = false;
+                warnings.push("Missing integrity block for schema 2.0.0 profile.".to_string());
+            }
+        }
+    } else {
+        valid = false;
+        warnings.push(format!(
+            "Unsupported schema_version '{schema}'. Expected 1.x or {SCRIPTING_PROFILE_SCHEMA_V2}."
+        ));
+    }
+
+    for key in groups_obj.keys() {
+        if normalize_scripting_profile_group(key).is_none() {
+            warnings.push(format!("Unknown group '{key}' will be ignored."));
+        }
+    }
+
+    let mut signer_trusted = false;
+    let mut signer_unknown = false;
+    let mut trust_on_first_use = false;
+    if signed_bundle && signature_valid {
+        let registry = load_scripting_signer_registry();
+        trust_on_first_use = registry.trust_on_first_use;
+        if let Some(fp) = signer_fingerprint.as_ref().map(|s| normalize_fingerprint(s)) {
+            let is_blocked = registry.blocked_fingerprints.iter().any(|v| v == &fp);
+            let is_trusted = registry.trusted_fingerprints.iter().any(|v| v == &fp);
+            signer_trusted = is_trusted;
+            if is_blocked {
+                valid = false;
+                warnings.push(format!(
+                    "Signer fingerprint '{}' is blocked by local trust policy.",
+                    fp
+                ));
+            } else if !is_trusted {
+                signer_unknown = true;
+                if !registry.allow_unknown_signers && !registry.trust_on_first_use {
+                    valid = false;
+                    warnings.push(format!(
+                        "Signer fingerprint '{}' is unknown and unknown signers are not allowed.",
+                        fp
+                    ));
+                } else if registry.trust_on_first_use {
+                    warnings.push(format!(
+                        "Signer fingerprint '{}' is unknown. TOFU is enabled and can auto-trust this signer on first verified use.",
+                        fp
+                    ));
+                } else {
+                    warnings.push(format!(
+                        "Signer fingerprint '{}' is unknown. Add to trusted registry if this source is expected.",
+                        fp
+                    ));
+                }
+            }
+        }
+    }
+
+    Ok(ParsedScriptingProfileBundle {
+        schema_version_used: if schema.starts_with("1.") {
+            SCRIPTING_PROFILE_SCHEMA_V2.to_string()
+        } else {
+            schema
+        },
+        selected_groups,
+        groups_obj,
+        warnings,
+        valid,
+        signed_bundle,
+        signature_valid,
+        migrated_from_schema,
+        signature_key_id,
+        signer_fingerprint,
+        signer_trusted,
+        signer_unknown,
+        trust_on_first_use,
+    })
 }
 
 fn diag_log(level: &str, message: impl Into<String>) {
@@ -418,6 +937,12 @@ fn persist_settings_to_storage(state: &AppState) -> Result<(), String> {
     storage.persist().map_err(|e| e.to_string())
 }
 
+/// Persist only settings from current shared AppState.
+pub fn persist_settings_for_state(state: &Arc<Mutex<AppState>>) -> Result<(), String> {
+    let guard = state.lock().map_err(|e| e.to_string())?;
+    persist_settings_to_storage(&*guard)
+}
+
 /// Saves settings and library to disk. Call on app exit to persist unsaved changes.
 pub fn save_all_on_exit(state: &Arc<Mutex<AppState>>) {
     if let Ok(mut guard) = state.lock() {
@@ -455,6 +980,12 @@ pub trait Api {
     async fn copy_to_clipboard(text: String) -> Result<(), String>;
     async fn get_script_library_js() -> Result<String, String>;
     async fn save_script_library_js(content: String) -> Result<(), String>;
+    async fn get_script_library_py() -> Result<String, String>;
+    async fn save_script_library_py(content: String) -> Result<(), String>;
+    async fn get_script_library_lua() -> Result<String, String>;
+    async fn save_script_library_lua(content: String) -> Result<(), String>;
+    async fn get_scripting_engine_config() -> Result<ScriptingEngineConfigDto, String>;
+    async fn save_scripting_engine_config(config: ScriptingEngineConfigDto) -> Result<(), String>;
     async fn get_appearance_transparency_rules() -> Result<Vec<AppearanceTransparencyRuleDto>, String>;
     async fn get_running_process_names() -> Result<Vec<String>, String>;
     async fn export_settings_bundle_to_file(
@@ -468,6 +999,22 @@ pub trait Api {
         path: String,
         selected_groups: Vec<String>,
     ) -> Result<SettingsImportResultDto, String>;
+    async fn export_scripting_profile_to_file(path: String, selected_groups: Vec<String>) -> Result<u32, String>;
+    async fn export_scripting_profile_with_detached_signature_to_file(
+        path: String,
+        selected_groups: Vec<String>,
+    ) -> Result<ScriptingDetachedSignatureExportDto, String>;
+    async fn preview_scripting_profile_from_file(path: String) -> Result<ScriptingProfilePreviewDto, String>;
+    async fn dry_run_import_scripting_profile_from_file(
+        path: String,
+        selected_groups: Vec<String>,
+    ) -> Result<ScriptingProfileDryRunDto, String>;
+    async fn import_scripting_profile_from_file(
+        path: String,
+        selected_groups: Vec<String>,
+    ) -> Result<ScriptingProfileImportResultDto, String>;
+    async fn get_scripting_signer_registry() -> Result<ScriptingSignerRegistryDto, String>;
+    async fn save_scripting_signer_registry(registry: ScriptingSignerRegistryDto) -> Result<(), String>;
     async fn save_appearance_transparency_rule(app_process: String, opacity: u32, enabled: bool) -> Result<(), String>;
     async fn delete_appearance_transparency_rule(app_process: String) -> Result<(), String>;
     async fn apply_appearance_transparency_now(app_process: String, opacity: u32) -> Result<u32, String>;
@@ -503,6 +1050,15 @@ pub trait Api {
     async fn reset_expansion_stats() -> Result<(), String>;
     async fn get_diagnostic_logs() -> Result<Vec<DiagnosticEntryDto>, String>;
     async fn clear_diagnostic_logs() -> Result<(), String>;
+    async fn test_snippet_logic(
+        content: String,
+        user_values: Option<HashMap<String, String>>,
+    ) -> Result<SnippetLogicTestResultDto, String>;
+    async fn get_weather_location_suggestions(
+        city_query: String,
+        country: Option<String>,
+        region: Option<String>,
+    ) -> Result<Vec<String>, String>;
 }
 
 #[derive(Clone)]
@@ -770,6 +1326,7 @@ impl Api for ApiImpl {
             follower_hover_preview: guard.ghost_follower_hover_preview,
             follower_collapse_delay_secs: guard.ghost_follower_collapse_delay_secs,
         });
+        set_expansion_paused(guard.expansion_paused);
         let _ = get_app(&self.app_handle).emit("ghost-follower-update", ());
         Ok(())
     }
@@ -839,6 +1396,855 @@ function greet(name) { return "Hello, " + name + "!"; }
         }
         std::fs::write(&lib_path, &content).map_err(|e| e.to_string())?;
         set_global_library(content);
+        diag_log(
+            "info",
+            format!("[Scripting][JavaScript] Saved global library to {}", lib_path.display()),
+        );
+        Ok(())
+    }
+
+    async fn get_script_library_py(self) -> Result<String, String> {
+        let cfg = get_scripting_config();
+        let base = dirs::config_dir()
+            .unwrap_or_else(|| Path::new(".").into())
+            .join("DigiCore");
+        let lib_path = base.join(&cfg.py.library_path);
+        Ok(std::fs::read_to_string(&lib_path).unwrap_or_else(|_| {
+            r#"# DigiCore Global Python Library
+def py_greet(name: str) -> str:
+    return f"Hello, {name}!"
+"#
+            .to_string()
+        }))
+    }
+
+    async fn save_script_library_py(self, content: String) -> Result<(), String> {
+        let cfg = get_scripting_config();
+        let base = dirs::config_dir()
+            .unwrap_or_else(|| Path::new(".").into())
+            .join("DigiCore");
+        let lib_path = base.join(&cfg.py.library_path);
+        if let Some(parent) = lib_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        std::fs::write(&lib_path, &content).map_err(|e| e.to_string())?;
+        diag_log(
+            "info",
+            format!("[Scripting][Python] Saved global library to {}", lib_path.display()),
+        );
+        Ok(())
+    }
+
+    async fn get_script_library_lua(self) -> Result<String, String> {
+        let cfg = get_scripting_config();
+        let base = dirs::config_dir()
+            .unwrap_or_else(|| Path::new(".").into())
+            .join("DigiCore");
+        let lib_path = base.join(&cfg.lua.library_path);
+        Ok(std::fs::read_to_string(&lib_path).unwrap_or_else(|_| {
+            r#"-- DigiCore Global Lua Library
+function lua_greet(name)
+  return "Hello, " .. tostring(name) .. "!"
+end
+"#
+            .to_string()
+        }))
+    }
+
+    async fn save_script_library_lua(self, content: String) -> Result<(), String> {
+        let cfg = get_scripting_config();
+        let base = dirs::config_dir()
+            .unwrap_or_else(|| Path::new(".").into())
+            .join("DigiCore");
+        let lib_path = base.join(&cfg.lua.library_path);
+        if let Some(parent) = lib_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        std::fs::write(&lib_path, &content).map_err(|e| e.to_string())?;
+        diag_log(
+            "info",
+            format!("[Scripting][Lua] Saved global library to {}", lib_path.display()),
+        );
+        Ok(())
+    }
+
+    async fn get_scripting_engine_config(self) -> Result<ScriptingEngineConfigDto, String> {
+        let cfg = get_scripting_config();
+        Ok(ScriptingEngineConfigDto {
+            dsl: ScriptingDslConfigDto {
+                enabled: cfg.dsl.enabled,
+            },
+            http: ScriptingHttpConfigDto {
+                timeout_secs: cfg.http.timeout_secs as u32,
+                retry_count: cfg.http.retry_count,
+                retry_delay_ms: cfg.http.retry_delay_ms as u32,
+                use_async: cfg.http.use_async,
+            },
+            py: ScriptingPyConfigDto {
+                enabled: cfg.py.enabled,
+                path: cfg.py.path,
+                library_path: cfg.py.library_path,
+            },
+            lua: ScriptingLuaConfigDto {
+                enabled: cfg.lua.enabled,
+                path: cfg.lua.path,
+                library_path: cfg.lua.library_path,
+            },
+        })
+    }
+
+    async fn save_scripting_engine_config(self, config: ScriptingEngineConfigDto) -> Result<(), String> {
+        let mut cfg = get_scripting_config();
+        cfg.dsl.enabled = config.dsl.enabled;
+        let timeout_clamped = config.http.timeout_secs.clamp(1, 60);
+        let retry_count_clamped = config.http.retry_count.min(10);
+        let retry_delay_clamped = config.http.retry_delay_ms.clamp(50, 20_000);
+        cfg.http.timeout_secs = timeout_clamped as u64;
+        cfg.http.retry_count = retry_count_clamped;
+        cfg.http.retry_delay_ms = retry_delay_clamped as u64;
+        cfg.http.use_async = config.http.use_async;
+
+        cfg.py.enabled = config.py.enabled;
+        cfg.py.path = config.py.path.trim().to_string();
+        if !config.py.library_path.trim().is_empty() {
+            cfg.py.library_path = config.py.library_path.trim().to_string();
+        }
+
+        cfg.lua.enabled = config.lua.enabled;
+        cfg.lua.path = config.lua.path.trim().to_string();
+        if !config.lua.library_path.trim().is_empty() {
+            cfg.lua.library_path = config.lua.library_path.trim().to_string();
+        }
+
+        set_scripting_config(cfg);
+        if timeout_clamped != config.http.timeout_secs
+            || retry_count_clamped != config.http.retry_count
+            || retry_delay_clamped != config.http.retry_delay_ms
+        {
+            diag_log(
+                "warn",
+                format!(
+                    "[Scripting][HTTP] Clamped settings timeout={} retry_count={} retry_delay_ms={}",
+                    timeout_clamped, retry_count_clamped, retry_delay_clamped
+                ),
+            );
+        }
+        diag_log(
+            "info",
+            format!(
+                "[Scripting][Config] Saved dsl_enabled={} http_async={} py_enabled={} lua_enabled={}",
+                config.dsl.enabled, config.http.use_async, config.py.enabled, config.lua.enabled
+            ),
+        );
+        Ok(())
+    }
+
+    async fn export_scripting_profile_to_file(
+        self,
+        path: String,
+        selected_groups: Vec<String>,
+    ) -> Result<u32, String> {
+        let groups = normalized_selected_scripting_profile_groups(&selected_groups);
+        if groups.is_empty() {
+            return Err("No valid scripting profile groups selected for export.".to_string());
+        }
+
+        let js_library = self.clone().get_script_library_js().await?;
+        let py_library = self.clone().get_script_library_py().await?;
+        let lua_library = self.clone().get_script_library_lua().await?;
+        let cfg = get_scripting_config();
+        let guard = self.state.lock().map_err(|e| e.to_string())?;
+
+        let mut groups_obj = serde_json::Map::new();
+        for group in &groups {
+            match group.as_str() {
+                SCRIPTING_PROFILE_GROUP_JAVASCRIPT => {
+                    groups_obj.insert(group.clone(), serde_json::json!({ "library": js_library }));
+                }
+                SCRIPTING_PROFILE_GROUP_PYTHON => {
+                    groups_obj.insert(
+                        group.clone(),
+                        serde_json::json!({
+                            "library": py_library,
+                            "enabled": cfg.py.enabled,
+                            "path": cfg.py.path,
+                            "library_path": cfg.py.library_path
+                        }),
+                    );
+                }
+                SCRIPTING_PROFILE_GROUP_LUA => {
+                    groups_obj.insert(
+                        group.clone(),
+                        serde_json::json!({
+                            "library": lua_library,
+                            "enabled": cfg.lua.enabled,
+                            "path": cfg.lua.path,
+                            "library_path": cfg.lua.library_path
+                        }),
+                    );
+                }
+                SCRIPTING_PROFILE_GROUP_HTTP => {
+                    groups_obj.insert(
+                        group.clone(),
+                        serde_json::json!({
+                            "timeout_secs": cfg.http.timeout_secs.clamp(1, 60) as u32,
+                            "retry_count": cfg.http.retry_count.min(10),
+                            "retry_delay_ms": cfg.http.retry_delay_ms.clamp(50, 20_000) as u32,
+                            "use_async": cfg.http.use_async
+                        }),
+                    );
+                }
+                SCRIPTING_PROFILE_GROUP_DSL => {
+                    groups_obj.insert(
+                        group.clone(),
+                        serde_json::json!({
+                            "enabled": cfg.dsl.enabled
+                        }),
+                    );
+                }
+                SCRIPTING_PROFILE_GROUP_RUN => {
+                    groups_obj.insert(
+                        group.clone(),
+                        serde_json::json!({
+                            "script_library_run_disabled": guard.script_library_run_disabled,
+                            "script_library_run_allowlist": guard.script_library_run_allowlist
+                        }),
+                    );
+                }
+                _ => {}
+            }
+        }
+
+        let sign_payload = serde_json::json!({
+            "schema_version": SCRIPTING_PROFILE_SCHEMA_V2,
+            "selected_groups": groups,
+            "groups": groups_obj
+        });
+        let sign_bytes = serde_json::to_vec(&sign_payload).map_err(|e| e.to_string())?;
+        let payload_sha256 = sha256_hex(&sign_bytes);
+
+        let signing_key = get_or_create_scripting_profile_signing_key()?;
+        let verifying_key = signing_key.verifying_key();
+        let signer_fingerprint = sha256_hex(&verifying_key.to_bytes());
+        let signature = signing_key.sign(&sign_bytes);
+        let key_id = {
+            signer_fingerprint.chars().take(16).collect::<String>()
+        };
+
+        let payload = serde_json::json!({
+            "schema_version": SCRIPTING_PROFILE_SCHEMA_V2,
+            "exported_at_utc": now_unix_secs_string(),
+            "app": {
+                "name": "DigiCore Text Expander",
+                "format": "scripting-engine-profile"
+            },
+            "selected_groups": groups,
+            "groups": groups_obj,
+            "integrity": {
+                "algorithm": SCRIPTING_PROFILE_SIGN_ALGO,
+                "key_id": key_id,
+                "public_key_b64": base64::engine::general_purpose::STANDARD.encode(verifying_key.to_bytes()),
+                "signer_fingerprint": signer_fingerprint,
+                "payload_sha256": payload_sha256,
+                "signature_b64": base64::engine::general_purpose::STANDARD.encode(signature.to_bytes())
+            }
+        });
+
+        let serialized = serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?;
+        std::fs::write(&path, serialized).map_err(|e| e.to_string())?;
+        diag_log(
+            "info",
+            format!(
+                "[ScriptingProfileExport] Wrote scripting engine profile to {}",
+                path
+            ),
+        );
+        Ok(payload["selected_groups"]
+            .as_array()
+            .map(|a| a.len() as u32)
+            .unwrap_or(0))
+    }
+
+    async fn export_scripting_profile_with_detached_signature_to_file(
+        self,
+        path: String,
+        selected_groups: Vec<String>,
+    ) -> Result<ScriptingDetachedSignatureExportDto, String> {
+        self.clone()
+            .export_scripting_profile_to_file(path.clone(), selected_groups)
+            .await?;
+
+        let raw = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+        let root: serde_json::Value = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+        let integrity = root
+            .get("integrity")
+            .and_then(|v| v.as_object())
+            .ok_or_else(|| "Exported profile missing integrity block.".to_string())?;
+
+        let key_id = integrity
+            .get("key_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+        let signer_fingerprint = integrity
+            .get("signer_fingerprint")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+        let payload_sha256 = integrity
+            .get("payload_sha256")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+        let signature_path = if path.to_ascii_lowercase().ends_with(".json") {
+            format!("{}.sig.json", &path[..path.len() - 5])
+        } else {
+            format!("{path}.sig.json")
+        };
+
+        let detached = serde_json::json!({
+            "schema_version": SCRIPTING_PROFILE_SCHEMA_V2,
+            "format": "scripting-engine-profile-detached-signature",
+            "profile_path": path,
+            "exported_at_utc": now_unix_secs_string(),
+            "integrity": integrity
+        });
+        std::fs::write(
+            &signature_path,
+            serde_json::to_string_pretty(&detached).map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?;
+
+        diag_log(
+            "info",
+            format!(
+                "[ScriptingProfileExport] Wrote detached signature to {}",
+                signature_path
+            ),
+        );
+        Ok(ScriptingDetachedSignatureExportDto {
+            profile_path: path,
+            signature_path,
+            key_id,
+            signer_fingerprint,
+            payload_sha256,
+        })
+    }
+
+    async fn preview_scripting_profile_from_file(
+        self,
+        path: String,
+    ) -> Result<ScriptingProfilePreviewDto, String> {
+        let mut parsed = parse_scripting_profile_bundle(&path)?;
+        if parsed.signer_unknown && parsed.trust_on_first_use && parsed.valid {
+            if let Some(fp) = parsed.signer_fingerprint.clone() {
+                if upsert_trust_on_first_use_signer(&fp, "preview")? {
+                    parsed.signer_trusted = true;
+                    parsed.warnings.push(format!(
+                        "TOFU auto-trusted signer '{}' on preview.",
+                        normalize_fingerprint(&fp)
+                    ));
+                }
+            }
+        }
+        let available_groups = parsed.groups_obj.keys().cloned().collect::<Vec<String>>();
+        if parsed.warnings.is_empty() {
+            diag_log(
+                "info",
+                format!(
+                    "[ScriptingProfilePreview] OK path={} groups={}",
+                    path,
+                    available_groups.len()
+                ),
+            );
+        } else {
+            diag_log(
+                "warn",
+                format!(
+                    "[ScriptingProfilePreview] path={} warnings={}",
+                    path,
+                    parsed.warnings.join("; ")
+                ),
+            );
+        }
+
+        Ok(ScriptingProfilePreviewDto {
+            path,
+            schema_version: parsed.schema_version_used,
+            available_groups,
+            warnings: parsed.warnings,
+            valid: parsed.valid,
+            signed_bundle: parsed.signed_bundle,
+            signature_valid: parsed.signature_valid,
+            migrated_from_schema: parsed.migrated_from_schema,
+            signature_key_id: parsed.signature_key_id,
+            signer_fingerprint: parsed.signer_fingerprint.clone(),
+            signer_trusted: parsed.signer_trusted,
+        })
+    }
+
+    async fn dry_run_import_scripting_profile_from_file(
+        self,
+        path: String,
+        selected_groups: Vec<String>,
+    ) -> Result<ScriptingProfileDryRunDto, String> {
+        let mut parsed = parse_scripting_profile_bundle(&path)?;
+        if parsed.signer_unknown && parsed.trust_on_first_use && parsed.valid {
+            if let Some(fp) = parsed.signer_fingerprint.clone() {
+                if upsert_trust_on_first_use_signer(&fp, "dry-run")? {
+                    parsed.signer_trusted = true;
+                    parsed.warnings.push(format!(
+                        "TOFU auto-trusted signer '{}' during dry-run.",
+                        normalize_fingerprint(&fp)
+                    ));
+                }
+            }
+        }
+        let selected = if selected_groups.is_empty() {
+            normalized_selected_scripting_profile_groups(&parsed.selected_groups)
+        } else {
+            normalized_selected_scripting_profile_groups(&selected_groups)
+        };
+
+        if !parsed.valid {
+            return Ok(ScriptingProfileDryRunDto {
+                path,
+                selected_groups: selected,
+                changed_groups: Vec::new(),
+                estimated_updates: 0,
+                warnings: parsed.warnings,
+                diff_entries: Vec::new(),
+                schema_version_used: parsed.schema_version_used,
+                signature_valid: parsed.signature_valid,
+                migrated_from_schema: parsed.migrated_from_schema,
+                signer_fingerprint: parsed.signer_fingerprint,
+                signer_trusted: parsed.signer_trusted,
+            });
+        }
+
+        let current_js = self.clone().get_script_library_js().await?;
+        let current_py = self.clone().get_script_library_py().await?;
+        let current_lua = self.clone().get_script_library_lua().await?;
+        let cfg = get_scripting_config();
+        let guard = self.state.lock().map_err(|e| e.to_string())?;
+
+        let mut changed = std::collections::BTreeSet::new();
+        let mut diff_entries = Vec::<ScriptingProfileDiffEntryDto>::new();
+        let mut warnings = parsed.warnings.clone();
+
+        let mut push_diff = |group: &str, field: &str, current: String, incoming: String| {
+            if current != incoming {
+                changed.insert(group.to_string());
+                diff_entries.push(ScriptingProfileDiffEntryDto {
+                    group: group.to_string(),
+                    field: field.to_string(),
+                    current_value: summarize_for_diff(&current),
+                    incoming_value: summarize_for_diff(&incoming),
+                });
+            }
+        };
+
+        for group in &selected {
+            let Some(value) = parsed.groups_obj.get(group) else {
+                warnings.push(format!("Group '{group}' not present in profile."));
+                continue;
+            };
+            let Some(obj) = value.as_object() else {
+                warnings.push(format!("Group '{group}' has invalid payload type."));
+                continue;
+            };
+            match group.as_str() {
+                SCRIPTING_PROFILE_GROUP_JAVASCRIPT => {
+                    if let Some(library) = obj.get("library").and_then(|v| v.as_str()) {
+                        push_diff(group, "library", current_js.clone(), library.to_string());
+                    }
+                }
+                SCRIPTING_PROFILE_GROUP_PYTHON => {
+                    if let Some(library) = obj.get("library").and_then(|v| v.as_str()) {
+                        push_diff(group, "library", current_py.clone(), library.to_string());
+                    }
+                    if let Some(enabled) = obj.get("enabled").and_then(|v| v.as_bool()) {
+                        push_diff(group, "enabled", cfg.py.enabled.to_string(), enabled.to_string());
+                    }
+                    if let Some(path) = obj.get("path").and_then(|v| v.as_str()) {
+                        push_diff(group, "path", cfg.py.path.clone(), path.to_string());
+                    }
+                    if let Some(path) = obj.get("library_path").and_then(|v| v.as_str()) {
+                        push_diff(
+                            group,
+                            "library_path",
+                            cfg.py.library_path.clone(),
+                            path.to_string(),
+                        );
+                    }
+                }
+                SCRIPTING_PROFILE_GROUP_LUA => {
+                    if let Some(library) = obj.get("library").and_then(|v| v.as_str()) {
+                        push_diff(group, "library", current_lua.clone(), library.to_string());
+                    }
+                    if let Some(enabled) = obj.get("enabled").and_then(|v| v.as_bool()) {
+                        push_diff(group, "enabled", cfg.lua.enabled.to_string(), enabled.to_string());
+                    }
+                    if let Some(path) = obj.get("path").and_then(|v| v.as_str()) {
+                        push_diff(group, "path", cfg.lua.path.clone(), path.to_string());
+                    }
+                    if let Some(path) = obj.get("library_path").and_then(|v| v.as_str()) {
+                        push_diff(
+                            group,
+                            "library_path",
+                            cfg.lua.library_path.clone(),
+                            path.to_string(),
+                        );
+                    }
+                }
+                SCRIPTING_PROFILE_GROUP_HTTP => {
+                    if let Some(timeout) = obj.get("timeout_secs").and_then(|v| v.as_u64()) {
+                        push_diff(
+                            group,
+                            "timeout_secs",
+                            cfg.http.timeout_secs.clamp(1, 60).to_string(),
+                            timeout.clamp(1, 60).to_string(),
+                        );
+                    }
+                    if let Some(retry) = obj.get("retry_count").and_then(|v| v.as_u64()) {
+                        push_diff(
+                            group,
+                            "retry_count",
+                            cfg.http.retry_count.min(10).to_string(),
+                            (retry as u32).min(10).to_string(),
+                        );
+                    }
+                    if let Some(delay) = obj.get("retry_delay_ms").and_then(|v| v.as_u64()) {
+                        push_diff(
+                            group,
+                            "retry_delay_ms",
+                            cfg.http.retry_delay_ms.clamp(50, 20_000).to_string(),
+                            delay.clamp(50, 20_000).to_string(),
+                        );
+                    }
+                    if let Some(use_async) = obj.get("use_async").and_then(|v| v.as_bool()) {
+                        push_diff(
+                            group,
+                            "use_async",
+                            cfg.http.use_async.to_string(),
+                            use_async.to_string(),
+                        );
+                    }
+                }
+                SCRIPTING_PROFILE_GROUP_DSL => {
+                    if let Some(enabled) = obj.get("enabled").and_then(|v| v.as_bool()) {
+                        push_diff(group, "enabled", cfg.dsl.enabled.to_string(), enabled.to_string());
+                    }
+                }
+                SCRIPTING_PROFILE_GROUP_RUN => {
+                    if let Some(disabled) = obj
+                        .get("script_library_run_disabled")
+                        .and_then(|v| v.as_bool())
+                    {
+                        push_diff(
+                            group,
+                            "script_library_run_disabled",
+                            guard.script_library_run_disabled.to_string(),
+                            disabled.to_string(),
+                        );
+                    }
+                    if let Some(allowlist) = obj
+                        .get("script_library_run_allowlist")
+                        .and_then(|v| v.as_str())
+                    {
+                        push_diff(
+                            group,
+                            "script_library_run_allowlist",
+                            guard.script_library_run_allowlist.clone(),
+                            allowlist.to_string(),
+                        );
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        Ok(ScriptingProfileDryRunDto {
+            path,
+            selected_groups: selected,
+            changed_groups: changed.into_iter().collect(),
+            estimated_updates: diff_entries.len() as u32,
+            warnings,
+            diff_entries,
+            schema_version_used: parsed.schema_version_used,
+            signature_valid: parsed.signature_valid,
+            migrated_from_schema: parsed.migrated_from_schema,
+            signer_fingerprint: parsed.signer_fingerprint.clone(),
+            signer_trusted: parsed.signer_trusted,
+        })
+    }
+
+    async fn import_scripting_profile_from_file(
+        self,
+        path: String,
+        selected_groups: Vec<String>,
+    ) -> Result<ScriptingProfileImportResultDto, String> {
+        let mut parsed = parse_scripting_profile_bundle(&path)?;
+        if parsed.signer_unknown && parsed.trust_on_first_use && parsed.valid {
+            if let Some(fp) = parsed.signer_fingerprint.clone() {
+                if upsert_trust_on_first_use_signer(&fp, "import")? {
+                    parsed.signer_trusted = true;
+                    parsed.warnings.push(format!(
+                        "TOFU auto-trusted signer '{}' on import.",
+                        normalize_fingerprint(&fp)
+                    ));
+                }
+            }
+        }
+        if !parsed.valid {
+            let msg = format!(
+                "Invalid scripting profile preview. {}",
+                parsed.warnings.join(" | ")
+            );
+            diag_log("error", format!("[ScriptingProfileImport] {msg}"));
+            return Err(msg);
+        }
+
+        let selected = if selected_groups.is_empty() {
+            normalized_selected_scripting_profile_groups(&parsed.selected_groups)
+        } else {
+            normalized_selected_scripting_profile_groups(&selected_groups)
+        };
+
+        let mut result = ScriptingProfileImportResultDto {
+            applied_groups: Vec::new(),
+            skipped_groups: Vec::new(),
+            warnings: Vec::new(),
+            updated_keys: 0,
+            schema_version_used: parsed.schema_version_used.clone(),
+            signature_valid: parsed.signature_valid,
+            migrated_from_schema: parsed.migrated_from_schema.clone(),
+            signer_fingerprint: parsed.signer_fingerprint.clone(),
+            signer_trusted: parsed.signer_trusted,
+        };
+        result.warnings.extend(parsed.warnings.clone());
+        let mut cfg = get_scripting_config();
+        let mut cfg_changed = false;
+        let mut run_changed = false;
+
+        for group in selected {
+            let Some(value) = parsed.groups_obj.get(&group) else {
+                result.skipped_groups.push(group.clone());
+                result
+                    .warnings
+                    .push(format!("Group '{group}' not present in profile."));
+                continue;
+            };
+            let Some(obj) = value.as_object() else {
+                result.skipped_groups.push(group.clone());
+                result
+                    .warnings
+                    .push(format!("Group '{group}' has invalid payload type."));
+                continue;
+            };
+
+            match group.as_str() {
+                SCRIPTING_PROFILE_GROUP_JAVASCRIPT => {
+                    if let Some(library) = obj.get("library").and_then(|v| v.as_str()) {
+                        self.clone()
+                            .save_script_library_js(library.to_string())
+                            .await?;
+                        result.updated_keys += 1;
+                    } else {
+                        result
+                            .warnings
+                            .push("Group 'javascript' missing 'library'.".to_string());
+                    }
+                    result.applied_groups.push(group.clone());
+                }
+                SCRIPTING_PROFILE_GROUP_PYTHON => {
+                    if let Some(library) = obj.get("library").and_then(|v| v.as_str()) {
+                        self.clone()
+                            .save_script_library_py(library.to_string())
+                            .await?;
+                        result.updated_keys += 1;
+                    }
+                    if let Some(enabled) = obj.get("enabled").and_then(|v| v.as_bool()) {
+                        cfg.py.enabled = enabled;
+                        cfg_changed = true;
+                        result.updated_keys += 1;
+                    }
+                    if let Some(path) = obj.get("path").and_then(|v| v.as_str()) {
+                        cfg.py.path = path.trim().to_string();
+                        cfg_changed = true;
+                        result.updated_keys += 1;
+                    }
+                    if let Some(path) = obj.get("library_path").and_then(|v| v.as_str()) {
+                        if !path.trim().is_empty() {
+                            cfg.py.library_path = path.trim().to_string();
+                            cfg_changed = true;
+                            result.updated_keys += 1;
+                        }
+                    }
+                    result.applied_groups.push(group.clone());
+                }
+                SCRIPTING_PROFILE_GROUP_LUA => {
+                    if let Some(library) = obj.get("library").and_then(|v| v.as_str()) {
+                        self.clone()
+                            .save_script_library_lua(library.to_string())
+                            .await?;
+                        result.updated_keys += 1;
+                    }
+                    if let Some(enabled) = obj.get("enabled").and_then(|v| v.as_bool()) {
+                        cfg.lua.enabled = enabled;
+                        cfg_changed = true;
+                        result.updated_keys += 1;
+                    }
+                    if let Some(path) = obj.get("path").and_then(|v| v.as_str()) {
+                        cfg.lua.path = path.trim().to_string();
+                        cfg_changed = true;
+                        result.updated_keys += 1;
+                    }
+                    if let Some(path) = obj.get("library_path").and_then(|v| v.as_str()) {
+                        if !path.trim().is_empty() {
+                            cfg.lua.library_path = path.trim().to_string();
+                            cfg_changed = true;
+                            result.updated_keys += 1;
+                        }
+                    }
+                    result.applied_groups.push(group.clone());
+                }
+                SCRIPTING_PROFILE_GROUP_HTTP => {
+                    if let Some(timeout_secs) = obj.get("timeout_secs").and_then(|v| v.as_u64()) {
+                        cfg.http.timeout_secs = timeout_secs.clamp(1, 60);
+                        cfg_changed = true;
+                        result.updated_keys += 1;
+                    }
+                    if let Some(retry_count) = obj.get("retry_count").and_then(|v| v.as_u64()) {
+                        cfg.http.retry_count = (retry_count as u32).min(10);
+                        cfg_changed = true;
+                        result.updated_keys += 1;
+                    }
+                    if let Some(retry_delay_ms) = obj.get("retry_delay_ms").and_then(|v| v.as_u64()) {
+                        cfg.http.retry_delay_ms = retry_delay_ms.clamp(50, 20_000);
+                        cfg_changed = true;
+                        result.updated_keys += 1;
+                    }
+                    if let Some(use_async) = obj.get("use_async").and_then(|v| v.as_bool()) {
+                        cfg.http.use_async = use_async;
+                        cfg_changed = true;
+                        result.updated_keys += 1;
+                    }
+                    result.applied_groups.push(group.clone());
+                }
+                SCRIPTING_PROFILE_GROUP_DSL => {
+                    if let Some(enabled) = obj.get("enabled").and_then(|v| v.as_bool()) {
+                        cfg.dsl.enabled = enabled;
+                        cfg_changed = true;
+                        result.updated_keys += 1;
+                    }
+                    result.applied_groups.push(group.clone());
+                }
+                SCRIPTING_PROFILE_GROUP_RUN => {
+                    let mut guard = self.state.lock().map_err(|e| e.to_string())?;
+                    if let Some(disabled) = obj
+                        .get("script_library_run_disabled")
+                        .and_then(|v| v.as_bool())
+                    {
+                        guard.script_library_run_disabled = disabled;
+                        run_changed = true;
+                        result.updated_keys += 1;
+                    }
+                    if let Some(allowlist) = obj
+                        .get("script_library_run_allowlist")
+                        .and_then(|v| v.as_str())
+                    {
+                        guard.script_library_run_allowlist = allowlist.to_string();
+                        run_changed = true;
+                        result.updated_keys += 1;
+                    }
+                    if run_changed {
+                        persist_settings_to_storage(&guard)?;
+                    }
+                    result.applied_groups.push(group.clone());
+                }
+                _ => {
+                    result.skipped_groups.push(group.clone());
+                    result
+                        .warnings
+                        .push(format!("Unknown scripting group '{group}' skipped."));
+                }
+            }
+        }
+
+        if cfg_changed {
+            set_scripting_config(cfg);
+        }
+
+        if result.warnings.is_empty() {
+            diag_log(
+                "info",
+                format!(
+                    "[ScriptingProfileImport] Applied {} groups from {} schema={} signature_valid={}",
+                    result.applied_groups.len(),
+                    path,
+                    result.schema_version_used,
+                    result.signature_valid
+                ),
+            );
+        } else {
+            diag_log(
+                "warn",
+                format!(
+                    "[ScriptingProfileImport] Applied {} groups from {} schema={} signature_valid={} with warnings: {}",
+                    result.applied_groups.len(),
+                    path,
+                    result.schema_version_used,
+                    result.signature_valid,
+                    result.warnings.join("; ")
+                ),
+            );
+        }
+        Ok(result)
+    }
+
+    async fn get_scripting_signer_registry(self) -> Result<ScriptingSignerRegistryDto, String> {
+        let state = load_scripting_signer_registry();
+        Ok(ScriptingSignerRegistryDto {
+            allow_unknown_signers: state.allow_unknown_signers,
+            trust_on_first_use: state.trust_on_first_use,
+            trusted_fingerprints: state.trusted_fingerprints,
+            blocked_fingerprints: state.blocked_fingerprints,
+        })
+    }
+
+    async fn save_scripting_signer_registry(
+        self,
+        registry: ScriptingSignerRegistryDto,
+    ) -> Result<(), String> {
+        let current = load_scripting_signer_registry();
+        let mut first_seen = current.trusted_first_seen_utc;
+        for fp in registry
+            .trusted_fingerprints
+            .iter()
+            .map(|s| normalize_fingerprint(s))
+            .filter(|s| !s.is_empty())
+        {
+            first_seen.entry(fp).or_insert_with(now_unix_secs_string);
+        }
+        let state = ScriptingSignerRegistryState {
+            allow_unknown_signers: registry.allow_unknown_signers,
+            trust_on_first_use: registry.trust_on_first_use,
+            trusted_fingerprints: registry.trusted_fingerprints.clone(),
+            blocked_fingerprints: registry.blocked_fingerprints.clone(),
+            trusted_first_seen_utc: first_seen,
+        };
+        save_scripting_signer_registry(&state)?;
+        diag_log(
+            "info",
+            format!(
+                "[ScriptingSignerRegistry] Saved allow_unknown={} tofu={} trusted={} blocked={}",
+                registry.allow_unknown_signers,
+                registry.trust_on_first_use,
+                registry.trusted_fingerprints.len(),
+                registry.blocked_fingerprints.len()
+            ),
+        );
         Ok(())
     }
 
@@ -1402,7 +2808,7 @@ function greet(name) { return "Hello, " + name + "!"; }
         let selected = ghost_suggestor::get_selected_index();
         let has_suggestions = !suggestions.is_empty();
         let first_trigger = suggestions.first().map(|s| s.snippet.trigger.len()).unwrap_or(0);
-        log::info!(
+        log::debug!(
             "[GhostSuggestor] get_ghost_suggestor_state: suggestions={} has_suggestions={} selected={} first_trigger_len={}",
             suggestions.len(),
             has_suggestions,
@@ -1429,7 +2835,7 @@ function greet(name) { return "Hello, " + name + "!"; }
         };
         #[cfg(not(target_os = "windows"))]
         let position: Option<(i32, i32)> = None;
-        log::info!(
+        log::debug!(
             "[GhostSuggestor] get_ghost_suggestor_state: returning has_suggestions={} position={:?}",
             has_suggestions,
             position
@@ -1501,7 +2907,7 @@ function greet(name) { return "Hello, " + name + "!"; }
         let pinned = ghost_follower::get_pinned_snippets(filter);
         let cfg = ghost_follower::get_config();
         let enabled = ghost_follower::is_enabled();
-        log::info!(
+        log::debug!(
             "[GhostFollower] get_ghost_follower_state: enabled={}, pinned_count={}, filter_len={}",
             enabled,
             pinned.len(),
@@ -1587,12 +2993,9 @@ function greet(name) { return "Hello, " + name + "!"; }
     }
 
     async fn ghost_follower_insert(self, _trigger: String, content: String) -> Result<(), String> {
-        diag_log(
-            "info",
-            format!(
-                "[QuickSearchInsert] ghost_follower_insert invoked content_len={}",
-                content.len()
-            ),
+        log::debug!(
+            "[QuickSearchInsert] ghost_follower_insert invoked content_len={}",
+            content.len()
         );
         digicore_text_expander::drivers::hotstring::request_expansion_from_ghost_follower(content);
         Ok(())
@@ -1612,7 +3015,7 @@ function greet(name) { return "Hello, " + name + "!"; }
     }
 
     async fn ghost_follower_capture_target_window(self) -> Result<(), String> {
-        diag_log("info", "[QuickSearchInsert] ghost_follower_capture_target_window invoked");
+        log::debug!("[QuickSearchInsert] ghost_follower_capture_target_window invoked");
         digicore_text_expander::application::ghost_follower::capture_target_window();
         Ok(())
     }
@@ -1825,17 +3228,95 @@ function greet(name) { return "Hello, " + name + "!"; }
         expansion_diagnostics::clear();
         Ok(())
     }
+
+    async fn test_snippet_logic(
+        self,
+        content: String,
+        user_values: Option<HashMap<String, String>>,
+    ) -> Result<SnippetLogicTestResultDto, String> {
+        let trimmed = content.trim();
+        if trimmed.is_empty() {
+            return Ok(SnippetLogicTestResultDto {
+                result: String::new(),
+                requires_input: false,
+                vars: Vec::new(),
+            });
+        }
+
+        let vars = template_processor::collect_interactive_vars(trimmed);
+        let vars_dto: Vec<InteractiveVarDto> = vars
+            .iter()
+            .map(|v| InteractiveVarDto {
+                tag: v.tag.clone(),
+                label: v.label.clone(),
+                var_type: var_type_to_string(&v.var_type).to_string(),
+                options: v.options.clone(),
+            })
+            .collect();
+
+        if !vars_dto.is_empty() && user_values.is_none() {
+            return Ok(SnippetLogicTestResultDto {
+                result: String::new(),
+                requires_input: true,
+                vars: vars_dto,
+            });
+        }
+
+        let current_clipboard = arboard::Clipboard::new()
+            .ok()
+            .and_then(|mut c| c.get_text().ok());
+        let clip_history: Vec<String> = clipboard_history::get_entries()
+            .into_iter()
+            .map(|e| e.content)
+            .collect();
+
+        let result = template_processor::process_for_preview(
+            trimmed,
+            current_clipboard.as_deref(),
+            &clip_history,
+            user_values.as_ref(),
+        );
+        let requires_input = !vars_dto.is_empty() && user_values.is_none();
+
+        Ok(SnippetLogicTestResultDto {
+            result,
+            requires_input,
+            vars: vars_dto,
+        })
+    }
+
+    async fn get_weather_location_suggestions(
+        self,
+        city_query: String,
+        country: Option<String>,
+        region: Option<String>,
+    ) -> Result<Vec<String>, String> {
+        let query = city_query.trim();
+        if query.is_empty() {
+            return Ok(Vec::new());
+        }
+        let registry = digicore_text_expander::application::scripting::get_registry();
+        digicore_text_expander::application::scripting::weather_location_suggestions(
+            query,
+            country.as_deref(),
+            region.as_deref(),
+            registry.http_fetcher.as_ref(),
+        )
+        .map(|v| v.into_iter().take(10).collect())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
         effective_rules_for_enforcement, normalize_process_key, normalized_selected_groups,
+        normalized_selected_scripting_profile_groups, parse_scripting_profile_bundle,
         sort_appearance_rules_deterministic,
     };
     #[cfg(target_os = "windows")]
     use super::process_name_matches;
     use crate::AppearanceTransparencyRuleDto;
+    use std::io::Write;
 
     #[cfg(target_os = "windows")]
     #[test]
@@ -1911,6 +3392,73 @@ mod tests {
         ];
         let groups = normalized_selected_groups(&input);
         assert_eq!(groups, vec!["ghost_follower".to_string(), "appearance".to_string()]);
+    }
+
+    #[test]
+    fn scripting_profile_groups_default_to_all_when_empty() {
+        let groups = normalized_selected_scripting_profile_groups(&[]);
+        assert!(groups.contains(&"javascript".to_string()));
+        assert!(groups.contains(&"run".to_string()));
+        assert_eq!(groups.len(), 6);
+    }
+
+    #[test]
+    fn scripting_profile_groups_normalize_aliases_and_deduplicate() {
+        let input = vec![
+            "JS".to_string(),
+            "javascript".to_string(),
+            "http-weather".to_string(),
+            "Run Security".to_string(),
+            "invalid".to_string(),
+        ];
+        let groups = normalized_selected_scripting_profile_groups(&input);
+        assert_eq!(
+            groups,
+            vec![
+                "javascript".to_string(),
+                "http".to_string(),
+                "run".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn scripting_profile_preview_migrates_legacy_schema_1x() {
+        let mut tmp = tempfile::NamedTempFile::new().expect("temp file");
+        let payload = serde_json::json!({
+            "schema_version": "1.0.0",
+            "selected_groups": ["javascript"],
+            "groups": {
+                "javascript": { "library": "function a(){return 1;}" }
+            }
+        });
+        write!(tmp, "{}", payload).expect("write payload");
+        let parsed =
+            parse_scripting_profile_bundle(tmp.path().to_str().expect("path str")).expect("parse");
+        assert!(parsed.valid);
+        assert!(!parsed.signed_bundle);
+        assert!(!parsed.signature_valid);
+        assert_eq!(parsed.migrated_from_schema.as_deref(), Some("1.0.0"));
+    }
+
+    #[test]
+    fn scripting_profile_preview_rejects_v2_without_integrity() {
+        let mut tmp = tempfile::NamedTempFile::new().expect("temp file");
+        let payload = serde_json::json!({
+            "schema_version": "2.0.0",
+            "selected_groups": ["javascript"],
+            "groups": {
+                "javascript": { "library": "function a(){return 1;}" }
+            }
+        });
+        write!(tmp, "{}", payload).expect("write payload");
+        let parsed =
+            parse_scripting_profile_bundle(tmp.path().to_str().expect("path str")).expect("parse");
+        assert!(!parsed.valid);
+        assert!(parsed
+            .warnings
+            .iter()
+            .any(|w| w.contains("Missing integrity block")));
     }
 
     #[test]

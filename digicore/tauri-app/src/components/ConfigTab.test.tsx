@@ -205,4 +205,17 @@ describe("ConfigTab import/export settings", () => {
       expect(mockTaurpc.import_settings_bundle_from_file).toHaveBeenCalled()
     );
   });
+
+  it("saves core pause toggle via update_config", async () => {
+    render(<ConfigTab appState={defaultState} onConfigLoaded={vi.fn()} />);
+    await userEvent.click(screen.getByRole("checkbox", { name: "Pause expansion (F7)" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save All Settings" }));
+
+    await waitFor(() =>
+      expect(mockTaurpc.update_config).toHaveBeenCalledWith(
+        expect.objectContaining({ expansion_paused: true })
+      )
+    );
+    await waitFor(() => expect(mockTaurpc.save_settings).toHaveBeenCalled());
+  });
 });

@@ -626,6 +626,11 @@ function App() {
     listen("quick-search-library-refresh", async () => {
       await loadAppState();
     }).then((fn) => unlistens.push(fn));
+    listen<{ paused?: boolean }>("tray-expansion-paused-changed", async (e) => {
+      await loadAppState();
+      const paused = !!e.payload?.paused;
+      setLibraryStatusFn(paused ? "Expansion paused from tray." : "Expansion resumed from tray.");
+    }).then((fn) => unlistens.push(fn));
     return () => unlistens.forEach((u) => u());
   }, [
     bringMainToForeground,

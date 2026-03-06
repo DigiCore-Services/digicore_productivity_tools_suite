@@ -80,6 +80,28 @@ export type PendingVariableInputDto = { content: string; vars: InteractiveVarDto
 
 export type PinnedSnippetDto = { trigger: string; content: string; content_preview: string; category: string; snippet_idx: number }
 
+export type ScriptingDetachedSignatureExportDto = { profile_path: string; signature_path: string; key_id: string; signer_fingerprint: string; payload_sha256: string }
+
+export type ScriptingDslConfigDto = { enabled: boolean }
+
+export type ScriptingEngineConfigDto = { dsl: ScriptingDslConfigDto; http: ScriptingHttpConfigDto; py: ScriptingPyConfigDto; lua: ScriptingLuaConfigDto }
+
+export type ScriptingHttpConfigDto = { timeout_secs: number; retry_count: number; retry_delay_ms: number; use_async: boolean }
+
+export type ScriptingLuaConfigDto = { enabled: boolean; path: string; library_path: string }
+
+export type ScriptingProfileDiffEntryDto = { group: string; field: string; current_value: string; incoming_value: string }
+
+export type ScriptingProfileDryRunDto = { path: string; selected_groups: string[]; changed_groups: string[]; estimated_updates: number; warnings: string[]; diff_entries: ScriptingProfileDiffEntryDto[]; schema_version_used: string; signature_valid: boolean; migrated_from_schema: string | null; signer_fingerprint: string | null; signer_trusted: boolean }
+
+export type ScriptingProfileImportResultDto = { applied_groups: string[]; skipped_groups: string[]; warnings: string[]; updated_keys: number; schema_version_used: string; signature_valid: boolean; migrated_from_schema: string | null; signer_fingerprint: string | null; signer_trusted: boolean }
+
+export type ScriptingProfilePreviewDto = { path: string; schema_version: string; available_groups: string[]; warnings: string[]; valid: boolean; signed_bundle: boolean; signature_valid: boolean; migrated_from_schema: string | null; signature_key_id: string | null; signer_fingerprint: string | null; signer_trusted: boolean }
+
+export type ScriptingPyConfigDto = { enabled: boolean; path: string; library_path: string }
+
+export type ScriptingSignerRegistryDto = { allow_unknown_signers: boolean; trust_on_first_use: boolean; trusted_fingerprints: string[]; blocked_fingerprints: string[] }
+
 export type SettingsBundlePreviewDto = { path: string; schema_version: string; available_groups: string[]; warnings: string[]; valid: boolean }
 
 export type SettingsImportResultDto = { applied_groups: string[]; skipped_groups: string[]; warnings: string[]; updated_keys: number; appearance_rules_applied: number; theme: string | null; autostart_enabled: boolean | null }
@@ -92,6 +114,8 @@ export type SettingsImportResultDto = { applied_groups: string[]; skipped_groups
  */
 export type Snippet = { trigger: string; content: string; options?: string; category?: string; profile?: string; appLock?: string; pinned?: string; lastModified?: string }
 
+export type SnippetLogicTestResultDto = { result: string; requires_input: boolean; vars: InteractiveVarDto[] }
+
 export type SuggestionDto = { trigger: string; content_preview: string; category: string }
 
 /**
@@ -99,7 +123,7 @@ export type SuggestionDto = { trigger: string; content_preview: string; category
  */
 export type UiPrefsDto = { last_tab: number; column_order: string[] }
 
-const ARGS_MAP = { '':'{"add_snippet":["category","snippet"],"apply_appearance_transparency_now":["app_process","opacity"],"bring_main_window_to_foreground":[],"cancel_variable_input":[],"clear_clipboard_history":[],"clear_diagnostic_logs":[],"copy_to_clipboard":["text"],"delete_appearance_transparency_rule":["app_process"],"delete_clip_entry":["index"],"delete_snippet":["category","snippet_idx"],"export_settings_bundle_to_file":["path","selected_groups","theme","autostart_enabled"],"get_app_state":[],"get_appearance_transparency_rules":[],"get_clipboard_entries":[],"get_diagnostic_logs":[],"get_expansion_stats":[],"get_ghost_follower_state":["search_filter"],"get_ghost_suggestor_state":[],"get_pending_variable_input":[],"get_running_process_names":[],"get_script_library_js":[],"get_ui_prefs":[],"ghost_follower_capture_target_window":[],"ghost_follower_hide":[],"ghost_follower_insert":["trigger","content"],"ghost_follower_request_edit":["category","snippet_idx"],"ghost_follower_request_promote":["content","trigger"],"ghost_follower_request_view_full":["content"],"ghost_follower_restore_always_on_top":[],"ghost_follower_save_position":["x","y"],"ghost_follower_set_collapsed":["collapsed"],"ghost_follower_set_opacity":["opacity_pct"],"ghost_follower_set_search":["filter"],"ghost_follower_set_size":["width","height"],"ghost_follower_toggle_pin":["category","snippet_idx"],"ghost_follower_touch":[],"ghost_suggestor_accept":[],"ghost_suggestor_create_snippet":[],"ghost_suggestor_cycle_forward":[],"ghost_suggestor_dismiss":[],"ghost_suggestor_ignore":["phrase"],"ghost_suggestor_snooze":[],"greet":["name"],"import_settings_bundle_from_file":["path","selected_groups"],"load_library":[],"preview_settings_bundle_from_file":["path"],"reset_expansion_stats":[],"restore_appearance_defaults":[],"save_appearance_transparency_rule":["app_process","opacity","enabled"],"save_library":[],"save_script_library_js":["content"],"save_settings":[],"save_ui_prefs":["last_tab","column_order"],"set_library_path":["path"],"submit_variable_input":["values"],"update_config":["config"],"update_snippet":["category","snippet_idx","snippet"]}' }
+const ARGS_MAP = { '':'{"add_snippet":["category","snippet"],"apply_appearance_transparency_now":["app_process","opacity"],"bring_main_window_to_foreground":[],"cancel_variable_input":[],"clear_clipboard_history":[],"clear_diagnostic_logs":[],"copy_to_clipboard":["text"],"delete_appearance_transparency_rule":["app_process"],"delete_clip_entry":["index"],"delete_snippet":["category","snippet_idx"],"dry_run_import_scripting_profile_from_file":["path","selected_groups"],"export_scripting_profile_to_file":["path","selected_groups"],"export_scripting_profile_with_detached_signature_to_file":["path","selected_groups"],"export_settings_bundle_to_file":["path","selected_groups","theme","autostart_enabled"],"get_app_state":[],"get_appearance_transparency_rules":[],"get_clipboard_entries":[],"get_diagnostic_logs":[],"get_expansion_stats":[],"get_ghost_follower_state":["search_filter"],"get_ghost_suggestor_state":[],"get_pending_variable_input":[],"get_running_process_names":[],"get_script_library_js":[],"get_script_library_lua":[],"get_script_library_py":[],"get_scripting_engine_config":[],"get_scripting_signer_registry":[],"get_ui_prefs":[],"get_weather_location_suggestions":["city_query","country","region"],"ghost_follower_capture_target_window":[],"ghost_follower_hide":[],"ghost_follower_insert":["trigger","content"],"ghost_follower_request_edit":["category","snippet_idx"],"ghost_follower_request_promote":["content","trigger"],"ghost_follower_request_view_full":["content"],"ghost_follower_restore_always_on_top":[],"ghost_follower_save_position":["x","y"],"ghost_follower_set_collapsed":["collapsed"],"ghost_follower_set_opacity":["opacity_pct"],"ghost_follower_set_search":["filter"],"ghost_follower_set_size":["width","height"],"ghost_follower_toggle_pin":["category","snippet_idx"],"ghost_follower_touch":[],"ghost_suggestor_accept":[],"ghost_suggestor_create_snippet":[],"ghost_suggestor_cycle_forward":[],"ghost_suggestor_dismiss":[],"ghost_suggestor_ignore":["phrase"],"ghost_suggestor_snooze":[],"greet":["name"],"import_scripting_profile_from_file":["path","selected_groups"],"import_settings_bundle_from_file":["path","selected_groups"],"load_library":[],"preview_scripting_profile_from_file":["path"],"preview_settings_bundle_from_file":["path"],"reset_expansion_stats":[],"restore_appearance_defaults":[],"save_appearance_transparency_rule":["app_process","opacity","enabled"],"save_library":[],"save_script_library_js":["content"],"save_script_library_lua":["content"],"save_script_library_py":["content"],"save_scripting_engine_config":["config"],"save_scripting_signer_registry":["registry"],"save_settings":[],"save_ui_prefs":["last_tab","column_order"],"set_library_path":["path"],"submit_variable_input":["values"],"test_snippet_logic":["content","user_values"],"update_config":["config"],"update_snippet":["category","snippet_idx","snippet"]}' }
 export type Router = { "": {add_snippet: (category: string, snippet: Snippet) => Promise<null>, 
 apply_appearance_transparency_now: (appProcess: string, opacity: number) => Promise<number>, 
 bring_main_window_to_foreground: () => Promise<null>, 
@@ -110,6 +134,9 @@ copy_to_clipboard: (text: string) => Promise<null>,
 delete_appearance_transparency_rule: (appProcess: string) => Promise<null>, 
 delete_clip_entry: (index: number) => Promise<null>, 
 delete_snippet: (category: string, snippetIdx: number) => Promise<null>, 
+dry_run_import_scripting_profile_from_file: (path: string, selectedGroups: string[]) => Promise<ScriptingProfileDryRunDto>, 
+export_scripting_profile_to_file: (path: string, selectedGroups: string[]) => Promise<number>, 
+export_scripting_profile_with_detached_signature_to_file: (path: string, selectedGroups: string[]) => Promise<ScriptingDetachedSignatureExportDto>, 
 export_settings_bundle_to_file: (path: string, selectedGroups: string[], theme: string | null, autostartEnabled: boolean | null) => Promise<number>, 
 get_app_state: () => Promise<AppStateDto>, 
 get_appearance_transparency_rules: () => Promise<AppearanceTransparencyRuleDto[]>, 
@@ -121,7 +148,12 @@ get_ghost_suggestor_state: () => Promise<GhostSuggestorStateDto>,
 get_pending_variable_input: () => Promise<PendingVariableInputDto | null>, 
 get_running_process_names: () => Promise<string[]>, 
 get_script_library_js: () => Promise<string>, 
+get_script_library_lua: () => Promise<string>, 
+get_script_library_py: () => Promise<string>, 
+get_scripting_engine_config: () => Promise<ScriptingEngineConfigDto>, 
+get_scripting_signer_registry: () => Promise<ScriptingSignerRegistryDto>, 
 get_ui_prefs: () => Promise<UiPrefsDto>, 
+get_weather_location_suggestions: (cityQuery: string, country: string | null, region: string | null) => Promise<string[]>, 
 ghost_follower_capture_target_window: () => Promise<null>, 
 ghost_follower_hide: () => Promise<null>, 
 ghost_follower_insert: (trigger: string, content: string) => Promise<null>, 
@@ -143,18 +175,25 @@ ghost_suggestor_dismiss: () => Promise<null>,
 ghost_suggestor_ignore: (phrase: string) => Promise<null>, 
 ghost_suggestor_snooze: () => Promise<null>, 
 greet: (name: string) => Promise<string>, 
+import_scripting_profile_from_file: (path: string, selectedGroups: string[]) => Promise<ScriptingProfileImportResultDto>, 
 import_settings_bundle_from_file: (path: string, selectedGroups: string[]) => Promise<SettingsImportResultDto>, 
 load_library: () => Promise<number>, 
+preview_scripting_profile_from_file: (path: string) => Promise<ScriptingProfilePreviewDto>, 
 preview_settings_bundle_from_file: (path: string) => Promise<SettingsBundlePreviewDto>, 
 reset_expansion_stats: () => Promise<null>, 
 restore_appearance_defaults: () => Promise<number>, 
 save_appearance_transparency_rule: (appProcess: string, opacity: number, enabled: boolean) => Promise<null>, 
 save_library: () => Promise<null>, 
 save_script_library_js: (content: string) => Promise<null>, 
+save_script_library_lua: (content: string) => Promise<null>, 
+save_script_library_py: (content: string) => Promise<null>, 
+save_scripting_engine_config: (config: ScriptingEngineConfigDto) => Promise<null>, 
+save_scripting_signer_registry: (registry: ScriptingSignerRegistryDto) => Promise<null>, 
 save_settings: () => Promise<null>, 
 save_ui_prefs: (lastTab: number, columnOrder: string[]) => Promise<null>, 
 set_library_path: (path: string) => Promise<null>, 
 submit_variable_input: (values: Partial<{ [key in string]: string }>) => Promise<null>, 
+test_snippet_logic: (content: string, userValues: Partial<{ [key in string]: string }> | null) => Promise<SnippetLogicTestResultDto>, 
 update_config: (config: ConfigUpdateDto) => Promise<null>, 
 update_snippet: (category: string, snippetIdx: number, snippet: Snippet) => Promise<null>} };
 

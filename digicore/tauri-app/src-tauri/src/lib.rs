@@ -12,6 +12,7 @@ use digicore_core::domain::Snippet;
 use digicore_text_expander::adapters::storage::JsonFileStorageAdapter;
 use digicore_text_expander::application::app_state::AppState;
 use digicore_text_expander::application::clipboard_history::{self, ClipboardHistoryConfig};
+use digicore_text_expander::application::expansion_engine::set_expansion_paused;
 use digicore_text_expander::application::ghost_suggestor;
 use digicore_text_expander::application::scripting::load_and_apply_script_libraries;
 use digicore_text_expander::application::template_processor::{self, InteractiveVarType};
@@ -117,6 +118,43 @@ fn app_state_to_dto(state: &AppState) -> AppStateDto {
         clip_history_max_depth: state.clip_history_max_depth as u32,
         script_library_run_disabled: state.script_library_run_disabled,
         script_library_run_allowlist: state.script_library_run_allowlist.clone(),
+    }
+}
+
+fn tray_pause_menu_label(paused: bool) -> &'static str {
+    if paused {
+        "Toggle Unpause - Paused"
+    } else {
+        "Toggle Pause - Running"
+    }
+}
+
+fn install_tray_menu(handle: &tauri::AppHandle, paused: bool) {
+    if let Some(tray) = handle.tray_by_id("default") {
+        let console_i =
+            MenuItem::with_id(handle, "view_console", "View Management Console", true, None::<&str>);
+        let quick_search_i = MenuItem::with_id(
+            handle,
+            "quick_search",
+            "Display Quick Search (Shift+Alt+Space)",
+            true,
+            None::<&str>,
+        );
+        let toggle_pause_i =
+            MenuItem::with_id(handle, "toggle_pause", tray_pause_menu_label(paused), true, None::<&str>);
+        let follower_i =
+            MenuItem::with_id(handle, "view_follower", "Display Ghost Follower", true, None::<&str>);
+        let quit_i = MenuItem::with_id(handle, "quit", "Exit application", true, None::<&str>);
+        if let (Ok(console), Ok(quick_search), Ok(toggle_pause), Ok(follower), Ok(quit)) =
+            (console_i, quick_search_i, toggle_pause_i, follower_i, quit_i)
+        {
+            let items: Vec<&dyn tauri::menu::IsMenuItem<_>> =
+                vec![&console, &quick_search, &toggle_pause, &follower, &quit];
+            if let Ok(m) = Menu::with_items(handle, &items) {
+                let _ = tray.set_menu(Some(m));
+                let _ = tray.set_show_menu_on_left_click(false);
+            }
+        }
     }
 }
 
@@ -287,6 +325,7 @@ pub fn run() {
         let _ = app_state.try_load_library();
     }
     let _ = start_listener(app_state.library.clone());
+    set_expansion_paused(app_state.expansion_paused);
     sync_ghost_config(GhostConfig {
         suggestor_enabled: app_state.ghost_suggestor_enabled,
         suggestor_debounce_ms: app_state.ghost_suggestor_debounce_ms,
@@ -323,6 +362,7 @@ pub fn run() {
     );
     let app_state = Arc::new(Mutex::new(app_state));
     let state_for_exit = app_state.clone();
+    let state_for_tray = app_state.clone();
     let prevent_default = if cfg!(debug_assertions) {
         tauri_plugin_prevent_default::debug()
     } else {
@@ -580,28 +620,14 @@ pub fn run() {
                 })();
             });
 
-            // Tray menu: View Management Console, Quick Search, View Ghost Follower, Exit
-            if let Some(tray) = app.tray_by_id("default") {
-                let console_i =
-                    MenuItem::with_id(&handle, "view_console", "View Management Console", true, None::<&str>);
-                let quick_search_i =
-                    MenuItem::with_id(&handle, "quick_search", "Display Quick Search (Shift+Alt+Space)", true, None::<&str>);
-                let follower_i =
-                    MenuItem::with_id(&handle, "view_follower", "Display Ghost Follower", true, None::<&str>);
-                let quit_i =
-                    MenuItem::with_id(&handle, "quit", "Exit application", true, None::<&str>);
-                if let (Ok(console), Ok(quick_search), Ok(follower), Ok(quit)) =
-                    (console_i, quick_search_i, follower_i, quit_i)
-                {
-                    let items: Vec<&dyn tauri::menu::IsMenuItem<_>> =
-                        vec![&console, &quick_search, &follower, &quit];
-                    if let Ok(m) = Menu::with_items(&handle, &items) {
-                        let _ = tray.set_menu(Some(m));
-                        let _ = tray.set_show_menu_on_left_click(false);
-                    }
-                }
-            }
+            // Tray menu: View Management Console, Quick Search, Toggle Pause/Unpause, View Ghost Follower, Exit
+            let paused = state_for_tray
+                .lock()
+                .map(|g| g.expansion_paused)
+                .unwrap_or(false);
+            install_tray_menu(&handle, paused);
 
+            let tray_state_for_events = state_for_tray.clone();
             app.on_menu_event(move |app_handle, event| match event.id.as_ref() {
                 "view_console" => {
                     if let Some(win) = app_handle.get_webview_window("main") {
@@ -618,6 +644,23 @@ pub fn run() {
                         let _ = win.unminimize();
                     }
                     let _ = app_handle.emit("quick-search-refresh", ());
+                }
+                "toggle_pause" => {
+                    let paused = if let Ok(mut guard) = tray_state_for_events.lock() {
+                        guard.expansion_paused = !guard.expansion_paused;
+                        guard.expansion_paused
+                    } else {
+                        false
+                    };
+                    set_expansion_paused(paused);
+                    if let Err(e) = crate::api::persist_settings_for_state(&tray_state_for_events) {
+                        log::warn!("[Tray] persist pause toggle failed: {}", e);
+                    }
+                    install_tray_menu(app_handle, paused);
+                    let _ = app_handle.emit(
+                        "tray-expansion-paused-changed",
+                        serde_json::json!({ "paused": paused }),
+                    );
                 }
                 "view_follower" => {
                     if let Some(win) = app_handle.get_webview_window("ghost-follower") {
@@ -700,6 +743,41 @@ pub struct ConfigUpdateDto {
 }
 
 #[taurpc::ipc_type]
+pub struct ScriptingHttpConfigDto {
+    pub timeout_secs: u32,
+    pub retry_count: u32,
+    pub retry_delay_ms: u32,
+    pub use_async: bool,
+}
+
+#[taurpc::ipc_type]
+pub struct ScriptingPyConfigDto {
+    pub enabled: bool,
+    pub path: String,
+    pub library_path: String,
+}
+
+#[taurpc::ipc_type]
+pub struct ScriptingLuaConfigDto {
+    pub enabled: bool,
+    pub path: String,
+    pub library_path: String,
+}
+
+#[taurpc::ipc_type]
+pub struct ScriptingDslConfigDto {
+    pub enabled: bool,
+}
+
+#[taurpc::ipc_type]
+pub struct ScriptingEngineConfigDto {
+    pub dsl: ScriptingDslConfigDto,
+    pub http: ScriptingHttpConfigDto,
+    pub py: ScriptingPyConfigDto,
+    pub lua: ScriptingLuaConfigDto,
+}
+
+#[taurpc::ipc_type]
 pub struct AppearanceTransparencyRuleDto {
     pub app_process: String,
     pub opacity: u32,
@@ -724,6 +802,147 @@ pub struct SettingsBundlePreviewDto {
     pub available_groups: Vec<String>,
     pub warnings: Vec<String>,
     pub valid: bool,
+}
+
+#[taurpc::ipc_type]
+pub struct ScriptingProfilePreviewDto {
+    pub path: String,
+    pub schema_version: String,
+    pub available_groups: Vec<String>,
+    pub warnings: Vec<String>,
+    pub valid: bool,
+    pub signed_bundle: bool,
+    pub signature_valid: bool,
+    pub migrated_from_schema: Option<String>,
+    pub signature_key_id: Option<String>,
+    pub signer_fingerprint: Option<String>,
+    pub signer_trusted: bool,
+}
+
+#[taurpc::ipc_type]
+pub struct ScriptingProfileImportResultDto {
+    pub applied_groups: Vec<String>,
+    pub skipped_groups: Vec<String>,
+    pub warnings: Vec<String>,
+    pub updated_keys: u32,
+    pub schema_version_used: String,
+    pub signature_valid: bool,
+    pub migrated_from_schema: Option<String>,
+    pub signer_fingerprint: Option<String>,
+    pub signer_trusted: bool,
+}
+
+#[taurpc::ipc_type]
+pub struct ScriptingProfileDiffEntryDto {
+    pub group: String,
+    pub field: String,
+    pub current_value: String,
+    pub incoming_value: String,
+}
+
+#[taurpc::ipc_type]
+pub struct ScriptingProfileDryRunDto {
+    pub path: String,
+    pub selected_groups: Vec<String>,
+    pub changed_groups: Vec<String>,
+    pub estimated_updates: u32,
+    pub warnings: Vec<String>,
+    pub diff_entries: Vec<ScriptingProfileDiffEntryDto>,
+    pub schema_version_used: String,
+    pub signature_valid: bool,
+    pub migrated_from_schema: Option<String>,
+    pub signer_fingerprint: Option<String>,
+    pub signer_trusted: bool,
+}
+
+#[taurpc::ipc_type]
+pub struct ScriptingSignerRegistryDto {
+    pub allow_unknown_signers: bool,
+    pub trust_on_first_use: bool,
+    pub trusted_fingerprints: Vec<String>,
+    pub blocked_fingerprints: Vec<String>,
+}
+
+#[taurpc::ipc_type]
+pub struct ScriptingDetachedSignatureExportDto {
+    pub profile_path: String,
+    pub signature_path: String,
+    pub key_id: String,
+    pub signer_fingerprint: String,
+    pub payload_sha256: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tray_pause_menu_label;
+
+    #[test]
+    fn tray_pause_label_reflects_state() {
+        assert_eq!(tray_pause_menu_label(false), "Toggle Pause - Running");
+        assert_eq!(tray_pause_menu_label(true), "Toggle Unpause - Paused");
+    }
+
+    #[test]
+    fn ipc_dtos_do_not_use_u64_or_u128_fields() {
+        let src = include_str!("lib.rs");
+        let lines: Vec<&str> = src.lines().collect();
+        let mut i = 0usize;
+        while i < lines.len() {
+            if !lines[i].contains("#[taurpc::ipc_type]") {
+                i += 1;
+                continue;
+            }
+
+            // Move to struct declaration line.
+            i += 1;
+            while i < lines.len() && !lines[i].contains("pub struct ") {
+                i += 1;
+            }
+            if i >= lines.len() {
+                break;
+            }
+            let struct_line = lines[i].trim();
+            let struct_name = struct_line
+                .strip_prefix("pub struct ")
+                .and_then(|s| s.split_whitespace().next())
+                .unwrap_or("<unknown>");
+
+            // Parse struct body by brace depth.
+            let mut depth = 0i32;
+            let mut started = false;
+            while i < lines.len() {
+                let line = lines[i];
+                for ch in line.chars() {
+                    if ch == '{' {
+                        depth += 1;
+                        started = true;
+                    } else if ch == '}' {
+                        depth -= 1;
+                    }
+                }
+
+                if started {
+                    let trimmed = line.trim();
+                    if trimmed.starts_with("pub ")
+                        && (trimmed.contains(": u64")
+                            || trimmed.contains(": u128")
+                            || trimmed.contains("<u64>")
+                            || trimmed.contains("<u128>"))
+                    {
+                        panic!(
+                            "taurpc ipc dto '{}' must not use u64/u128 field types: {}",
+                            struct_name, trimmed
+                        );
+                    }
+                    if depth == 0 {
+                        i += 1;
+                        break;
+                    }
+                }
+                i += 1;
+            }
+        }
+    }
 }
 
 #[taurpc::ipc_type]
@@ -791,6 +1010,13 @@ pub struct PendingVariableInputDto {
     pub values: HashMap<String, String>,
     pub choice_indices: HashMap<String, u32>,
     pub checkbox_checked: HashMap<String, bool>,
+}
+
+#[taurpc::ipc_type]
+pub struct SnippetLogicTestResultDto {
+    pub result: String,
+    pub requires_input: bool,
+    pub vars: Vec<InteractiveVarDto>,
 }
 
 /// Expansion stats DTO for Analytics dashboard.

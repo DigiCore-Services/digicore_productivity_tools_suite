@@ -33,6 +33,10 @@ tauri-plugin-http = "2"
 tauri-plugin-persisted-scope = "2"
 tauri-plugin-store = "2"
 sysinfo = "0.33"
+sha2 = "0.10"
+base64 = "0.22"
+ed25519-dalek = "2.1"
+rand = "0.8"
 windows = { version = "0.61", features = [
   "Win32_Foundation",
   "Win32_UI_WindowsAndMessaging",

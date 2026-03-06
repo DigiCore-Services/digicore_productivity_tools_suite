@@ -110,7 +110,7 @@ pub fn request_expansion_from_ghost_follower(content: String) {
     #[cfg(target_os = "windows")]
     if let Some(hwnd) = target_hwnd {
         if !crate::platform::windows_window::is_valid_external_hwnd(hwnd) {
-            log::info!(
+            log::debug!(
                 "[QuickSearchInsert] rejecting stored target as non-external: {}",
                 crate::platform::windows_window::describe_hwnd(hwnd)
             );
@@ -138,8 +138,13 @@ pub fn request_expansion_from_ghost_follower(content: String) {
             "[QuickSearchInsert] request_expansion_from_ghost_follower source={} target={} foreground={}",
             target_source, target_desc, fg
         );
-        log::info!("{msg}");
-        expansion_diagnostics::push("info", msg);
+        log::debug!("{msg}");
+        if target_hwnd.is_none() {
+            expansion_diagnostics::push(
+                "warn",
+                "[QuickSearchInsert] No target window captured; attempting paste in current foreground.".to_string(),
+            );
+        }
     }
     if variable_input::has_interactive_vars(&content) {
         variable_input::set_pending_from_ghost_with_target(content, target_hwnd);
@@ -161,8 +166,7 @@ fn do_request_expansion(content: String, target_hwnd: Option<isize>) {
             "[QuickSearchInsert] do_request_expansion start target={} foreground={}",
             target_desc, fg
         );
-        log::info!("{msg}");
-        expansion_diagnostics::push("info", msg);
+        log::debug!("{msg}");
     }
     crate::application::clipboard_history::suppress_for_duration(std::time::Duration::from_secs(2));
     if let Ok(guard) = HOTSTRING_STATE.lock() {
@@ -181,8 +185,7 @@ fn do_request_expansion(content: String, target_hwnd: Option<isize>) {
                             before,
                             after
                         );
-                        log::info!("{msg}");
-                        expansion_diagnostics::push("info", msg);
+                        log::debug!("{msg}");
                     }
                     let current_clip = g.clipboard.get_text().ok();
                     let clip_history: Vec<String> = clipboard_history::get_entries()
@@ -202,10 +205,6 @@ fn do_request_expansion(content: String, target_hwnd: Option<isize>) {
                     let saved = g.clipboard.get_text().ok();
                     if g.clipboard.set_text(&content).is_ok() {
                         if g.input.send_ctrl_v().is_ok() {
-                            expansion_diagnostics::push(
-                                "info",
-                                "[QuickSearchInsert] send_ctrl_v succeeded".to_string(),
-                            );
                             let _ = saved.as_ref().map(|s| g.clipboard.set_text(s));
                         } else {
                             expansion_diagnostics::push(

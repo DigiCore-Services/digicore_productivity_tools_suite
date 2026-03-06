@@ -22,6 +22,7 @@ mod script_context_builder;
 mod script_library_loader;
 mod script_type_registry;
 mod url_allowlist;
+mod weather_lookup;
 
 pub use boa_engine::{set_global_library, BoaScriptEngine};
 pub use clipboard_resolver::{escape_for_js_string, resolve_clipboard_in_js};
@@ -38,6 +39,7 @@ pub use registry::{get_registry, set_registry, ScriptingRegistry};
 pub use reqwest_fetcher::ReqwestHttpFetcher;
 pub use placeholder_parser::{find_balanced_tag, parse_placeholder_at, ParsedPlaceholder};
 pub use script_type_registry::{dispatch as dispatch_script_placeholder, find_tag_for_prefix, SCRIPT_TYPE_PREFIXES};
+pub use weather_lookup::location_suggestions as weather_location_suggestions;
 
 use std::collections::HashMap;
 use std::path::Path;

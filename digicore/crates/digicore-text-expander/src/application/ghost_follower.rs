@@ -96,7 +96,7 @@ pub fn capture_target_window() {
             *guard = Some(hwnd);
         }
         let captured = crate::platform::windows_window::describe_hwnd(hwnd);
-        log::info!(
+        log::debug!(
             "[GhostFollowerTarget] capture_target_window: foreground={} captured={}",
             fg, captured
         );
@@ -122,7 +122,7 @@ pub fn capture_target_window_for_quick_search_launch() {
             *guard = Some(hwnd);
         }
         let captured = crate::platform::windows_window::describe_hwnd(hwnd);
-        log::info!(
+        log::debug!(
             "[QuickSearchTarget] capture_for_launch: foreground={} captured={}",
             fg, captured
         );
