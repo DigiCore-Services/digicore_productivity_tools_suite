@@ -1587,6 +1587,13 @@ function greet(name) { return "Hello, " + name + "!"; }
     }
 
     async fn ghost_follower_insert(self, _trigger: String, content: String) -> Result<(), String> {
+        diag_log(
+            "info",
+            format!(
+                "[QuickSearchInsert] ghost_follower_insert invoked content_len={}",
+                content.len()
+            ),
+        );
         digicore_text_expander::drivers::hotstring::request_expansion_from_ghost_follower(content);
         Ok(())
     }
@@ -1605,6 +1612,7 @@ function greet(name) { return "Hello, " + name + "!"; }
     }
 
     async fn ghost_follower_capture_target_window(self) -> Result<(), String> {
+        diag_log("info", "[QuickSearchInsert] ghost_follower_capture_target_window invoked");
         digicore_text_expander::application::ghost_follower::capture_target_window();
         Ok(())
     }

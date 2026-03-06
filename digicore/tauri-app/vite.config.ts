@@ -35,6 +35,7 @@ export default defineConfig({
         main: path.resolve(__dirname, "index.html"),
         "ghost-follower": path.resolve(__dirname, "ghost-follower.html"),
         "ghost-suggestor": path.resolve(__dirname, "ghost-suggestor.html"),
+        "quick-search": path.resolve(__dirname, "quick-search.html"),
       },
     },
   },

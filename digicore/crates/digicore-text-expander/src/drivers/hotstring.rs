@@ -106,7 +106,41 @@ pub fn request_expansion_with_target(content: String, target_hwnd: Option<isize>
 /// Request expansion from Ghost Follower double-click. Restores focus to the target
 /// window (Sublime, Outlook, etc.) before pasting so content inserts at cursor.
 pub fn request_expansion_from_ghost_follower(content: String) {
-    let target_hwnd = ghost_follower::take_target_hwnd();
+    let mut target_hwnd = ghost_follower::take_target_hwnd();
+    #[cfg(target_os = "windows")]
+    if let Some(hwnd) = target_hwnd {
+        if !crate::platform::windows_window::is_valid_external_hwnd(hwnd) {
+            log::info!(
+                "[QuickSearchInsert] rejecting stored target as non-external: {}",
+                crate::platform::windows_window::describe_hwnd(hwnd)
+            );
+            target_hwnd = None;
+        }
+    }
+    let mut target_source = "stored";
+    #[cfg(target_os = "windows")]
+    if target_hwnd.is_none() {
+        // Fallback for tray/overlay timing races: recover latest external foreground window.
+        target_hwnd = crate::platform::windows_window::capture_recent_external_foreground_hwnd(500);
+        target_source = "fallback-capture";
+        if target_hwnd.is_none() {
+            target_hwnd = crate::platform::windows_window::capture_recent_external_foreground_hwnd(1500);
+            target_source = "fallback-capture-extended";
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let target_desc = target_hwnd
+            .map(crate::platform::windows_window::describe_hwnd)
+            .unwrap_or_else(|| "<none>".to_string());
+        let fg = crate::platform::windows_window::describe_foreground_window();
+        let msg = format!(
+            "[QuickSearchInsert] request_expansion_from_ghost_follower source={} target={} foreground={}",
+            target_source, target_desc, fg
+        );
+        log::info!("{msg}");
+        expansion_diagnostics::push("info", msg);
+    }
     if variable_input::has_interactive_vars(&content) {
         variable_input::set_pending_from_ghost_with_target(content, target_hwnd);
         return;
@@ -117,6 +151,19 @@ pub fn request_expansion_from_ghost_follower(content: String) {
 /// Perform expansion (no interactive vars). Used after VariableInputModal OK.
 /// target_hwnd: when Some, restore focus to this window before paste (for insert-at-cursor).
 fn do_request_expansion(content: String, target_hwnd: Option<isize>) {
+    #[cfg(target_os = "windows")]
+    {
+        let target_desc = target_hwnd
+            .map(crate::platform::windows_window::describe_hwnd)
+            .unwrap_or_else(|| "<none>".to_string());
+        let fg = crate::platform::windows_window::describe_foreground_window();
+        let msg = format!(
+            "[QuickSearchInsert] do_request_expansion start target={} foreground={}",
+            target_desc, fg
+        );
+        log::info!("{msg}");
+        expansion_diagnostics::push("info", msg);
+    }
     crate::application::clipboard_history::suppress_for_duration(std::time::Duration::from_secs(2));
     if let Ok(guard) = HOTSTRING_STATE.lock() {
         if let Some(ref state) = *guard {
@@ -125,7 +172,17 @@ fn do_request_expansion(content: String, target_hwnd: Option<isize>) {
                 if let Ok(g) = state.lock() {
                     #[cfg(target_os = "windows")]
                     if let Some(hwnd) = target_hwnd {
+                        let before = crate::platform::windows_window::describe_foreground_window();
                         crate::platform::windows_window::restore_foreground_window(hwnd);
+                        let after = crate::platform::windows_window::describe_foreground_window();
+                        let msg = format!(
+                            "[QuickSearchInsert] restore_foreground_window target={} before={} after={}",
+                            crate::platform::windows_window::describe_hwnd(hwnd),
+                            before,
+                            after
+                        );
+                        log::info!("{msg}");
+                        expansion_diagnostics::push("info", msg);
                     }
                     let current_clip = g.clipboard.get_text().ok();
                     let clip_history: Vec<String> = clipboard_history::get_entries()
@@ -145,12 +202,24 @@ fn do_request_expansion(content: String, target_hwnd: Option<isize>) {
                     let saved = g.clipboard.get_text().ok();
                     if g.clipboard.set_text(&content).is_ok() {
                         if g.input.send_ctrl_v().is_ok() {
+                            expansion_diagnostics::push(
+                                "info",
+                                "[QuickSearchInsert] send_ctrl_v succeeded".to_string(),
+                            );
                             let _ = saved.as_ref().map(|s| g.clipboard.set_text(s));
                         } else {
+                            expansion_diagnostics::push(
+                                "warn",
+                                "[QuickSearchInsert] send_ctrl_v failed; fallback type_text".to_string(),
+                            );
                             let _ = g.input.type_text(&content);
                             let _ = saved.as_ref().map(|s| g.clipboard.set_text(s));
                         }
                     } else {
+                        expansion_diagnostics::push(
+                            "warn",
+                            "[QuickSearchInsert] clipboard set_text failed; fallback type_text".to_string(),
+                        );
                         let _ = g.input.type_text(&content);
                     }
                 }

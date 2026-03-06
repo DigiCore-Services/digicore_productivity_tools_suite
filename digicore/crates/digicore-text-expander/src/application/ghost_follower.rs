@@ -90,15 +90,52 @@ static FOLLOWER_LAST_TARGET_HWND: Mutex<Option<isize>> = Mutex::new(None);
 /// Ghost Follower while it does not have focus (user moving from target app).
 #[cfg(target_os = "windows")]
 pub fn capture_target_window() {
-    if let Some(hwnd) = crate::platform::windows_window::get_foreground_hwnd() {
+    let fg = crate::platform::windows_window::describe_foreground_window();
+    if let Some(hwnd) = crate::platform::windows_window::capture_strict_external_foreground_hwnd() {
         if let Ok(mut guard) = FOLLOWER_LAST_TARGET_HWND.lock() {
             *guard = Some(hwnd);
         }
+        let captured = crate::platform::windows_window::describe_hwnd(hwnd);
+        log::info!(
+            "[GhostFollowerTarget] capture_target_window: foreground={} captured={}",
+            fg, captured
+        );
+    } else {
+        log::info!(
+            "[GhostFollowerTarget] capture_target_window: foreground={} captured=<none> (strict)",
+            fg
+        );
     }
 }
 
 #[cfg(not(target_os = "windows"))]
 pub fn capture_target_window() {}
+
+/// Capture target window for tray/quick-search launch where foreground is often tray UI.
+#[cfg(target_os = "windows")]
+pub fn capture_target_window_for_quick_search_launch() {
+    let fg = crate::platform::windows_window::describe_foreground_window();
+    if let Some(hwnd) =
+        crate::platform::windows_window::capture_recent_external_foreground_hwnd(1500)
+    {
+        if let Ok(mut guard) = FOLLOWER_LAST_TARGET_HWND.lock() {
+            *guard = Some(hwnd);
+        }
+        let captured = crate::platform::windows_window::describe_hwnd(hwnd);
+        log::info!(
+            "[QuickSearchTarget] capture_for_launch: foreground={} captured={}",
+            fg, captured
+        );
+    } else {
+        log::info!(
+            "[QuickSearchTarget] capture_for_launch: foreground={} captured=<none>",
+            fg
+        );
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn capture_target_window_for_quick_search_launch() {}
 
 /// Take the stored target window for insert. Returns None if not captured.
 #[cfg(target_os = "windows")]

@@ -599,6 +599,33 @@ function App() {
       const text = e.payload?.text;
       if (text) setLibraryStatusFn(text);
     }).then((fn) => unlistens.push(fn));
+    listen<{ category: string; snippetIdx: number; content?: string }>(
+      "quick-search-view-full",
+      async (e) => {
+        await bringMainToForeground();
+        const { category, snippetIdx, content } = e.payload ?? {};
+        if (category != null && snippetIdx != null) {
+          openViewFull(content ?? "", {
+            category,
+            snippetIdx,
+            source: "library",
+          });
+        }
+      }
+    ).then((fn) => unlistens.push(fn));
+    listen<{ category: string; snippetIdx: number }>(
+      "quick-search-edit-snippet",
+      async (e) => {
+        await bringMainToForeground();
+        const { category, snippetIdx } = e.payload ?? {};
+        if (category != null && snippetIdx != null) {
+          openSnippetEditor("edit", category, snippetIdx);
+        }
+      }
+    ).then((fn) => unlistens.push(fn));
+    listen("quick-search-library-refresh", async () => {
+      await loadAppState();
+    }).then((fn) => unlistens.push(fn));
     return () => unlistens.forEach((u) => u());
   }, [
     bringMainToForeground,
@@ -609,6 +636,7 @@ function App() {
     appState?.categories,
     snippetExists,
     setLibraryStatusFn,
+    loadAppState,
   ]);
 
   useEffect(() => {

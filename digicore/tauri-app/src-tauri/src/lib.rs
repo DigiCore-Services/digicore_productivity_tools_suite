@@ -399,7 +399,8 @@ pub fn run() {
                 .with_handler(|app, shortcut, _event| {
                     let s = shortcut.to_string();
                     if s.eq_ignore_ascii_case("Shift+Alt+Space") {
-                        let _ = app.emit("show-command-palette", ());
+                        digicore_text_expander::application::ghost_follower::capture_target_window_for_quick_search_launch();
+                        let _ = app.emit("show-quick-search", ());
                         return;
                     }
                     if s != "F11" {
@@ -492,7 +493,7 @@ pub fn run() {
                 let _ = handle_discovery.emit("discovery-suggestion", (phrase.to_string(), count));
             });
 
-            // Create Ghost Follower and Suggestor windows from Rust (avoids URL/path issues).
+            // Create Ghost Follower, Suggestor, and Quick Search windows from Rust (avoids URL/path issues).
             // Use a thread to avoid Windows deadlocks when creating windows.
             let handle_for_ghost = app.handle().clone();
             std::thread::spawn(move || {
@@ -548,21 +549,52 @@ pub fn run() {
                         let _ = handle_emit.emit("ghost-follower-update", ());
                     });
 
+                    let quick_search = tauri::WebviewWindowBuilder::new(
+                        &handle_for_ghost,
+                        "quick-search",
+                        WebviewUrl::App("quick-search.html".into()),
+                    )
+                    .title("Quick Search")
+                    .inner_size(520.0, 540.0)
+                    .decorations(false)
+                    .transparent(false)
+                    .always_on_top(true)
+                    .shadow(true)
+                    .visible(false)
+                    .build()?;
+
+                    let _ = quick_search.set_resizable(false);
+                    let _ = quick_search.set_maximizable(false);
+                    let _ = quick_search.set_minimizable(false);
+                    let _ = quick_search.hide();
+                    log::info!("[QuickSearch] window created from Rust");
+                    let handle_quick = handle_for_ghost.clone();
+                    quick_search.once("tauri://created", move |_| {
+                        if let Some(win) = handle_quick.get_webview_window("quick-search") {
+                            let _ = win.hide();
+                        }
+                        let _ = handle_quick.emit("quick-search-refresh", ());
+                    });
+
                     Ok(())
                 })();
             });
 
-            // Tray menu: View Management Console, View Ghost Follower, Exit
+            // Tray menu: View Management Console, Quick Search, View Ghost Follower, Exit
             if let Some(tray) = app.tray_by_id("default") {
                 let console_i =
                     MenuItem::with_id(&handle, "view_console", "View Management Console", true, None::<&str>);
+                let quick_search_i =
+                    MenuItem::with_id(&handle, "quick_search", "Display Quick Search (Shift+Alt+Space)", true, None::<&str>);
                 let follower_i =
                     MenuItem::with_id(&handle, "view_follower", "Display Ghost Follower", true, None::<&str>);
                 let quit_i =
                     MenuItem::with_id(&handle, "quit", "Exit application", true, None::<&str>);
-                if let (Ok(console), Ok(follower), Ok(quit)) = (console_i, follower_i, quit_i) {
+                if let (Ok(console), Ok(quick_search), Ok(follower), Ok(quit)) =
+                    (console_i, quick_search_i, follower_i, quit_i)
+                {
                     let items: Vec<&dyn tauri::menu::IsMenuItem<_>> =
-                        vec![&console, &follower, &quit];
+                        vec![&console, &quick_search, &follower, &quit];
                     if let Ok(m) = Menu::with_items(&handle, &items) {
                         let _ = tray.set_menu(Some(m));
                         let _ = tray.set_show_menu_on_left_click(false);
@@ -578,6 +610,15 @@ pub fn run() {
                         let _ = win.unminimize();
                     }
                 }
+                "quick_search" => {
+                    digicore_text_expander::application::ghost_follower::capture_target_window_for_quick_search_launch();
+                    if let Some(win) = app_handle.get_webview_window("quick-search") {
+                        let _ = win.show();
+                        let _ = win.set_focus();
+                        let _ = win.unminimize();
+                    }
+                    let _ = app_handle.emit("quick-search-refresh", ());
+                }
                 "view_follower" => {
                     if let Some(win) = app_handle.get_webview_window("ghost-follower") {
                         let _ = win.show();
@@ -589,6 +630,16 @@ pub fn run() {
                     app_handle.exit(0);
                 }
                 _ => {}
+            });
+
+            app.listen("show-quick-search", move |_event| {
+                digicore_text_expander::application::ghost_follower::capture_target_window_for_quick_search_launch();
+                if let Some(win) = handle.get_webview_window("quick-search") {
+                    let _ = win.show();
+                    let _ = win.set_focus();
+                    let _ = win.unminimize();
+                }
+                let _ = handle.emit("quick-search-refresh", ());
             });
 
             Ok(())
