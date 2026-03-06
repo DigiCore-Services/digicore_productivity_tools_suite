@@ -38,6 +38,15 @@ pub mod keys {
     pub const GHOST_FOLLOWER_POSITION_X: &str = "ghost_follower_position_x";
     pub const GHOST_FOLLOWER_POSITION_Y: &str = "ghost_follower_position_y";
     pub const CLIP_HISTORY_MAX_DEPTH: &str = "clip_history_max_depth";
+    pub const COPY_TO_CLIPBOARD_ENABLED: &str = "copy_to_clipboard_enabled";
+    pub const COPY_TO_CLIPBOARD_MIN_LOG_LENGTH: &str = "copy_to_clipboard_min_log_length";
+    pub const COPY_TO_CLIPBOARD_MASK_CC: &str = "copy_to_clipboard_mask_cc";
+    pub const COPY_TO_CLIPBOARD_MASK_SSN: &str = "copy_to_clipboard_mask_ssn";
+    pub const COPY_TO_CLIPBOARD_MASK_EMAIL: &str = "copy_to_clipboard_mask_email";
+    pub const COPY_TO_CLIPBOARD_BLACKLIST_PROCESSES: &str = "copy_to_clipboard_blacklist_processes";
+    pub const COPY_TO_CLIPBOARD_JSON_OUTPUT_ENABLED: &str = "copy_to_clipboard_json_output_enabled";
+    pub const COPY_TO_CLIPBOARD_JSON_OUTPUT_DIR: &str = "copy_to_clipboard_json_output_dir";
+    pub const COPY_TO_CLIPBOARD_IMAGE_STORAGE_DIR: &str = "copy_to_clipboard_image_storage_dir";
     pub const EXPANSION_PAUSED: &str = "expansion_paused";
     /// Tauri UI: last active tab index (0-3).
     pub const UI_LAST_TAB: &str = "ui_last_tab";

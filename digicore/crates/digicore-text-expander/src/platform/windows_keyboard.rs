@@ -99,6 +99,9 @@ unsafe extern "system" fn hook_proc(code: c_int, wparam: WPARAM, lparam: LPARAM)
         return CallNextHookEx(hhook, code, wparam, lparam);
     }
 
+    if lparam.0 == 0 {
+        return CallNextHookEx(hhook, code, wparam, lparam);
+    }
     let kb = &*(lparam.0 as *const KBDLLHOOKSTRUCT);
     let vk_code = kb.vkCode as u16;
     let scan_code = kb.scanCode as u16;
