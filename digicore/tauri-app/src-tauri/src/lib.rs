@@ -6,6 +6,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod api;
+mod clipboard_repository;
 
 use crate::api::{save_all_on_exit, Api};
 use digicore_core::domain::Snippet;
@@ -162,10 +163,9 @@ fn install_tray_menu(handle: &tauri::AppHandle, paused: bool) {
 fn init_app_state_from_storage() -> AppState {
     let storage = JsonFileStorageAdapter::load();
     let library_path = storage.get(storage_keys::LIBRARY_PATH).unwrap_or_else(|| {
-        dirs::config_dir()
-            .map(|p: std::path::PathBuf| p.join("DigiCore").join("text_expansion_library.json"))
-            .and_then(|p| p.to_str().map(String::from))
-            .unwrap_or_else(|| "text_expansion_library.json".to_string())
+        digicore_text_expander::ports::data_path_resolver::DataPathResolver::script_library_path()
+            .to_string_lossy()
+            .to_string()
     });
     let sync_url = storage.get(storage_keys::SYNC_URL).unwrap_or_default();
     let template_date_format = storage
@@ -197,8 +197,7 @@ fn init_app_state_from_storage() -> AppState {
     let clip_history_max_depth = storage
         .get(storage_keys::CLIP_HISTORY_MAX_DEPTH)
         .and_then(|s| s.parse().ok())
-        .unwrap_or(20usize)
-        .clamp(5, 100);
+        .unwrap_or(20usize);
     let ghost_follower_enabled = storage
         .get(storage_keys::GHOST_FOLLOWER_ENABLED)
         .map(|v| v == "true")
@@ -316,6 +315,9 @@ fn init_app_state_from_storage() -> AppState {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    std::panic::set_hook(Box::new(|info| {
+        log::error!("[PANIC] Process panicked: {:?}", info);
+    }));
     let mut app_state = init_app_state_from_storage();
     // Ensure {js:...} has global library functions available at startup.
     load_and_apply_script_libraries();
@@ -324,7 +326,53 @@ pub fn run() {
     if !app_state.library_path.is_empty() {
         let _ = app_state.try_load_library();
     }
+    if let Err(e) = clipboard_repository::init(clipboard_repository::default_db_path()) {
+        log::error!("[ClipboardHistory][SQLite] initialization failed: {}", e);
+    } else {
+        digicore_text_expander::application::clipboard_history::set_entry_observer(Some(Arc::new(
+            move |entry| {
+                if entry.content == "[Image]" {
+                    crate::api::sync_current_clipboard_image_to_sqlite(entry.process_name.clone(), entry.window_title.clone());
+                    return;
+                }
+                match crate::api::persist_clipboard_entry_with_settings(
+                    &entry.content,
+                    &entry.process_name,
+                    &entry.window_title,
+                ) {
+                    Ok(true) => {
+                        digicore_text_expander::application::expansion_diagnostics::push(
+                            "info",
+                            format!(
+                                "[Clipboard][capture.accepted] app='{}' chars={}",
+                                entry.process_name,
+                                entry.content.chars().count()
+                            ),
+                        );
+                    }
+                    Ok(false) => {
+                        digicore_text_expander::application::expansion_diagnostics::push(
+                            "warn",
+                            format!(
+                                "[Clipboard][capture.skipped] app='{}'",
+                                entry.process_name
+                            ),
+                        );
+                    }
+                    Err(err) => {
+                        log::warn!("[ClipboardHistory][SQLite] insert failed: {}", err);
+                        digicore_text_expander::application::expansion_diagnostics::push(
+                            "error",
+                            format!("[Clipboard][persistence.write_err] {}", err),
+                        );
+                    }
+                }
+            },
+        )));
+    }
     let _ = start_listener(app_state.library.clone());
+    // Initial sync to persist seeded clipboard entry from startup
+    crate::api::sync_runtime_clipboard_entries_to_sqlite();
     set_expansion_paused(app_state.expansion_paused);
     sync_ghost_config(GhostConfig {
         suggestor_enabled: app_state.ghost_suggestor_enabled,
@@ -340,9 +388,18 @@ pub fn run() {
         follower_hover_preview: app_state.ghost_follower_hover_preview,
         follower_collapse_delay_secs: app_state.ghost_follower_collapse_delay_secs,
     });
+    let storage_for_clip = JsonFileStorageAdapter::load();
+    let copy_enabled = storage_for_clip
+        .get(storage_keys::COPY_TO_CLIPBOARD_ENABLED)
+        .map(|v| v == "true")
+        .unwrap_or(true);
     clipboard_history::update_config(ClipboardHistoryConfig {
-        enabled: true,
-        max_depth: app_state.clip_history_max_depth,
+        enabled: copy_enabled,
+        max_depth: if app_state.clip_history_max_depth == 0 {
+            usize::MAX
+        } else {
+            app_state.clip_history_max_depth
+        },
     });
     log::info!(
         "[Startup] sync_discovery_config: enabled={} threshold={}",
@@ -402,6 +459,41 @@ pub fn run() {
                                 );
                                 CREATE INDEX IF NOT EXISTS idx_snippets_category ON snippets(category_id);
                                 CREATE INDEX IF NOT EXISTS idx_snippets_trigger ON snippets(trigger);
+                            "#,
+                            kind: MigrationKind::Up,
+                        },
+                        Migration {
+                            version: 2,
+                            description: "create_clipboard_history_schema",
+                            sql: r#"
+                                CREATE TABLE IF NOT EXISTS clipboard_history (
+                                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                    content TEXT NOT NULL,
+                                    process_name TEXT NOT NULL DEFAULT '',
+                                    window_title TEXT NOT NULL DEFAULT '',
+                                    char_count INTEGER NOT NULL DEFAULT 0,
+                                    word_count INTEGER NOT NULL DEFAULT 0,
+                                    content_hash TEXT NOT NULL DEFAULT '',
+                                    created_at_unix_ms INTEGER NOT NULL
+                                );
+                                CREATE INDEX IF NOT EXISTS idx_clipboard_history_created_at
+                                    ON clipboard_history(created_at_unix_ms DESC);
+                                CREATE INDEX IF NOT EXISTS idx_clipboard_history_content_hash
+                                    ON clipboard_history(content_hash);
+                            "#,
+                            kind: MigrationKind::Up,
+                        },
+                        Migration {
+                            version: 3,
+                            description: "clipboard_history_add_image_support",
+                            sql: r#"
+                                ALTER TABLE clipboard_history ADD COLUMN entry_type TEXT NOT NULL DEFAULT 'text';
+                                ALTER TABLE clipboard_history ADD COLUMN mime_type TEXT;
+                                ALTER TABLE clipboard_history ADD COLUMN image_path TEXT;
+                                ALTER TABLE clipboard_history ADD COLUMN thumb_path TEXT;
+                                ALTER TABLE clipboard_history ADD COLUMN image_width INTEGER;
+                                ALTER TABLE clipboard_history ADD COLUMN image_height INTEGER;
+                                ALTER TABLE clipboard_history ADD COLUMN image_bytes INTEGER;
                             "#,
                             kind: MigrationKind::Up,
                         },
@@ -496,9 +588,16 @@ pub fn run() {
         )
         .setup(move |app| {
             *app_handle_for_setup.lock().unwrap() = Some(app.handle().clone());
-            std::thread::spawn(|| loop {
-                crate::api::enforce_appearance_transparency_rules();
-                std::thread::sleep(std::time::Duration::from_secs(3));
+            std::thread::spawn(|| {
+                loop {
+                    let result = std::panic::catch_unwind(|| {
+                        crate::api::enforce_appearance_transparency_rules();
+                    });
+                    if let Err(e) = result {
+                        log::error!("[BackgroundThread] Transparency enforcement panicked: {:?}", e);
+                    }
+                    std::thread::sleep(std::time::Duration::from_secs(3));
+                }
             });
             #[cfg(desktop)]
             let _ = app
@@ -743,6 +842,25 @@ pub struct ConfigUpdateDto {
 }
 
 #[taurpc::ipc_type]
+pub struct CopyToClipboardConfigDto {
+    pub enabled: bool,
+    pub min_log_length: u32,
+    pub mask_cc: bool,
+    pub mask_ssn: bool,
+    pub mask_email: bool,
+    pub blacklist_processes: String,
+    pub max_history_entries: u32,
+    pub json_output_enabled: bool,
+    pub json_output_dir: String,
+    pub image_storage_dir: String,
+}
+
+#[taurpc::ipc_type]
+pub struct CopyToClipboardStatsDto {
+    pub total_entries: u32,
+}
+
+#[taurpc::ipc_type]
 pub struct ScriptingHttpConfigDto {
     pub timeout_secs: u32,
     pub retry_count: u32,
@@ -943,6 +1061,15 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn clip_history_depth_supports_unlimited_guard() {
+        let lib_src = include_str!("lib.rs");
+        assert!(
+            !lib_src.contains(".clamp(5, 5000)"),
+            "clip_history_max_depth startup should allow 0=unlimited and high values"
+        );
+    }
 }
 
 #[taurpc::ipc_type]
@@ -1039,8 +1166,18 @@ pub struct DiagnosticEntryDto {
 /// Clipboard entry DTO (Instant not serializable).
 #[taurpc::ipc_type]
 pub struct ClipEntryDto {
+    pub id: u32,
     pub content: String,
     pub process_name: String,
     pub window_title: String,
     pub length: u32,
+    pub word_count: u32,
+    pub created_at: String,
+    pub entry_type: String,
+    pub mime_type: Option<String>,
+    pub image_path: Option<String>,
+    pub thumb_path: Option<String>,
+    pub image_width: Option<u32>,
+    pub image_height: Option<u32>,
+    pub image_bytes: Option<u32>,
 }

@@ -148,19 +148,35 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
 }
 
 fn on_clipboard_update() {
-    let text = match arboard::Clipboard::new().and_then(|mut c| c.get_text()) {
-        Ok(t) => t,
+    let mut clipboard = match arboard::Clipboard::new() {
+        Ok(c) => c,
         Err(_) => return,
     };
-    if text.is_empty() || text.chars().all(|c| c.is_whitespace()) {
+
+    let text = match clipboard.get_text() {
+        Ok(t) => {
+            if t.is_empty() || t.chars().all(|c| c.is_whitespace()) {
+                None
+            } else {
+                Some(t)
+            }
+        }
+        Err(_) => None,
+    };
+
+    let content = if let Some(t) = text {
+        t
+    } else if clipboard.get_image().is_ok() {
+        "[Image]".to_string()
+    } else {
         return;
-    }
+    };
 
     let (process_name, window_title) = get_foreground_window_context();
     LISTENER_DATA.with(|cell| {
         if let Some(ref data) = *cell.borrow() {
             if let Ok(cb) = data.on_clip.lock() {
-                cb(text, process_name, window_title);
+                cb(content, process_name, window_title);
             }
         }
     });

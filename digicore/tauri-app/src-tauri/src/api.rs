@@ -1,11 +1,12 @@
 //! TauRPC API - type-safe IPC procedures for DigiCore Text Expander.
 
 use crate::{
+    clipboard_repository,
     app_state_to_dto, AppearanceTransparencyRuleDto, ConfigUpdateDto, ExpansionStatsDto, GhostFollowerStateDto,
     GhostSuggestorStateDto, ScriptingDslConfigDto, ScriptingEngineConfigDto, ScriptingHttpConfigDto,
     ScriptingDetachedSignatureExportDto, ScriptingLuaConfigDto, ScriptingProfileDiffEntryDto,
     ScriptingProfileDryRunDto, ScriptingProfileImportResultDto, ScriptingProfilePreviewDto,
-    ScriptingSignerRegistryDto,
+    ScriptingSignerRegistryDto, CopyToClipboardConfigDto, CopyToClipboardStatsDto,
     ScriptingPyConfigDto, SettingsBundlePreviewDto, SettingsImportResultDto, SnippetLogicTestResultDto,
     UiPrefsDto,
 };
@@ -29,12 +30,13 @@ use digicore_text_expander::drivers::hotstring::{
 use digicore_text_expander::application::app_state::AppState;
 use digicore_text_expander::ports::{storage_keys, StoragePort};
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 use tauri::{AppHandle, Emitter, Manager};
 use base64::Engine;
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use rand::RngCore;
+use regex::Regex;
 use sha2::{Digest, Sha256};
 #[cfg(target_os = "windows")]
 use windows::core::BOOL;
@@ -101,12 +103,206 @@ fn save_appearance_rules(rules: &[AppearanceTransparencyRuleDto]) -> Result<(), 
         .map_err(|e| e.to_string())
 }
 
+fn default_copy_to_clipboard_config(max_history_entries: u32) -> CopyToClipboardConfigDto {
+    let json_dir = digicore_text_expander::ports::data_path_resolver::DataPathResolver::clipboard_json_dir();
+    let image_dir = digicore_text_expander::ports::data_path_resolver::DataPathResolver::clipboard_images_dir();
+    CopyToClipboardConfigDto {
+        enabled: true,
+        min_log_length: 1,
+        mask_cc: false,
+        mask_ssn: false,
+        mask_email: false,
+        blacklist_processes: String::new(),
+        max_history_entries,
+        json_output_enabled: true,
+        json_output_dir: json_dir.to_string_lossy().to_string(),
+        image_storage_dir: image_dir.to_string_lossy().to_string(),
+    }
+}
+
+fn load_copy_to_clipboard_config(storage: &JsonFileStorageAdapter, max_history_entries: u32) -> CopyToClipboardConfigDto {
+    let mut cfg = default_copy_to_clipboard_config(max_history_entries);
+    if let Some(v) = storage.get(storage_keys::COPY_TO_CLIPBOARD_ENABLED) {
+        cfg.enabled = v == "true";
+    }
+    if let Some(v) = storage.get(storage_keys::COPY_TO_CLIPBOARD_MIN_LOG_LENGTH) {
+        if let Ok(parsed) = v.parse::<u32>() {
+            cfg.min_log_length = parsed.clamp(1, 2000);
+        }
+    }
+    if let Some(v) = storage.get(storage_keys::COPY_TO_CLIPBOARD_MASK_CC) {
+        cfg.mask_cc = v == "true";
+    }
+    if let Some(v) = storage.get(storage_keys::COPY_TO_CLIPBOARD_MASK_SSN) {
+        cfg.mask_ssn = v == "true";
+    }
+    if let Some(v) = storage.get(storage_keys::COPY_TO_CLIPBOARD_MASK_EMAIL) {
+        cfg.mask_email = v == "true";
+    }
+    if let Some(v) = storage.get(storage_keys::COPY_TO_CLIPBOARD_BLACKLIST_PROCESSES) {
+        cfg.blacklist_processes = v;
+    }
+    if let Some(v) = storage.get(storage_keys::COPY_TO_CLIPBOARD_JSON_OUTPUT_ENABLED) {
+        cfg.json_output_enabled = v == "true";
+    }
+    if let Some(v) = storage.get(storage_keys::COPY_TO_CLIPBOARD_JSON_OUTPUT_DIR) {
+        cfg.json_output_dir = v;
+    }
+    if let Some(v) = storage.get(storage_keys::COPY_TO_CLIPBOARD_IMAGE_STORAGE_DIR) {
+        cfg.image_storage_dir = v;
+    }
+    cfg
+}
+
+fn save_copy_to_clipboard_config(config: &CopyToClipboardConfigDto) -> Result<(), String> {
+    let mut storage = JsonFileStorageAdapter::load();
+    storage.set(storage_keys::COPY_TO_CLIPBOARD_ENABLED, &config.enabled.to_string());
+    storage.set(
+        storage_keys::COPY_TO_CLIPBOARD_MIN_LOG_LENGTH,
+        &config.min_log_length.clamp(1, 2000).to_string(),
+    );
+    storage.set(storage_keys::COPY_TO_CLIPBOARD_MASK_CC, &config.mask_cc.to_string());
+    storage.set(storage_keys::COPY_TO_CLIPBOARD_MASK_SSN, &config.mask_ssn.to_string());
+    storage.set(
+        storage_keys::COPY_TO_CLIPBOARD_MASK_EMAIL,
+        &config.mask_email.to_string(),
+    );
+    storage.set(
+        storage_keys::COPY_TO_CLIPBOARD_BLACKLIST_PROCESSES,
+        &config.blacklist_processes,
+    );
+    storage.set(
+        storage_keys::COPY_TO_CLIPBOARD_JSON_OUTPUT_ENABLED,
+        &config.json_output_enabled.to_string(),
+    );
+    storage.set(
+        storage_keys::COPY_TO_CLIPBOARD_JSON_OUTPUT_DIR,
+        &config.json_output_dir,
+    );
+    storage.set(
+        storage_keys::COPY_TO_CLIPBOARD_IMAGE_STORAGE_DIR,
+        &config.image_storage_dir,
+    );
+    storage.persist_if_safe().map(|_| ()).map_err(|e| e.to_string())
+}
+
+fn process_is_blacklisted(process_name: &str, blacklist_csv: &str) -> bool {
+    let process_norm = process_name.trim().to_ascii_lowercase();
+    if process_norm.is_empty() {
+        return false;
+    }
+    blacklist_csv
+        .split(',')
+        .map(|s| s.trim().to_ascii_lowercase())
+        .filter(|s| !s.is_empty())
+        .any(|blocked| process_norm == blocked || process_norm == format!("{blocked}.exe"))
+}
+
+fn apply_masking(mut content: String, cfg: &CopyToClipboardConfigDto) -> String {
+    if cfg.mask_email {
+        let email_re = Regex::new(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}").ok();
+        if let Some(re) = email_re {
+            content = re.replace_all(&content, "[masked_email]").to_string();
+        }
+    }
+    if cfg.mask_ssn {
+        let ssn_re = Regex::new(r"\b\d{3}-\d{2}-\d{4}\b").ok();
+        if let Some(re) = ssn_re {
+            content = re.replace_all(&content, "[masked_ssn]").to_string();
+        }
+    }
+    if cfg.mask_cc {
+        let cc_re = Regex::new(r"\b(?:\d[ -]?){13,19}\b").ok();
+        if let Some(re) = cc_re {
+            content = re.replace_all(&content, "[masked_card]").to_string();
+        }
+    }
+    content
+}
+
+fn normalize_clipboard_path_or_default(raw: &str, fallback: PathBuf) -> PathBuf {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        fallback
+    } else {
+        PathBuf::from(trimmed)
+    }
+}
+
+fn write_clipboard_text_json_record(
+    output_dir: &str,
+    content: &str,
+    process_name: &str,
+    window_title: &str,
+) -> Result<(), String> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| e.to_string())?;
+    let output_root = normalize_clipboard_path_or_default(
+        output_dir,
+        digicore_text_expander::ports::data_path_resolver::DataPathResolver::clipboard_json_dir(),
+    );
+    std::fs::create_dir_all(&output_root).map_err(|e| e.to_string())?;
+    let file_name = format!("clipboard_{:013}_{:06}.json", now.as_millis(), now.subsec_micros());
+    let file_path = output_root.join(file_name);
+    let payload = serde_json::json!({
+        "schema_version": "1.0.0",
+        "entry_type": "text",
+        "created_at_unix_ms": now.as_millis().to_string(),
+        "process_name": process_name,
+        "window_title": window_title,
+        "content": content
+    });
+    let serialized = serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?;
+    std::fs::write(file_path, serialized).map_err(|e| e.to_string())
+}
+
+pub(crate) fn persist_clipboard_entry_with_settings(
+    content: &str,
+    process_name: &str,
+    window_title: &str,
+) -> Result<bool, String> {
+    let storage = JsonFileStorageAdapter::load();
+    let max_depth = storage
+        .get(storage_keys::CLIP_HISTORY_MAX_DEPTH)
+        .and_then(|s| s.parse::<u32>().ok())
+        .unwrap_or(20);
+    let cfg = load_copy_to_clipboard_config(&storage, max_depth);
+    if !cfg.enabled || !cfg.json_output_enabled {
+        return Ok(false);
+    }
+    if process_is_blacklisted(process_name, &cfg.blacklist_processes) {
+        return Ok(false);
+    }
+    if content.trim().chars().count() < cfg.min_log_length as usize {
+        return Ok(false);
+    }
+    let masked = apply_masking(content.to_string(), &cfg);
+    let inserted = clipboard_repository::insert_entry(&masked, process_name, window_title)?;
+    log::info!("[Clipboard] clipboard_repository::insert_entry returned {}", inserted);
+    if inserted {
+        if let Err(err) = write_clipboard_text_json_record(
+            &cfg.json_output_dir,
+            &masked,
+            process_name,
+            window_title,
+        ) {
+            diag_log("warn", format!("[Clipboard][json.write_err] {err}"));
+        }
+        if cfg.max_history_entries > 0 {
+            let _ = clipboard_repository::trim_to_depth(cfg.max_history_entries);
+        }
+    }
+    Ok(inserted)
+}
+
 const SETTINGS_GROUP_TEMPLATES: &str = "templates";
 const SETTINGS_GROUP_SYNC: &str = "sync";
 const SETTINGS_GROUP_DISCOVERY: &str = "discovery";
 const SETTINGS_GROUP_GHOST_SUGGESTOR: &str = "ghost_suggestor";
 const SETTINGS_GROUP_GHOST_FOLLOWER: &str = "ghost_follower";
 const SETTINGS_GROUP_CLIPBOARD_HISTORY: &str = "clipboard_history";
+const SETTINGS_GROUP_COPY_TO_CLIPBOARD: &str = "copy_to_clipboard";
 const SETTINGS_GROUP_CORE: &str = "core";
 const SETTINGS_GROUP_SCRIPT_RUNTIME: &str = "script_runtime";
 const SETTINGS_GROUP_APPEARANCE: &str = "appearance";
@@ -130,6 +326,7 @@ fn all_settings_groups() -> Vec<&'static str> {
         SETTINGS_GROUP_GHOST_SUGGESTOR,
         SETTINGS_GROUP_GHOST_FOLLOWER,
         SETTINGS_GROUP_CLIPBOARD_HISTORY,
+        SETTINGS_GROUP_COPY_TO_CLIPBOARD,
         SETTINGS_GROUP_CORE,
         SETTINGS_GROUP_SCRIPT_RUNTIME,
         SETTINGS_GROUP_APPEARANCE,
@@ -144,6 +341,9 @@ fn normalize_settings_group(raw: &str) -> Option<&'static str> {
         "ghost_suggestor" | "ghost-suggestor" | "ghost suggestor" => Some(SETTINGS_GROUP_GHOST_SUGGESTOR),
         "ghost_follower" | "ghost-follower" | "ghost follower" => Some(SETTINGS_GROUP_GHOST_FOLLOWER),
         "clipboard_history" | "clipboard-history" | "clipboard history" => Some(SETTINGS_GROUP_CLIPBOARD_HISTORY),
+        "copy_to_clipboard" | "copy-to-clipboard" | "copy to clipboard" => {
+            Some(SETTINGS_GROUP_COPY_TO_CLIPBOARD)
+        }
         "core" => Some(SETTINGS_GROUP_CORE),
         "script_runtime" | "script-runtime" | "script runtime" => Some(SETTINGS_GROUP_SCRIPT_RUNTIME),
         "appearance" => Some(SETTINGS_GROUP_APPEARANCE),
@@ -673,14 +873,21 @@ fn diag_log(level: &str, message: impl Into<String>) {
 }
 
 pub(crate) fn enforce_appearance_transparency_rules() {
+    let now = std::time::Instant::now();
     let storage = JsonFileStorageAdapter::load();
     let rules = load_appearance_rules(&storage);
-    for rule in effective_rules_for_enforcement(rules) {
+    let effective = effective_rules_for_enforcement(rules);
+    if effective.is_empty() {
+        return;
+    }
+    log::debug!("[Appearance] Starting enforcement for {} rules", effective.len());
+    for rule in effective {
         let _ = apply_process_transparency(
             &rule.app_process,
             Some(rule.opacity.clamp(20, 255) as u8),
         );
     }
+    log::debug!("[Appearance] Enforcement cycle completed in {:?}", now.elapsed());
 }
 
 #[cfg(target_os = "windows")]
@@ -698,7 +905,16 @@ struct TransparencyApplyContext {
 
 #[cfg(target_os = "windows")]
 unsafe extern "system" fn enum_apply_transparency(hwnd: HWND, lparam: LPARAM) -> BOOL {
+    if lparam.0 == 0 {
+        return BOOL(1);
+    }
     let ctx = &mut *(lparam.0 as *mut TransparencyApplyContext);
+    
+    use windows::Win32::UI::WindowsAndMessaging::IsWindow;
+    if !IsWindow(Some(hwnd)).as_bool() {
+        return BOOL(1);
+    }
+
     let hwnd_key = hwnd.0 as isize;
     if !IsWindowVisible(hwnd).as_bool() {
         return BOOL(1);
@@ -975,9 +1191,21 @@ pub trait Api {
     async fn delete_snippet(category: String, snippet_idx: u32) -> Result<(), String>;
     async fn update_config(config: ConfigUpdateDto) -> Result<(), String>;
     async fn get_clipboard_entries() -> Result<Vec<ClipEntryDto>, String>;
+    async fn search_clipboard_entries(
+        search: String,
+        operator: Option<String>,
+        limit: Option<u32>,
+    ) -> Result<Vec<ClipEntryDto>, String>;
     async fn delete_clip_entry(index: u32) -> Result<(), String>;
+    async fn delete_clip_entry_by_id(id: u32) -> Result<(), String>;
     async fn clear_clipboard_history() -> Result<(), String>;
+    async fn get_copy_to_clipboard_config() -> Result<CopyToClipboardConfigDto, String>;
+    async fn save_copy_to_clipboard_config(config: CopyToClipboardConfigDto) -> Result<(), String>;
+    async fn get_copy_to_clipboard_stats() -> Result<CopyToClipboardStatsDto, String>;
     async fn copy_to_clipboard(text: String) -> Result<(), String>;
+    async fn copy_clipboard_image_by_id(id: u32) -> Result<(), String>;
+    async fn save_clipboard_image_by_id(id: u32, path: String) -> Result<(), String>;
+    async fn open_clipboard_image_by_id(id: u32) -> Result<(), String>;
     async fn get_script_library_js() -> Result<String, String>;
     async fn save_script_library_js(content: String) -> Result<(), String>;
     async fn get_script_library_py() -> Result<String, String>;
@@ -1100,6 +1328,89 @@ fn var_type_to_string(t: &InteractiveVarType) -> &'static str {
         InteractiveVarType::DatePicker => "date_picker",
         InteractiveVarType::FilePicker => "file_picker",
     }
+}
+
+pub(crate) fn sync_runtime_clipboard_entries_to_sqlite() {
+    let entries = clipboard_history::get_entries();
+    if entries.is_empty() {
+        sync_current_clipboard_image_to_sqlite(String::new(), String::new());
+        return;
+    }
+    for entry in entries.into_iter().rev() {
+        let _ = persist_clipboard_entry_with_settings(
+            &entry.content,
+            &entry.process_name,
+            &entry.window_title,
+        );
+    }
+    sync_current_clipboard_image_to_sqlite(String::new(), String::new());
+}
+
+pub(crate) fn sync_current_clipboard_image_to_sqlite(process_name: String, window_title: String) {
+    let storage = JsonFileStorageAdapter::load();
+    let max_depth = storage
+        .get(storage_keys::CLIP_HISTORY_MAX_DEPTH)
+        .and_then(|s| s.parse::<u32>().ok())
+        .unwrap_or(20);
+    let cfg = load_copy_to_clipboard_config(&storage, max_depth);
+    if !cfg.enabled {
+        return;
+    }
+    let image = match arboard::Clipboard::new().and_then(|mut c| c.get_image()) {
+        Ok(img) => img,
+        Err(_) => return,
+    };
+    if image.width == 0 || image.height == 0 || image.bytes.is_empty() {
+        return;
+    }
+    let inserted = clipboard_repository::insert_image_entry(
+        image.bytes.as_ref(),
+        image.width as u32,
+        image.height as u32,
+        &process_name,
+        &window_title,
+        Some("image/png"),
+        &cfg.image_storage_dir,
+    )
+    .unwrap_or(false);
+    if inserted {
+        if cfg.max_history_entries > 0 {
+            let _ = clipboard_repository::trim_to_depth(cfg.max_history_entries);
+        }
+        diag_log("info", "[Clipboard][capture.image] persisted clipboard image");
+    }
+}
+
+fn open_file_in_default_app(path: &str) -> Result<(), String> {
+    if path.trim().is_empty() {
+        return Err("Image path is empty.".to_string());
+    }
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", path])
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(path)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(path)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+    #[allow(unreachable_code)]
+    Err("Open image not supported on this platform.".to_string())
 }
 
 #[taurpc::resolvers]
@@ -1278,12 +1589,19 @@ impl Api for ApiImpl {
             guard.ghost_follower_opacity = v.clamp(10, 100);
         }
         if let Some(v) = config.clip_history_max_depth {
-            let depth = v.clamp(5, 100) as usize;
+            let depth = v as usize;
             guard.clip_history_max_depth = depth;
             clipboard_history::update_config(ClipboardHistoryConfig {
                 enabled: true,
-                max_depth: depth,
+                max_depth: if depth == 0 { usize::MAX } else { depth },
             });
+            let storage = JsonFileStorageAdapter::load();
+            let mut copy_cfg = load_copy_to_clipboard_config(&storage, depth as u32);
+            copy_cfg.max_history_entries = depth as u32;
+            let _ = save_copy_to_clipboard_config(&copy_cfg);
+            if depth > 0 {
+                let _ = clipboard_repository::trim_to_depth(depth as u32);
+            }
         }
         if let Some(v) = config.script_library_run_disabled {
             guard.script_library_run_disabled = v;
@@ -1332,40 +1650,226 @@ impl Api for ApiImpl {
     }
 
     async fn get_clipboard_entries(self) -> Result<Vec<ClipEntryDto>, String> {
-        let entries = clipboard_history::get_entries();
-        Ok(entries
+        let rows = clipboard_repository::list_entries(None, 500)?;
+        Ok(rows
             .into_iter()
-            .map(|e| ClipEntryDto {
-                content: e.content.clone(),
-                process_name: e.process_name,
-                window_title: e.window_title,
-                length: e.content.len() as u32,
+            .map(|r| ClipEntryDto {
+                id: r.id,
+                content: r.content,
+                process_name: r.process_name,
+                window_title: r.window_title,
+                length: r.char_count,
+                word_count: r.word_count,
+                created_at: r.created_at_unix_ms.to_string(),
+                entry_type: r.entry_type,
+                mime_type: r.mime_type,
+                image_path: r.image_path,
+                thumb_path: r.thumb_path,
+                image_width: r.image_width,
+                image_height: r.image_height,
+                image_bytes: r.image_bytes,
+            })
+            .collect())
+    }
+
+    async fn search_clipboard_entries(
+        self,
+        search: String,
+        operator: Option<String>,
+        limit: Option<u32>,
+    ) -> Result<Vec<ClipEntryDto>, String> {
+        let rows = clipboard_repository::search_entries(
+            &search,
+            operator.as_deref(),
+            limit.unwrap_or(500),
+        )?;
+        Ok(rows
+            .into_iter()
+            .map(|r| ClipEntryDto {
+                id: r.id,
+                content: r.content,
+                process_name: r.process_name,
+                window_title: r.window_title,
+                length: r.char_count,
+                word_count: r.word_count,
+                created_at: r.created_at_unix_ms.to_string(),
+                entry_type: r.entry_type,
+                mime_type: r.mime_type,
+                image_path: r.image_path,
+                thumb_path: r.thumb_path,
+                image_width: r.image_width,
+                image_height: r.image_height,
+                image_bytes: r.image_bytes,
             })
             .collect())
     }
 
     async fn delete_clip_entry(self, index: u32) -> Result<(), String> {
+        let rows = clipboard_repository::list_entries(None, index.saturating_add(1))?;
+        if let Some(row) = rows.get(index as usize) {
+            clipboard_repository::delete_entry_by_id(row.id)?;
+            diag_log(
+                "info",
+                format!("[Clipboard][delete] removed entry id={} via index", row.id),
+            );
+        }
         clipboard_history::delete_entry_at(index as usize);
         Ok(())
     }
 
-    async fn clear_clipboard_history(self) -> Result<(), String> {
-        clipboard_history::clear_all();
+    async fn delete_clip_entry_by_id(self, id: u32) -> Result<(), String> {
+        clipboard_repository::delete_entry_by_id(id)?;
+        diag_log("info", format!("[Clipboard][delete] removed entry id={id}"));
         Ok(())
+    }
+
+    async fn clear_clipboard_history(self) -> Result<(), String> {
+        clipboard_repository::clear_all()?;
+        clipboard_history::clear_all();
+        diag_log("info", "[Clipboard][clear] cleared all clipboard history");
+        Ok(())
+    }
+
+    async fn get_copy_to_clipboard_config(self) -> Result<CopyToClipboardConfigDto, String> {
+        let storage = JsonFileStorageAdapter::load();
+        let max_depth = storage
+            .get(storage_keys::CLIP_HISTORY_MAX_DEPTH)
+            .and_then(|s| s.parse::<u32>().ok())
+            .unwrap_or(20);
+        Ok(load_copy_to_clipboard_config(&storage, max_depth))
+    }
+
+    async fn save_copy_to_clipboard_config(self, config: CopyToClipboardConfigDto) -> Result<(), String> {
+        let mut normalized = config;
+        normalized.min_log_length = normalized.min_log_length.clamp(1, 2000);
+        let default_cfg = default_copy_to_clipboard_config(normalized.max_history_entries);
+        let json_root = normalize_clipboard_path_or_default(
+            &normalized.json_output_dir,
+            PathBuf::from(&default_cfg.json_output_dir),
+        );
+        let image_root = normalize_clipboard_path_or_default(
+            &normalized.image_storage_dir,
+            PathBuf::from(&default_cfg.image_storage_dir),
+        );
+        normalized.json_output_dir = json_root.to_string_lossy().to_string();
+        normalized.image_storage_dir = image_root.to_string_lossy().to_string();
+        std::fs::create_dir_all(&normalized.json_output_dir).map_err(|e| e.to_string())?;
+        std::fs::create_dir_all(PathBuf::from(&normalized.image_storage_dir).join("full"))
+            .map_err(|e| e.to_string())?;
+        std::fs::create_dir_all(PathBuf::from(&normalized.image_storage_dir).join("thumbs"))
+            .map_err(|e| e.to_string())?;
+        let current = self.clone().get_copy_to_clipboard_config().await?;
+        save_copy_to_clipboard_config(&normalized)?;
+        let migrated_assets = if current.image_storage_dir.trim() != normalized.image_storage_dir.trim() {
+            clipboard_repository::migrate_image_assets_root(
+                &current.image_storage_dir,
+                &normalized.image_storage_dir,
+            )?
+        } else {
+            0
+        };
+        {
+            let mut guard = self.state.lock().map_err(|e| e.to_string())?;
+            guard.clip_history_max_depth = normalized.max_history_entries as usize;
+            clipboard_history::update_config(ClipboardHistoryConfig {
+                enabled: normalized.enabled,
+                max_depth: if normalized.max_history_entries == 0 {
+                    usize::MAX
+                } else {
+                    normalized.max_history_entries as usize
+                },
+            });
+        }
+        let trimmed = if normalized.max_history_entries > 0 {
+            clipboard_repository::trim_to_depth(normalized.max_history_entries).unwrap_or(0)
+        } else {
+            0
+        };
+        diag_log(
+            "info",
+            format!(
+                "[Clipboard][config] saved enabled={} min_len={} max_entries={} trimmed={} migrated_assets={}",
+                normalized.enabled,
+                normalized.min_log_length,
+                normalized.max_history_entries,
+                trimmed,
+                migrated_assets
+            ),
+        );
+        Ok(())
+    }
+
+    async fn get_copy_to_clipboard_stats(self) -> Result<CopyToClipboardStatsDto, String> {
+        Ok(CopyToClipboardStatsDto {
+            total_entries: clipboard_repository::count()?,
+        })
     }
 
     async fn copy_to_clipboard(self, text: String) -> Result<(), String> {
         arboard::Clipboard::new()
             .map_err(|e| e.to_string())?
             .set_text(&text)
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string())?;
+        diag_log("info", "[Clipboard][copy] copied text to system clipboard");
+        Ok(())
+    }
+
+    async fn copy_clipboard_image_by_id(self, id: u32) -> Result<(), String> {
+        let row = clipboard_repository::get_entry_by_id(id)?
+            .ok_or_else(|| format!("Clipboard entry id={} was not found.", id))?;
+        if row.entry_type != "image" {
+            return Err("Selected clipboard entry is not an image.".to_string());
+        }
+        let image_path = row
+            .image_path
+            .ok_or_else(|| "Image file path is missing.".to_string())?;
+        let img = image::open(&image_path).map_err(|e| e.to_string())?.to_rgba8();
+        let width = img.width() as usize;
+        let height = img.height() as usize;
+        let bytes = img.into_raw();
+        arboard::Clipboard::new()
+            .map_err(|e| e.to_string())?
+            .set_image(arboard::ImageData {
+                width,
+                height,
+                bytes: std::borrow::Cow::Owned(bytes),
+            })
+            .map_err(|e| e.to_string())?;
+        diag_log("info", format!("[Clipboard][copy.image] copied image id={id}"));
+        Ok(())
+    }
+
+    async fn save_clipboard_image_by_id(self, id: u32, path: String) -> Result<(), String> {
+        let row = clipboard_repository::get_entry_by_id(id)?
+            .ok_or_else(|| format!("Clipboard entry id={} was not found.", id))?;
+        if row.entry_type != "image" {
+            return Err("Selected clipboard entry is not an image.".to_string());
+        }
+        let src = row
+            .image_path
+            .ok_or_else(|| "Image file path is missing.".to_string())?;
+        std::fs::copy(src, &path).map_err(|e| e.to_string())?;
+        diag_log("info", format!("[Clipboard][save.image] saved image id={} to {}", id, path));
+        Ok(())
+    }
+
+    async fn open_clipboard_image_by_id(self, id: u32) -> Result<(), String> {
+        let row = clipboard_repository::get_entry_by_id(id)?
+            .ok_or_else(|| format!("Clipboard entry id={} was not found.", id))?;
+        if row.entry_type != "image" {
+            return Err("Selected clipboard entry is not an image.".to_string());
+        }
+        let image_path = row
+            .image_path
+            .ok_or_else(|| "Image file path is missing.".to_string())?;
+        open_file_in_default_app(&image_path)?;
+        diag_log("info", format!("[Clipboard][open.image] opened image id={id}"));
+        Ok(())
     }
 
     async fn get_script_library_js(self) -> Result<String, String> {
         let cfg = get_scripting_config();
-        let base = dirs::config_dir()
-            .unwrap_or_else(|| Path::new(".").into())
-            .join("DigiCore");
+        let base = digicore_text_expander::ports::data_path_resolver::DataPathResolver::root();
         let lib_path = if cfg.js.library_paths.is_empty() {
             base.join(&cfg.js.library_path)
         } else {
@@ -1383,9 +1887,7 @@ function greet(name) { return "Hello, " + name + "!"; }
 
     async fn save_script_library_js(self, content: String) -> Result<(), String> {
         let cfg = get_scripting_config();
-        let base = dirs::config_dir()
-            .unwrap_or_else(|| Path::new(".").into())
-            .join("DigiCore");
+        let base = digicore_text_expander::ports::data_path_resolver::DataPathResolver::root();
         let lib_path = if cfg.js.library_paths.is_empty() {
             base.join(&cfg.js.library_path)
         } else {
@@ -1405,9 +1907,7 @@ function greet(name) { return "Hello, " + name + "!"; }
 
     async fn get_script_library_py(self) -> Result<String, String> {
         let cfg = get_scripting_config();
-        let base = dirs::config_dir()
-            .unwrap_or_else(|| Path::new(".").into())
-            .join("DigiCore");
+        let base = digicore_text_expander::ports::data_path_resolver::DataPathResolver::root();
         let lib_path = base.join(&cfg.py.library_path);
         Ok(std::fs::read_to_string(&lib_path).unwrap_or_else(|_| {
             r#"# DigiCore Global Python Library
@@ -1420,9 +1920,7 @@ def py_greet(name: str) -> str:
 
     async fn save_script_library_py(self, content: String) -> Result<(), String> {
         let cfg = get_scripting_config();
-        let base = dirs::config_dir()
-            .unwrap_or_else(|| Path::new(".").into())
-            .join("DigiCore");
+        let base = digicore_text_expander::ports::data_path_resolver::DataPathResolver::root();
         let lib_path = base.join(&cfg.py.library_path);
         if let Some(parent) = lib_path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
@@ -1437,9 +1935,7 @@ def py_greet(name: str) -> str:
 
     async fn get_script_library_lua(self) -> Result<String, String> {
         let cfg = get_scripting_config();
-        let base = dirs::config_dir()
-            .unwrap_or_else(|| Path::new(".").into())
-            .join("DigiCore");
+        let base = digicore_text_expander::ports::data_path_resolver::DataPathResolver::root();
         let lib_path = base.join(&cfg.lua.library_path);
         Ok(std::fs::read_to_string(&lib_path).unwrap_or_else(|_| {
             r#"-- DigiCore Global Lua Library
@@ -1453,9 +1949,7 @@ end
 
     async fn save_script_library_lua(self, content: String) -> Result<(), String> {
         let cfg = get_scripting_config();
-        let base = dirs::config_dir()
-            .unwrap_or_else(|| Path::new(".").into())
-            .join("DigiCore");
+        let base = digicore_text_expander::ports::data_path_resolver::DataPathResolver::root();
         let lib_path = base.join(&cfg.lua.library_path);
         if let Some(parent) = lib_path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
@@ -2346,6 +2840,26 @@ end
                         }),
                     );
                 }
+                SETTINGS_GROUP_COPY_TO_CLIPBOARD => {
+                    let storage = JsonFileStorageAdapter::load();
+                    let copy_cfg =
+                        load_copy_to_clipboard_config(&storage, guard.clip_history_max_depth as u32);
+                    groups_obj.insert(
+                        group.clone(),
+                        serde_json::json!({
+                            "copy_to_clipboard_enabled": copy_cfg.enabled,
+                            "copy_to_clipboard_min_log_length": copy_cfg.min_log_length,
+                            "copy_to_clipboard_mask_cc": copy_cfg.mask_cc,
+                            "copy_to_clipboard_mask_ssn": copy_cfg.mask_ssn,
+                            "copy_to_clipboard_mask_email": copy_cfg.mask_email,
+                            "copy_to_clipboard_blacklist_processes": copy_cfg.blacklist_processes,
+                            "copy_to_clipboard_json_output_enabled": copy_cfg.json_output_enabled,
+                            "copy_to_clipboard_json_output_dir": copy_cfg.json_output_dir,
+                            "copy_to_clipboard_image_storage_dir": copy_cfg.image_storage_dir,
+                            "copy_to_clipboard_max_history_entries": copy_cfg.max_history_entries
+                        }),
+                    );
+                }
                 SETTINGS_GROUP_CORE => {
                     groups_obj.insert(
                         group.clone(),
@@ -2583,8 +3097,13 @@ end
                         .await?;
                     result.updated_keys = result.updated_keys.saturating_add(1);
                 }
-                SETTINGS_GROUP_DISCOVERY | SETTINGS_GROUP_GHOST_SUGGESTOR | SETTINGS_GROUP_GHOST_FOLLOWER
-                | SETTINGS_GROUP_CLIPBOARD_HISTORY | SETTINGS_GROUP_CORE | SETTINGS_GROUP_SCRIPT_RUNTIME => {
+                SETTINGS_GROUP_DISCOVERY
+                | SETTINGS_GROUP_GHOST_SUGGESTOR
+                | SETTINGS_GROUP_GHOST_FOLLOWER
+                | SETTINGS_GROUP_CLIPBOARD_HISTORY
+                | SETTINGS_GROUP_COPY_TO_CLIPBOARD
+                | SETTINGS_GROUP_CORE
+                | SETTINGS_GROUP_SCRIPT_RUNTIME => {
                     let cfg = ConfigUpdateDto {
                         expansion_paused: obj.get("expansion_paused").and_then(|v| v.as_bool()),
                         template_date_format: None,
@@ -2650,6 +3169,155 @@ end
                             .map(str::to_string),
                     };
                     self.clone().update_config(cfg).await?;
+                    if group == SETTINGS_GROUP_CLIPBOARD_HISTORY {
+                        let mut copy_cfg = {
+                            let storage = JsonFileStorageAdapter::load();
+                            load_copy_to_clipboard_config(
+                                &storage,
+                                obj.get("clip_history_max_depth")
+                                    .and_then(|v| v.as_u64())
+                                    .map(|n| n as u32)
+                                    .unwrap_or(20),
+                            )
+                        };
+                        if let Some(v) = obj.get("copy_to_clipboard_enabled").and_then(|v| v.as_bool()) {
+                            copy_cfg.enabled = v;
+                        }
+                        if let Some(v) = obj
+                            .get("copy_to_clipboard_min_log_length")
+                            .and_then(|v| v.as_u64())
+                            .map(|n| n as u32)
+                        {
+                            copy_cfg.min_log_length = v;
+                        }
+                        if let Some(v) = obj.get("copy_to_clipboard_mask_cc").and_then(|v| v.as_bool()) {
+                            copy_cfg.mask_cc = v;
+                        }
+                        if let Some(v) = obj.get("copy_to_clipboard_mask_ssn").and_then(|v| v.as_bool()) {
+                            copy_cfg.mask_ssn = v;
+                        }
+                        if let Some(v) = obj.get("copy_to_clipboard_mask_email").and_then(|v| v.as_bool()) {
+                            copy_cfg.mask_email = v;
+                        }
+                        if let Some(v) = obj
+                            .get("copy_to_clipboard_blacklist_processes")
+                            .and_then(|v| v.as_str())
+                        {
+                            copy_cfg.blacklist_processes = v.to_string();
+                        }
+                        if let Some(v) = obj
+                            .get("copy_to_clipboard_json_output_enabled")
+                            .and_then(|v| v.as_bool())
+                        {
+                            copy_cfg.json_output_enabled = v;
+                        }
+                        if let Some(v) = obj
+                            .get("copy_to_clipboard_json_output_dir")
+                            .and_then(|v| v.as_str())
+                        {
+                            copy_cfg.json_output_dir = v.to_string();
+                        }
+                        if let Some(v) = obj
+                            .get("copy_to_clipboard_image_storage_dir")
+                            .and_then(|v| v.as_str())
+                        {
+                            copy_cfg.image_storage_dir = v.to_string();
+                        }
+                        save_copy_to_clipboard_config(&copy_cfg)?;
+                    }
+                    if group == SETTINGS_GROUP_COPY_TO_CLIPBOARD {
+                        let current_depth = {
+                            let guard = self.state.lock().map_err(|e| e.to_string())?;
+                            guard.clip_history_max_depth as u32
+                        };
+                        let mut copy_cfg = {
+                            let storage = JsonFileStorageAdapter::load();
+                            load_copy_to_clipboard_config(&storage, current_depth)
+                        };
+                        if let Some(v) = obj.get("copy_to_clipboard_enabled").and_then(|v| v.as_bool()) {
+                            copy_cfg.enabled = v;
+                        }
+                        if let Some(v) = obj
+                            .get("copy_to_clipboard_min_log_length")
+                            .and_then(|v| v.as_u64())
+                            .map(|n| n as u32)
+                        {
+                            copy_cfg.min_log_length = v;
+                        }
+                        if let Some(v) = obj.get("copy_to_clipboard_mask_cc").and_then(|v| v.as_bool()) {
+                            copy_cfg.mask_cc = v;
+                        }
+                        if let Some(v) = obj.get("copy_to_clipboard_mask_ssn").and_then(|v| v.as_bool()) {
+                            copy_cfg.mask_ssn = v;
+                        }
+                        if let Some(v) = obj.get("copy_to_clipboard_mask_email").and_then(|v| v.as_bool()) {
+                            copy_cfg.mask_email = v;
+                        }
+                        if let Some(v) = obj
+                            .get("copy_to_clipboard_blacklist_processes")
+                            .and_then(|v| v.as_str())
+                        {
+                            copy_cfg.blacklist_processes = v.to_string();
+                        }
+                        if let Some(v) = obj
+                            .get("copy_to_clipboard_json_output_enabled")
+                            .and_then(|v| v.as_bool())
+                        {
+                            copy_cfg.json_output_enabled = v;
+                        }
+                        if let Some(v) = obj
+                            .get("copy_to_clipboard_json_output_dir")
+                            .and_then(|v| v.as_str())
+                        {
+                            copy_cfg.json_output_dir = v.to_string();
+                        }
+                        if let Some(v) = obj
+                            .get("copy_to_clipboard_image_storage_dir")
+                            .and_then(|v| v.as_str())
+                        {
+                            copy_cfg.image_storage_dir = v.to_string();
+                        }
+                        if let Some(v) = obj
+                            .get("copy_to_clipboard_max_history_entries")
+                            .or_else(|| obj.get("clip_history_max_depth"))
+                            .and_then(|v| v.as_u64())
+                            .map(|n| n as u32)
+                        {
+                            copy_cfg.max_history_entries = v;
+                        }
+                        save_copy_to_clipboard_config(&copy_cfg)?;
+                        self.clone()
+                            .update_config(ConfigUpdateDto {
+                                expansion_paused: None,
+                                template_date_format: None,
+                                template_time_format: None,
+                                sync_url: None,
+                                discovery_enabled: None,
+                                discovery_threshold: None,
+                                discovery_lookback: None,
+                                discovery_min_len: None,
+                                discovery_max_len: None,
+                                discovery_excluded_apps: None,
+                                discovery_excluded_window_titles: None,
+                                ghost_suggestor_enabled: None,
+                                ghost_suggestor_debounce_ms: None,
+                                ghost_suggestor_display_secs: None,
+                                ghost_suggestor_snooze_duration_mins: None,
+                                ghost_suggestor_offset_x: None,
+                                ghost_suggestor_offset_y: None,
+                                ghost_follower_enabled: None,
+                                ghost_follower_edge_right: None,
+                                ghost_follower_monitor_anchor: None,
+                                ghost_follower_search: None,
+                                ghost_follower_hover_preview: None,
+                                ghost_follower_collapse_delay_secs: None,
+                                ghost_follower_opacity: None,
+                                clip_history_max_depth: Some(copy_cfg.max_history_entries),
+                                script_library_run_disabled: None,
+                                script_library_run_allowlist: None,
+                            })
+                            .await?;
+                    }
                     if group == SETTINGS_GROUP_CORE {
                         result.theme = obj.get("theme").and_then(|v| v.as_str()).map(str::to_string);
                         result.autostart_enabled = obj.get("autostart_enabled").and_then(|v| v.as_bool());
@@ -3309,9 +3977,10 @@ end
 #[cfg(test)]
 mod tests {
     use super::{
-        effective_rules_for_enforcement, normalize_process_key, normalized_selected_groups,
+        default_copy_to_clipboard_config, effective_rules_for_enforcement, normalize_clipboard_path_or_default,
+        normalize_process_key, normalized_selected_groups,
         normalized_selected_scripting_profile_groups, parse_scripting_profile_bundle,
-        sort_appearance_rules_deterministic,
+        sort_appearance_rules_deterministic, write_clipboard_text_json_record,
     };
     #[cfg(target_os = "windows")]
     use super::process_name_matches;
@@ -3513,5 +4182,33 @@ mod tests {
             assert!(first[idx].enabled);
         }
         assert!(first.len() <= 300);
+    }
+
+    #[test]
+    fn copy_to_clipboard_defaults_include_output_directories() {
+        let cfg = default_copy_to_clipboard_config(5000);
+        assert!(!cfg.json_output_dir.trim().is_empty());
+        assert!(!cfg.image_storage_dir.trim().is_empty());
+    }
+
+    #[test]
+    fn clipboard_text_json_record_is_written_to_selected_directory() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let out = tmp.path().join("json-output");
+        let out_s = out.to_string_lossy().to_string();
+        write_clipboard_text_json_record(&out_s, "hello world", "Cursor.exe", "Editor")
+            .expect("json write");
+        let entries = std::fs::read_dir(&out)
+            .expect("read output dir")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("dir entries");
+        assert_eq!(entries.len(), 1);
+        let payload = std::fs::read_to_string(entries[0].path()).expect("read json file");
+        let parsed: serde_json::Value = serde_json::from_str(&payload).expect("parse json");
+        assert_eq!(parsed.get("entry_type").and_then(|v| v.as_str()), Some("text"));
+        assert_eq!(parsed.get("content").and_then(|v| v.as_str()), Some("hello world"));
+
+        let fallback = normalize_clipboard_path_or_default("   ", out.clone());
+        assert_eq!(fallback, out);
     }
 }

@@ -41,6 +41,14 @@ struct ClipboardHistoryState {
 static CLIP_STATE: Mutex<Option<Arc<Mutex<ClipboardHistoryState>>>> = Mutex::new(None);
 static CLIP_ENABLED: AtomicBool = AtomicBool::new(false);
 static CLIP_THREAD: Mutex<Option<thread::JoinHandle<()>>> = Mutex::new(None);
+type EntryObserver = Arc<dyn Fn(&ClipEntry) + Send + Sync>;
+static ENTRY_OBSERVER: Mutex<Option<EntryObserver>> = Mutex::new(None);
+
+pub fn set_entry_observer(observer: Option<EntryObserver>) {
+    if let Ok(mut guard) = ENTRY_OBSERVER.lock() {
+        *guard = observer;
+    }
+}
 
 /// Start clipboard history monitoring (F38).
 /// On Windows: uses WM_CLIPBOARDUPDATE listener (AHK parity - captures App/Window Title).
@@ -181,6 +189,13 @@ fn add_entry_inner(
             timestamp: Instant::now(),
         },
     );
+    if let Ok(guard) = ENTRY_OBSERVER.lock() {
+        if let Some(cb) = guard.as_ref() {
+            if let Some(inserted) = state.entries.first() {
+                cb(inserted);
+            }
+        }
+    }
     while state.entries.len() > state.config.max_depth {
         state.entries.pop();
     }
@@ -205,7 +220,7 @@ pub fn add_entry(content: String, process_name: &str, window_title: &str) {
         Ok(s) => s,
         Err(_) => return,
     };
-    if s.last_content.as_ref() == Some(&content) {
+    if content != "[Image]" && s.last_content.as_ref() == Some(&content) {
         return;
     }
     s.last_content = Some(content.clone());
