@@ -33,6 +33,19 @@ type SettingsBundlePreview = {
   valid: boolean;
 };
 
+type CopyToClipboardConfig = {
+  enabled: boolean;
+  min_log_length: number;
+  mask_cc: boolean;
+  mask_ssn: boolean;
+  mask_email: boolean;
+  blacklist_processes: string;
+  max_history_entries: number;
+  json_output_enabled: boolean;
+  json_output_dir: string;
+  image_storage_dir: string;
+};
+
 type PreviewBadge = {
   label: "Ready" | "Review Warnings" | "Blocked";
   className: string;
@@ -60,6 +73,7 @@ const SETTINGS_GROUP_OPTIONS = [
   { id: "ghost_suggestor", label: "Ghost Suggestor" },
   { id: "ghost_follower", label: "Ghost Follower" },
   { id: "clipboard_history", label: "Clipboard History" },
+  { id: "copy_to_clipboard", label: "Copy-to-Clipboard" },
   { id: "core", label: "Core" },
   { id: "script_runtime", label: "Script Runtime" },
   { id: "appearance", label: "Appearance" },
@@ -93,6 +107,16 @@ export function ConfigTab({ appState, onConfigLoaded }: ConfigTabProps) {
   const [ghostFollowerMonitor, setGhostFollowerMonitor] = useState("0");
   const [ghostFollowerOpacity, setGhostFollowerOpacity] = useState(100);
   const [clipMaxDepth, setClipMaxDepth] = useState(20);
+  const [copyEnabled, setCopyEnabled] = useState(true);
+  const [copyMinLogLength, setCopyMinLogLength] = useState(1);
+  const [copyMaskCc, setCopyMaskCc] = useState(false);
+  const [copyMaskSsn, setCopyMaskSsn] = useState(false);
+  const [copyMaskEmail, setCopyMaskEmail] = useState(false);
+  const [copyBlacklistProcesses, setCopyBlacklistProcesses] = useState("");
+  const [copyJsonOutputEnabled, setCopyJsonOutputEnabled] = useState(true);
+  const [copyJsonOutputDir, setCopyJsonOutputDir] = useState("");
+  const [copyImageStorageDir, setCopyImageStorageDir] = useState("");
+  const [loadedImageStorageDir, setLoadedImageStorageDir] = useState("");
   const [expansionPaused, setExpansionPaused] = useState(false);
   const [autostart, setAutostart] = useState(false);
   const [theme, setTheme] = useState("light");
@@ -150,6 +174,35 @@ export function ConfigTab({ appState, onConfigLoaded }: ConfigTabProps) {
     }
   }, [appState]);
 
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const cfg: CopyToClipboardConfig =
+          await getTaurpc().get_copy_to_clipboard_config();
+        if (cancelled) return;
+        setCopyEnabled(!!cfg.enabled);
+        setCopyMinLogLength(cfg.min_log_length ?? 1);
+        setCopyMaskCc(!!cfg.mask_cc);
+        setCopyMaskSsn(!!cfg.mask_ssn);
+        setCopyMaskEmail(!!cfg.mask_email);
+        setCopyBlacklistProcesses(cfg.blacklist_processes || "");
+        setCopyJsonOutputEnabled(cfg.json_output_enabled ?? true);
+        setCopyJsonOutputDir(cfg.json_output_dir || "");
+        setCopyImageStorageDir(cfg.image_storage_dir || "");
+        setLoadedImageStorageDir(cfg.image_storage_dir || "");
+        if (typeof cfg.max_history_entries === "number") {
+          setClipMaxDepth(cfg.max_history_entries);
+        }
+      } catch {
+        /* ignore load failure */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const loadAutostart = async () => {
     try {
       const autostartPlugin = getAutostart();
@@ -190,6 +243,65 @@ export function ConfigTab({ appState, onConfigLoaded }: ConfigTabProps) {
       setStatusError(false);
     } catch (e) {
       setStatus("Error: " + String(e));
+      setStatusError(true);
+    }
+  };
+
+  const applyCopyToClipboardConfig = async () => {
+    const minLen = clampInt(copyMinLogLength, 1, 2000);
+    const maxEntries = Math.max(0, Number.isFinite(clipMaxDepth) ? clipMaxDepth : 20);
+    const imagePathChanged =
+      copyImageStorageDir.trim() !== loadedImageStorageDir.trim();
+    try {
+      await getTaurpc().save_copy_to_clipboard_config({
+        enabled: copyEnabled,
+        min_log_length: minLen,
+        mask_cc: copyMaskCc,
+        mask_ssn: copyMaskSsn,
+        mask_email: copyMaskEmail,
+        blacklist_processes: copyBlacklistProcesses,
+        max_history_entries: maxEntries,
+        json_output_enabled: copyJsonOutputEnabled,
+        json_output_dir: copyJsonOutputDir,
+        image_storage_dir: copyImageStorageDir,
+      });
+      setStatus(
+        imagePathChanged
+          ? "Copy-to-Clipboard settings saved. Image assets migration completed."
+          : "Copy-to-Clipboard settings saved."
+      );
+      setStatusError(false);
+      setClipMaxDepth(maxEntries);
+      setLoadedImageStorageDir(copyImageStorageDir);
+      await applyConfig({ clip_history_max_depth: maxEntries });
+    } catch (e) {
+      setStatus("Copy-to-Clipboard save failed: " + String(e));
+      setStatusError(true);
+    }
+  };
+
+  const chooseDirectory = async (
+    currentValue: string,
+    setter: (value: string) => void
+  ) => {
+    const selected = await open({
+      directory: true,
+      multiple: false,
+      defaultPath: currentValue || undefined,
+      title: "Select folder",
+    });
+    if (typeof selected === "string" && selected.trim()) {
+      setter(selected);
+    }
+  };
+
+  const handleClearClipboardHistory = async () => {
+    try {
+      await getTaurpc().clear_clipboard_history();
+      setStatus("Clipboard history cleared.");
+      setStatusError(false);
+    } catch (e) {
+      setStatus("Clipboard history clear failed: " + String(e));
       setStatusError(true);
     }
   };
@@ -696,26 +808,145 @@ export function ConfigTab({ appState, onConfigLoaded }: ConfigTabProps) {
         <summary className="cursor-pointer font-bold">
           Clipboard History (F38-F42)
         </summary>
-        <label className="block mt-2">Max depth (5-100):</label>
+        <p className="text-sm text-[var(--dc-text-muted)] mt-1">
+          Clipboard entry depth is managed from the Copy-to-Clipboard section to keep
+          one single source of truth.
+        </p>
+        <p className="text-sm mt-2">
+          Current max depth: <strong>{clipMaxDepth}</strong>
+        </p>
+      </details>
+
+      <details className={sectionCls}>
+        <summary className="cursor-pointer font-bold">Copy-to-Clipboard</summary>
+        <p className="text-sm text-[var(--dc-text-muted)] mt-1">
+          Controls capture, filtering, masking, and JSON-only persistence behavior.
+        </p>
+        <label className="block mt-2 flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={copyEnabled}
+            onChange={(e) => setCopyEnabled(e.target.checked)}
+          />
+          Enable Copy-to-Clipboard Capture
+        </label>
+        <label className="block mt-2 flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={copyJsonOutputEnabled}
+            onChange={(e) => setCopyJsonOutputEnabled(e.target.checked)}
+          />
+          JSON Output Enabled (TXT disabled)
+        </label>
+        <label className="block mt-2">JSON Output Directory:</label>
+        <div className="mt-1 flex gap-2">
+          <input
+            type="text"
+            value={copyJsonOutputDir}
+            onChange={(e) => setCopyJsonOutputDir(e.target.value)}
+            placeholder="C:\\Users\\...\\DigiCore\\clipboard-json"
+            className={`${inputCls} flex-1`}
+          />
+          <button
+            type="button"
+            onClick={() => void chooseDirectory(copyJsonOutputDir, setCopyJsonOutputDir)}
+            className="px-3 py-1.5 bg-[var(--dc-bg-alt)] border border-[var(--dc-border)] rounded"
+          >
+            Browse
+          </button>
+        </div>
+        <label className="block mt-2">Image Storage Directory:</label>
+        <div className="mt-1 flex gap-2">
+          <input
+            type="text"
+            value={copyImageStorageDir}
+            onChange={(e) => setCopyImageStorageDir(e.target.value)}
+            placeholder="C:\\Users\\...\\DigiCore\\clipboard-images"
+            className={`${inputCls} flex-1`}
+          />
+          <button
+            type="button"
+            onClick={() =>
+              void chooseDirectory(copyImageStorageDir, setCopyImageStorageDir)
+            }
+            className="px-3 py-1.5 bg-[var(--dc-bg-alt)] border border-[var(--dc-border)] rounded"
+          >
+            Browse
+          </button>
+        </div>
+        <label className="block mt-2">Min logged content length (1-2000):</label>
+        <input
+          type="number"
+          value={copyMinLogLength}
+          onChange={(e) =>
+            setCopyMinLogLength((prev) =>
+              clampInt(parseIntOr(e.target.value, prev), 1, 2000)
+            )
+          }
+          min={1}
+          max={2000}
+          className={inputCls}
+        />
+        <label className="block mt-2">Max history entries:</label>
         <input
           type="number"
           value={clipMaxDepth}
           onChange={(e) =>
             setClipMaxDepth((prev) =>
-              clampInt(parseIntOr(e.target.value, prev), 5, 100)
+              Math.max(0, parseIntOr(e.target.value, prev))
             )
           }
-          min={5}
-          max={100}
+          min={0}
           className={inputCls}
         />
+        <p className="text-xs text-[var(--dc-text-muted)] mt-1">
+          Note: 0 = Unlimited
+        </p>
+        <label className="block mt-2">Blacklist process names (comma-separated):</label>
+        <input
+          type="text"
+          value={copyBlacklistProcesses}
+          onChange={(e) => setCopyBlacklistProcesses(e.target.value)}
+          placeholder="KeePassXC.exe, 1Password.exe"
+          className={inputCls}
+        />
+        <div className="mt-2 flex flex-wrap gap-3">
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={copyMaskCc}
+              onChange={(e) => setCopyMaskCc(e.target.checked)}
+            />
+            Mask credit cards
+          </label>
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={copyMaskSsn}
+              onChange={(e) => setCopyMaskSsn(e.target.checked)}
+            />
+            Mask SSN
+          </label>
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={copyMaskEmail}
+              onChange={(e) => setCopyMaskEmail(e.target.checked)}
+            />
+            Mask email
+          </label>
+        </div>
         <button
-          onClick={() =>
-            applyConfig({ clip_history_max_depth: clipMaxDepth })
-          }
+          onClick={applyCopyToClipboardConfig}
           className="mt-2 px-3 py-1.5 bg-[var(--dc-accent)] text-white rounded"
         >
-          Apply
+          Save Copy-to-Clipboard Settings
+        </button>
+        <button
+          onClick={handleClearClipboardHistory}
+          className="mt-2 ml-2 px-3 py-1.5 bg-[var(--dc-bg-alt)] border border-[var(--dc-border)] rounded"
+        >
+          Clear All
         </button>
       </details>
 

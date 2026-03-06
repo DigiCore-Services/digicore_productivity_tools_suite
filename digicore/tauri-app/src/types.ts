@@ -46,10 +46,20 @@ export interface AppState {
 }
 
 export interface ClipEntry {
+  id: number;
   content: string;
   process_name: string;
   window_title: string;
-  length?: number;
+  length: number;
+  word_count: number;
+  created_at: string;
+  entry_type: string;
+  mime_type?: string | null;
+  image_path?: string | null;
+  thumb_path?: string | null;
+  image_width?: number | null;
+  image_height?: number | null;
+  image_bytes?: number | null;
 }
 
 export interface InteractiveVarDto {

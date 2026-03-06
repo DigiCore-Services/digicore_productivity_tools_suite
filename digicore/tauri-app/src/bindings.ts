@@ -14,12 +14,16 @@ export type AppearanceTransparencyRuleDto = { app_process: string; opacity: numb
 /**
  * Clipboard entry DTO (Instant not serializable).
  */
-export type ClipEntryDto = { content: string; process_name: string; window_title: string; length: number }
+export type ClipEntryDto = { id: number; content: string; process_name: string; window_title: string; length: number; word_count: number; created_at: string; entry_type: string; mime_type: string | null; image_path: string | null; thumb_path: string | null; image_width: number | null; image_height: number | null; image_bytes: number | null }
 
 /**
  * Config update DTO. All fields optional; only provided fields are updated.
  */
 export type ConfigUpdateDto = { expansion_paused: boolean | null; template_date_format: string | null; template_time_format: string | null; sync_url: string | null; discovery_enabled: boolean | null; discovery_threshold: number | null; discovery_lookback: number | null; discovery_min_len: number | null; discovery_max_len: number | null; discovery_excluded_apps: string | null; discovery_excluded_window_titles: string | null; ghost_suggestor_enabled: boolean | null; ghost_suggestor_debounce_ms: number | null; ghost_suggestor_display_secs: number | null; ghost_suggestor_snooze_duration_mins: number | null; ghost_suggestor_offset_x: number | null; ghost_suggestor_offset_y: number | null; ghost_follower_enabled: boolean | null; ghost_follower_edge_right: boolean | null; ghost_follower_monitor_anchor: number | null; ghost_follower_search: string | null; ghost_follower_hover_preview: boolean | null; ghost_follower_collapse_delay_secs: number | null; ghost_follower_opacity: number | null; clip_history_max_depth: number | null; script_library_run_disabled: boolean | null; script_library_run_allowlist: string | null }
+
+export type CopyToClipboardConfigDto = { enabled: boolean; min_log_length: number; mask_cc: boolean; mask_ssn: boolean; mask_email: boolean; blacklist_processes: string; max_history_entries: number; json_output_enabled: boolean; json_output_dir: string; image_storage_dir: string }
+
+export type CopyToClipboardStatsDto = { total_entries: number }
 
 /**
  * Diagnostic entry DTO for Log tab.
@@ -123,16 +127,18 @@ export type SuggestionDto = { trigger: string; content_preview: string; category
  */
 export type UiPrefsDto = { last_tab: number; column_order: string[] }
 
-const ARGS_MAP = { '':'{"add_snippet":["category","snippet"],"apply_appearance_transparency_now":["app_process","opacity"],"bring_main_window_to_foreground":[],"cancel_variable_input":[],"clear_clipboard_history":[],"clear_diagnostic_logs":[],"copy_to_clipboard":["text"],"delete_appearance_transparency_rule":["app_process"],"delete_clip_entry":["index"],"delete_snippet":["category","snippet_idx"],"dry_run_import_scripting_profile_from_file":["path","selected_groups"],"export_scripting_profile_to_file":["path","selected_groups"],"export_scripting_profile_with_detached_signature_to_file":["path","selected_groups"],"export_settings_bundle_to_file":["path","selected_groups","theme","autostart_enabled"],"get_app_state":[],"get_appearance_transparency_rules":[],"get_clipboard_entries":[],"get_diagnostic_logs":[],"get_expansion_stats":[],"get_ghost_follower_state":["search_filter"],"get_ghost_suggestor_state":[],"get_pending_variable_input":[],"get_running_process_names":[],"get_script_library_js":[],"get_script_library_lua":[],"get_script_library_py":[],"get_scripting_engine_config":[],"get_scripting_signer_registry":[],"get_ui_prefs":[],"get_weather_location_suggestions":["city_query","country","region"],"ghost_follower_capture_target_window":[],"ghost_follower_hide":[],"ghost_follower_insert":["trigger","content"],"ghost_follower_request_edit":["category","snippet_idx"],"ghost_follower_request_promote":["content","trigger"],"ghost_follower_request_view_full":["content"],"ghost_follower_restore_always_on_top":[],"ghost_follower_save_position":["x","y"],"ghost_follower_set_collapsed":["collapsed"],"ghost_follower_set_opacity":["opacity_pct"],"ghost_follower_set_search":["filter"],"ghost_follower_set_size":["width","height"],"ghost_follower_toggle_pin":["category","snippet_idx"],"ghost_follower_touch":[],"ghost_suggestor_accept":[],"ghost_suggestor_create_snippet":[],"ghost_suggestor_cycle_forward":[],"ghost_suggestor_dismiss":[],"ghost_suggestor_ignore":["phrase"],"ghost_suggestor_snooze":[],"greet":["name"],"import_scripting_profile_from_file":["path","selected_groups"],"import_settings_bundle_from_file":["path","selected_groups"],"load_library":[],"preview_scripting_profile_from_file":["path"],"preview_settings_bundle_from_file":["path"],"reset_expansion_stats":[],"restore_appearance_defaults":[],"save_appearance_transparency_rule":["app_process","opacity","enabled"],"save_library":[],"save_script_library_js":["content"],"save_script_library_lua":["content"],"save_script_library_py":["content"],"save_scripting_engine_config":["config"],"save_scripting_signer_registry":["registry"],"save_settings":[],"save_ui_prefs":["last_tab","column_order"],"set_library_path":["path"],"submit_variable_input":["values"],"test_snippet_logic":["content","user_values"],"update_config":["config"],"update_snippet":["category","snippet_idx","snippet"]}' }
+const ARGS_MAP = { '':'{"add_snippet":["category","snippet"],"apply_appearance_transparency_now":["app_process","opacity"],"bring_main_window_to_foreground":[],"cancel_variable_input":[],"clear_clipboard_history":[],"clear_diagnostic_logs":[],"copy_clipboard_image_by_id":["id"],"copy_to_clipboard":["text"],"delete_appearance_transparency_rule":["app_process"],"delete_clip_entry":["index"],"delete_clip_entry_by_id":["id"],"delete_snippet":["category","snippet_idx"],"dry_run_import_scripting_profile_from_file":["path","selected_groups"],"export_scripting_profile_to_file":["path","selected_groups"],"export_scripting_profile_with_detached_signature_to_file":["path","selected_groups"],"export_settings_bundle_to_file":["path","selected_groups","theme","autostart_enabled"],"get_app_state":[],"get_appearance_transparency_rules":[],"get_clipboard_entries":[],"get_copy_to_clipboard_config":[],"get_copy_to_clipboard_stats":[],"get_diagnostic_logs":[],"get_expansion_stats":[],"get_ghost_follower_state":["search_filter"],"get_ghost_suggestor_state":[],"get_pending_variable_input":[],"get_running_process_names":[],"get_script_library_js":[],"get_script_library_lua":[],"get_script_library_py":[],"get_scripting_engine_config":[],"get_scripting_signer_registry":[],"get_ui_prefs":[],"get_weather_location_suggestions":["city_query","country","region"],"ghost_follower_capture_target_window":[],"ghost_follower_hide":[],"ghost_follower_insert":["trigger","content"],"ghost_follower_request_edit":["category","snippet_idx"],"ghost_follower_request_promote":["content","trigger"],"ghost_follower_request_view_full":["content"],"ghost_follower_restore_always_on_top":[],"ghost_follower_save_position":["x","y"],"ghost_follower_set_collapsed":["collapsed"],"ghost_follower_set_opacity":["opacity_pct"],"ghost_follower_set_search":["filter"],"ghost_follower_set_size":["width","height"],"ghost_follower_toggle_pin":["category","snippet_idx"],"ghost_follower_touch":[],"ghost_suggestor_accept":[],"ghost_suggestor_create_snippet":[],"ghost_suggestor_cycle_forward":[],"ghost_suggestor_dismiss":[],"ghost_suggestor_ignore":["phrase"],"ghost_suggestor_snooze":[],"greet":["name"],"import_scripting_profile_from_file":["path","selected_groups"],"import_settings_bundle_from_file":["path","selected_groups"],"load_library":[],"open_clipboard_image_by_id":["id"],"preview_scripting_profile_from_file":["path"],"preview_settings_bundle_from_file":["path"],"reset_expansion_stats":[],"restore_appearance_defaults":[],"save_appearance_transparency_rule":["app_process","opacity","enabled"],"save_clipboard_image_by_id":["id","path"],"save_copy_to_clipboard_config":["config"],"save_library":[],"save_script_library_js":["content"],"save_script_library_lua":["content"],"save_script_library_py":["content"],"save_scripting_engine_config":["config"],"save_scripting_signer_registry":["registry"],"save_settings":[],"save_ui_prefs":["last_tab","column_order"],"search_clipboard_entries":["search","operator","limit"],"set_library_path":["path"],"submit_variable_input":["values"],"test_snippet_logic":["content","user_values"],"update_config":["config"],"update_snippet":["category","snippet_idx","snippet"]}' }
 export type Router = { "": {add_snippet: (category: string, snippet: Snippet) => Promise<null>, 
 apply_appearance_transparency_now: (appProcess: string, opacity: number) => Promise<number>, 
 bring_main_window_to_foreground: () => Promise<null>, 
 cancel_variable_input: () => Promise<null>, 
 clear_clipboard_history: () => Promise<null>, 
 clear_diagnostic_logs: () => Promise<null>, 
+copy_clipboard_image_by_id: (id: number) => Promise<null>, 
 copy_to_clipboard: (text: string) => Promise<null>, 
 delete_appearance_transparency_rule: (appProcess: string) => Promise<null>, 
 delete_clip_entry: (index: number) => Promise<null>, 
+delete_clip_entry_by_id: (id: number) => Promise<null>, 
 delete_snippet: (category: string, snippetIdx: number) => Promise<null>, 
 dry_run_import_scripting_profile_from_file: (path: string, selectedGroups: string[]) => Promise<ScriptingProfileDryRunDto>, 
 export_scripting_profile_to_file: (path: string, selectedGroups: string[]) => Promise<number>, 
@@ -141,6 +147,8 @@ export_settings_bundle_to_file: (path: string, selectedGroups: string[], theme: 
 get_app_state: () => Promise<AppStateDto>, 
 get_appearance_transparency_rules: () => Promise<AppearanceTransparencyRuleDto[]>, 
 get_clipboard_entries: () => Promise<ClipEntryDto[]>, 
+get_copy_to_clipboard_config: () => Promise<CopyToClipboardConfigDto>, 
+get_copy_to_clipboard_stats: () => Promise<CopyToClipboardStatsDto>, 
 get_diagnostic_logs: () => Promise<DiagnosticEntryDto[]>, 
 get_expansion_stats: () => Promise<ExpansionStatsDto>, 
 get_ghost_follower_state: (searchFilter: string | null) => Promise<GhostFollowerStateDto>, 
@@ -178,11 +186,14 @@ greet: (name: string) => Promise<string>,
 import_scripting_profile_from_file: (path: string, selectedGroups: string[]) => Promise<ScriptingProfileImportResultDto>, 
 import_settings_bundle_from_file: (path: string, selectedGroups: string[]) => Promise<SettingsImportResultDto>, 
 load_library: () => Promise<number>, 
+open_clipboard_image_by_id: (id: number) => Promise<null>, 
 preview_scripting_profile_from_file: (path: string) => Promise<ScriptingProfilePreviewDto>, 
 preview_settings_bundle_from_file: (path: string) => Promise<SettingsBundlePreviewDto>, 
 reset_expansion_stats: () => Promise<null>, 
 restore_appearance_defaults: () => Promise<number>, 
 save_appearance_transparency_rule: (appProcess: string, opacity: number, enabled: boolean) => Promise<null>, 
+save_clipboard_image_by_id: (id: number, path: string) => Promise<null>, 
+save_copy_to_clipboard_config: (config: CopyToClipboardConfigDto) => Promise<null>, 
 save_library: () => Promise<null>, 
 save_script_library_js: (content: string) => Promise<null>, 
 save_script_library_lua: (content: string) => Promise<null>, 
@@ -191,6 +202,7 @@ save_scripting_engine_config: (config: ScriptingEngineConfigDto) => Promise<null
 save_scripting_signer_registry: (registry: ScriptingSignerRegistryDto) => Promise<null>, 
 save_settings: () => Promise<null>, 
 save_ui_prefs: (lastTab: number, columnOrder: string[]) => Promise<null>, 
+search_clipboard_entries: (search: string, operator: string | null, limit: number | null) => Promise<ClipEntryDto[]>, 
 set_library_path: (path: string) => Promise<null>, 
 submit_variable_input: (values: Partial<{ [key in string]: string }>) => Promise<null>, 
 test_snippet_logic: (content: string, userValues: Partial<{ [key in string]: string }> | null) => Promise<SnippetLogicTestResultDto>, 

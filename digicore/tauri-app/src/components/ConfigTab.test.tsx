@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ConfigTab } from "./ConfigTab";
 import type { AppState } from "@/types";
@@ -12,6 +12,8 @@ const mockTaurpc = {
   preview_settings_bundle_from_file: vi.fn(),
   import_settings_bundle_from_file: vi.fn(),
   ghost_follower_set_opacity: vi.fn(),
+  get_copy_to_clipboard_config: vi.fn(),
+  save_copy_to_clipboard_config: vi.fn(),
 };
 
 const mockOpen = vi.fn();
@@ -88,6 +90,8 @@ describe("ConfigTab import/export settings", () => {
     mockTaurpc.preview_settings_bundle_from_file.mockReset();
     mockTaurpc.import_settings_bundle_from_file.mockReset();
     mockTaurpc.ghost_follower_set_opacity.mockReset();
+    mockTaurpc.get_copy_to_clipboard_config.mockReset();
+    mockTaurpc.save_copy_to_clipboard_config.mockReset();
     mockTaurpc.get_app_state.mockResolvedValue(defaultState);
     mockTaurpc.export_settings_bundle_to_file.mockResolvedValue(9);
     mockTaurpc.preview_settings_bundle_from_file.mockResolvedValue({
@@ -106,6 +110,19 @@ describe("ConfigTab import/export settings", () => {
       theme: "dark",
       autostart_enabled: false,
     });
+    mockTaurpc.get_copy_to_clipboard_config.mockResolvedValue({
+      enabled: true,
+      min_log_length: 1,
+      mask_cc: false,
+      mask_ssn: false,
+      mask_email: false,
+      blacklist_processes: "",
+      max_history_entries: 20,
+      json_output_enabled: true,
+      json_output_dir: "C:\\tmp\\clipboard-json",
+      image_storage_dir: "C:\\tmp\\clipboard-images",
+    });
+    mockTaurpc.save_copy_to_clipboard_config.mockResolvedValue(null);
   });
 
   it("renders Appearance section and import/export section", () => {
@@ -129,6 +146,7 @@ describe("ConfigTab import/export settings", () => {
     await userEvent.click(screen.getByRole("checkbox", { name: "Discovery" }));
     await userEvent.click(screen.getByRole("checkbox", { name: "Ghost Suggestor" }));
     await userEvent.click(screen.getByRole("checkbox", { name: "Clipboard History" }));
+    await userEvent.click(screen.getByRole("checkbox", { name: "Copy-to-Clipboard" }));
     await userEvent.click(screen.getByRole("checkbox", { name: "Core" }));
     await userEvent.click(screen.getByRole("checkbox", { name: "Script Runtime" }));
 
@@ -217,5 +235,64 @@ describe("ConfigTab import/export settings", () => {
       )
     );
     await waitFor(() => expect(mockTaurpc.save_settings).toHaveBeenCalled());
+  });
+
+  it("saves copy-to-clipboard config subsection", async () => {
+    render(<ConfigTab appState={defaultState} onConfigLoaded={vi.fn()} />);
+    await userEvent.click(screen.getAllByText("Copy-to-Clipboard")[0]);
+    await userEvent.click(
+      screen.getByRole("checkbox", { name: "Mask email" })
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: "Save Copy-to-Clipboard Settings" })
+    );
+    await waitFor(() =>
+      expect(mockTaurpc.save_copy_to_clipboard_config).toHaveBeenCalledWith(
+        expect.objectContaining({
+          mask_email: true,
+          json_output_dir: "C:\\tmp\\clipboard-json",
+          image_storage_dir: "C:\\tmp\\clipboard-images",
+        })
+      )
+    );
+  });
+
+  it("allows browsing and saving output/image directories", async () => {
+    mockOpen.mockResolvedValueOnce("C:\\new\\json");
+    mockOpen.mockResolvedValueOnce("C:\\new\\images");
+    render(<ConfigTab appState={defaultState} onConfigLoaded={vi.fn()} />);
+    await userEvent.click(screen.getAllByText("Copy-to-Clipboard")[0]);
+    const browseButtons = screen.getAllByRole("button", { name: "Browse" });
+    await userEvent.click(browseButtons[0]);
+    await userEvent.click(browseButtons[1]);
+    await userEvent.click(
+      screen.getByRole("button", { name: "Save Copy-to-Clipboard Settings" })
+    );
+    await waitFor(() =>
+      expect(mockTaurpc.save_copy_to_clipboard_config).toHaveBeenCalledWith(
+        expect.objectContaining({
+          json_output_dir: "C:\\new\\json",
+          image_storage_dir: "C:\\new\\images",
+        })
+      )
+    );
+  });
+
+  it("allows max history entries zero for unlimited", async () => {
+    render(<ConfigTab appState={defaultState} onConfigLoaded={vi.fn()} />);
+    await userEvent.click(screen.getAllByText("Copy-to-Clipboard")[0]);
+    const maxDepthInput = screen.getByDisplayValue("20") as HTMLInputElement;
+    fireEvent.change(maxDepthInput, { target: { value: "0" } });
+    await userEvent.click(
+      screen.getByRole("button", { name: "Save Copy-to-Clipboard Settings" })
+    );
+    await waitFor(() =>
+      expect(mockTaurpc.save_copy_to_clipboard_config).toHaveBeenCalledWith(
+        expect.objectContaining({
+          max_history_entries: 0,
+        })
+      )
+    );
+    expect(screen.getByText("Note: 0 = Unlimited")).toBeInTheDocument();
   });
 });

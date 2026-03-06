@@ -1,7 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getTaurpc } from "@/lib/taurpc";
 import { showNativeContextMenu } from "@/lib/nativeContextMenu";
-import { ArrowUpToLine, Check, Copy, Eye, Trash2 } from "lucide-react";
+import { ArrowUpToLine, Check, Copy, Eye, Search, Trash2 } from "lucide-react";
+import { save } from "@tauri-apps/plugin-dialog";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import type { NativeContextMenuAction } from "@/lib/nativeContextMenu";
 import type { AppState, ClipEntry } from "../types";
 
@@ -34,8 +36,50 @@ export function ClipboardTab({
   const [status, setStatus] = useState("");
   const [loading, setLoading] = useState(false);
   const [maxDepth, setMaxDepth] = useState<number | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchOperator, setSearchOperator] = useState<"or" | "and" | "regex">(
+    "or"
+  );
+  const [thumbLoadFailed, setThumbLoadFailed] = useState<Record<number, boolean>>({});
+  const prevThumbByIdRef = useRef<Record<number, string>>({});
   const normalizeContentForMatch = useCallback((value: string) => {
     return (value || "").replace(/\r\n/g, "\n").trim();
+  }, []);
+  const formatUtcTimestamp = useCallback((value: string) => {
+    const unixMs = Number.parseInt(value || "", 10);
+    if (!Number.isFinite(unixMs) || unixMs <= 0) return "-";
+    const date = new Date(unixMs);
+    if (Number.isNaN(date.getTime())) return "-";
+    const yyyy = date.getUTCFullYear();
+    const mm = String(date.getUTCMonth() + 1).padStart(2, "0");
+    const dd = String(date.getUTCDate()).padStart(2, "0");
+    let hh = date.getUTCHours();
+    const min = String(date.getUTCMinutes()).padStart(2, "0");
+    const sec = String(date.getUTCSeconds()).padStart(2, "0");
+    const ampm = hh >= 12 ? "PM" : "AM";
+    hh = hh % 12;
+    if (hh === 0) hh = 12;
+    const hour = String(hh).padStart(2, "0");
+    return `${yyyy}-${mm}-${dd} ${hour}:${min}:${sec} ${ampm} UTC`;
+  }, []);
+  const toFileUrl = useCallback((path: string | null | undefined) => {
+    if (!path || !path.trim()) return "";
+    const normalized = path.trim().replace(/\\/g, "/");
+    if (normalized.startsWith("http://") || normalized.startsWith("https://")) {
+      return normalized;
+    }
+    try {
+      return convertFileSrc(normalized);
+    } catch {
+      // Fallback for non-Tauri test environments.
+    }
+    if (/^[a-zA-Z]:\//.test(normalized)) {
+      return `file:///${normalized}`;
+    }
+    if (normalized.startsWith("/")) {
+      return `file://${normalized}`;
+    }
+    return normalized;
   }, []);
   const snippetContentSet = useMemo(() => {
     const set = new Set<string>();
@@ -54,18 +98,51 @@ export function ClipboardTab({
   const loadEntries = useCallback(async () => {
     setLoading(true);
     try {
+      const query = searchQuery.trim();
       const [data, state] = await Promise.all([
-        getTaurpc().get_clipboard_entries(),
+        query
+          ? getTaurpc().search_clipboard_entries(query, searchOperator, 500)
+          : getTaurpc().get_clipboard_entries(),
         appState ? Promise.resolve(null) : getTaurpc().get_app_state().catch(() => null),
       ]);
+      const recoveredThumbs = data.reduce((count, row) => {
+        if (row.entry_type !== "image") return count;
+        const prevThumb = prevThumbByIdRef.current[row.id] || "";
+        const nextThumb = (row.thumb_path || "").trim();
+        if (!prevThumb && !!nextThumb) return count + 1;
+        return count;
+      }, 0);
+      prevThumbByIdRef.current = data.reduce<Record<number, string>>((acc, row) => {
+        if (row.entry_type === "image") {
+          acc[row.id] = (row.thumb_path || "").trim();
+        }
+        return acc;
+      }, {});
       setEntries(data);
+      setThumbLoadFailed({});
+      const statusParts: string[] = [];
+      if (query) {
+        statusParts.push(
+          `Search loaded (${searchOperator.toUpperCase()}): ${data.length} match${
+            data.length === 1 ? "" : "es"
+          }.`
+        );
+      }
+      if (recoveredThumbs > 0) {
+        statusParts.push(
+          `Recovered ${recoveredThumbs} thumbnail${recoveredThumbs === 1 ? "" : "s"} during refresh.`
+        );
+      }
+      if (statusParts.length > 0) {
+        setStatus(statusParts.join(" "));
+      }
       if (state) setMaxDepth(state.clip_history_max_depth ?? 20);
     } catch (e) {
       setStatus("Error: " + String(e));
     } finally {
       setLoading(false);
     }
-  }, [appState]);
+  }, [appState, searchOperator, searchQuery]);
 
   useEffect(() => {
     loadEntries();
@@ -79,20 +156,51 @@ export function ClipboardTab({
     const entry = entries[idx];
     if (!entry) return;
     try {
-      await getTaurpc().copy_to_clipboard(entry.content);
-      setStatus("Copied to clipboard!");
+      if (entry.entry_type === "image") {
+        await getTaurpc().copy_clipboard_image_by_id(entry.id);
+        setStatus("Copied image to clipboard!");
+      } else {
+        await getTaurpc().copy_to_clipboard(entry.content);
+        setStatus("Copied to clipboard!");
+      }
     } catch (e) {
       setStatus("Error: " + String(e));
     }
   };
 
-  const handleView = (idx: number) => {
+  const handleView = async (idx: number) => {
     const entry = entries[idx];
     if (!entry) return;
+    if (entry.entry_type === "image") {
+      try {
+        await getTaurpc().open_clipboard_image_by_id(entry.id);
+        setStatus("Opened image.");
+      } catch (e) {
+        setStatus("Error: " + String(e));
+      }
+      return;
+    }
     const snippetCreated = snippetContentSet.has(
       normalizeContentForMatch(entry.content || "")
     );
     onOpenViewFull(entry.content, { index: idx, canPromote: !snippetCreated });
+  };
+
+  const handleSaveImageAs = async (idx: number) => {
+    const entry = entries[idx];
+    if (!entry || entry.entry_type !== "image") return;
+    const path = await save({
+      title: "Save Clipboard Image As",
+      defaultPath: "clipboard_image.png",
+      filters: [{ name: "PNG", extensions: ["png"] }],
+    });
+    if (!path) return;
+    try {
+      await getTaurpc().save_clipboard_image_by_id(entry.id, String(path));
+      setStatus(`Saved image to ${String(path)}`);
+    } catch (e) {
+      setStatus("Error: " + String(e));
+    }
   };
 
   const handleDeleteClick = (idx: number) => {
@@ -114,11 +222,34 @@ export function ClipboardTab({
   };
 
   const depth = appState?.clip_history_max_depth ?? maxDepth ?? 20;
+  const depthLabel = depth === 0 ? "Unlimited" : String(depth);
 
   return (
     <div className="p-4 border border-[var(--dc-border)] rounded mt-2">
       <h2 className="text-xl font-semibold mb-4">Clipboard History</h2>
       <p className="mb-2">
+        <span className="inline-flex items-center gap-2 px-2 py-1 border border-[var(--dc-border)] rounded mr-2 align-middle">
+          <Search className="w-4 h-4" aria-hidden />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search content/app/window..."
+            className="bg-transparent outline-none min-w-[280px]"
+          />
+        </span>
+        <select
+          value={searchOperator}
+          onChange={(e) =>
+            setSearchOperator((e.target.value as "or" | "and" | "regex") || "or")
+          }
+          className="px-2 py-1.5 bg-[var(--dc-bg-alt)] border border-[var(--dc-border)] rounded mr-2"
+          title="Search operator"
+        >
+          <option value="or">OR</option>
+          <option value="and">AND</option>
+          <option value="regex">REGEX</option>
+        </select>
         <button
           onClick={loadEntries}
           className="px-3 py-1.5 bg-[var(--dc-accent)] text-white rounded"
@@ -137,7 +268,7 @@ export function ClipboardTab({
       </p>
       <div>
         <p className="mb-2">
-          Real-time Clipboard History: {entries.length} of {depth} entries
+          Real-time Clipboard History: {entries.length} of {depthLabel} entries
         </p>
         {loading ? (
           <p>Loading...</p>
@@ -166,6 +297,9 @@ export function ClipboardTab({
                   Length
                 </th>
                 <th className="border border-[var(--dc-border)] p-1.5 text-left">
+                  Created (UTC)
+                </th>
+                <th className="border border-[var(--dc-border)] p-1.5 text-left">
                   Actions
                 </th>
               </tr>
@@ -173,13 +307,20 @@ export function ClipboardTab({
             <tbody>
               {entries.map((e, i) => {
                 const preview =
-                  (e.content || "").slice(0, 40) +
-                  (e.content?.length && e.content.length > 40 ? "..." : "");
+                  e.entry_type === "image"
+                    ? `Image ${e.image_width || "?"}x${e.image_height || "?"}${
+                        e.mime_type ? ` (${e.mime_type})` : ""
+                      }`
+                    : (e.content || "").slice(0, 40) +
+                      (e.content?.length && e.content.length > 40 ? "..." : "");
                 const app = (e.process_name || "(unknown)").slice(0, 20);
                 const title = (e.window_title || "(unknown)").slice(0, 30);
-                const snippetCreated = snippetContentSet.has(
-                  normalizeContentForMatch(e.content || "")
-                );
+                const isImage = e.entry_type === "image";
+                const thumbUrl = toFileUrl(e.thumb_path || e.image_path || "");
+                const canRenderThumb = isImage && !!thumbUrl && !thumbLoadFailed[e.id];
+                const snippetCreated = !isImage
+                  ? snippetContentSet.has(normalizeContentForMatch(e.content || ""))
+                  : false;
                 return (
                   <tr
                     key={i}
@@ -192,10 +333,17 @@ export function ClipboardTab({
                         {
                           id: "view-full",
                           icon: "👁",
-                          text: "View Full Content",
-                          onClick: () => handleView(i),
+                          text: isImage ? "Open Image" : "View Full Content",
+                          onClick: () => void handleView(i),
                         },
-                        snippetCreated
+                        isImage
+                          ? {
+                              id: "save-image-as",
+                              icon: "💾",
+                              text: "Save Image As",
+                              onClick: () => void handleSaveImageAs(i),
+                            }
+                          : snippetCreated
                           ? {
                               id: "promoted",
                               icon: "✓",
@@ -212,8 +360,8 @@ export function ClipboardTab({
                         {
                           id: "copy",
                           icon: "⧉",
-                          text: "Copy to Clipboard",
-                          onClick: () => handleCopy(i),
+                          text: isImage ? "Copy Image" : "Copy to Clipboard",
+                          onClick: () => void handleCopy(i),
                         },
                         {
                           id: "delete",
@@ -229,7 +377,9 @@ export function ClipboardTab({
                       {i + 1}
                     </td>
                     <td className="border border-[var(--dc-border)] p-1.5 text-center">
-                      {snippetCreated ? (
+                      {isImage ? (
+                        <span className="w-4 h-4 inline-block" aria-hidden />
+                      ) : snippetCreated ? (
                         <span title="Snippet already created">
                           <Check
                             className="w-4 h-4 mx-auto text-emerald-500"
@@ -241,7 +391,26 @@ export function ClipboardTab({
                       )}
                     </td>
                     <td className="border border-[var(--dc-border)] p-1.5">
-                      {preview}
+                      {canRenderThumb ? (
+                        <button
+                          type="button"
+                          onClick={() => void handleView(i)}
+                          className="border border-[var(--dc-border)] rounded overflow-hidden hover:opacity-90"
+                          title="Open full image"
+                        >
+                          <img
+                            src={thumbUrl}
+                            alt={`Clipboard thumbnail ${e.id}`}
+                            className="block max-h-16 max-w-28 object-cover bg-[var(--dc-bg-alt)]"
+                            loading="lazy"
+                            onError={() =>
+                              setThumbLoadFailed((prev) => ({ ...prev, [e.id]: true }))
+                            }
+                          />
+                        </button>
+                      ) : (
+                        preview
+                      )}
                     </td>
                     <td className="border border-[var(--dc-border)] p-1.5">
                       {app}
@@ -252,21 +421,32 @@ export function ClipboardTab({
                     <td className="border border-[var(--dc-border)] p-1.5">
                       {e.length ?? 0}
                     </td>
+                    <td className="border border-[var(--dc-border)] p-1.5 whitespace-nowrap">
+                      {formatUtcTimestamp(e.created_at)}
+                    </td>
                     <td className="border border-[var(--dc-border)] p-1.5">
                       <button
-                        onClick={() => handleCopy(i)}
+                        onClick={() => void handleCopy(i)}
                         className="inline-flex items-center px-2.5 py-1 text-sm mr-1"
                       >
                         <Copy className="w-3.5 h-3.5 mr-1" aria-hidden />
-                        Copy
+                        {isImage ? "Copy Image" : "Copy"}
                       </button>
                       <button
-                        onClick={() => handleView(i)}
+                        onClick={() => void handleView(i)}
                         className="inline-flex items-center px-2.5 py-1 text-sm mr-1"
                       >
                         <Eye className="w-3.5 h-3.5 mr-1" aria-hidden />
-                        View
+                        {isImage ? "Open Image" : "View"}
                       </button>
+                      {isImage && (
+                        <button
+                          onClick={() => void handleSaveImageAs(i)}
+                          className="inline-flex items-center px-2.5 py-1 text-sm mr-1"
+                        >
+                          Save As
+                        </button>
+                      )}
                       <button
                         onClick={() => handleDeleteClick(i)}
                         className="inline-flex items-center px-2.5 py-1 text-sm mr-1 text-[var(--dc-error)]"
@@ -274,16 +454,18 @@ export function ClipboardTab({
                         <Trash2 className="w-3.5 h-3.5 mr-1" aria-hidden />
                         Delete
                       </button>
-                      <button
-                        onClick={() => handlePromote(i)}
-                        className={`inline-flex items-center px-2.5 py-1 text-sm ${
-                          snippetCreated ? "opacity-50 cursor-not-allowed" : ""
-                        }`}
-                        disabled={snippetCreated}
-                      >
-                        <ArrowUpToLine className="w-3.5 h-3.5 mr-1" aria-hidden />
-                        {snippetCreated ? "Promoted" : "Promote"}
-                      </button>
+                      {!isImage && (
+                        <button
+                          onClick={() => handlePromote(i)}
+                          className={`inline-flex items-center px-2.5 py-1 text-sm ${
+                            snippetCreated ? "opacity-50 cursor-not-allowed" : ""
+                          }`}
+                          disabled={snippetCreated}
+                        >
+                          <ArrowUpToLine className="w-3.5 h-3.5 mr-1" aria-hidden />
+                          {snippetCreated ? "Promoted" : "Promote"}
+                        </button>
+                      )}
                     </td>
                   </tr>
                 );
