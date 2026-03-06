@@ -71,9 +71,7 @@ pub fn render(app: &mut TextExpanderApp, _ctx: &egui::Context, ui: &mut egui::Ui
     if !app.script_library_loaded {
         app.script_library_loaded = true;
         let cfg = get_scripting_config();
-        let base = dirs::config_dir()
-            .unwrap_or_else(|| Path::new(".").into())
-            .join("DigiCore");
+        let base = digicore_text_expander::ports::data_path_resolver::DataPathResolver::root();
         let lib_path = if cfg.js.library_paths.is_empty() {
             base.join(&cfg.js.library_path)
         } else {
@@ -156,9 +154,7 @@ pub fn render(app: &mut TextExpanderApp, _ctx: &egui::Context, ui: &mut egui::Ui
                 ui.add_space(8.0);
                 if ui.button("Save & Reload JS").clicked() {
                     let cfg = get_scripting_config();
-                    let base = dirs::config_dir()
-                        .unwrap_or_else(|| Path::new(".").into())
-                        .join("DigiCore");
+                    let base = digicore_text_expander::ports::data_path_resolver::DataPathResolver::root();
                     let lib_path = if cfg.js.library_paths.is_empty() {
                         base.join(&cfg.js.library_path)
                     } else {
@@ -195,9 +191,7 @@ pub fn render(app: &mut TextExpanderApp, _ctx: &egui::Context, ui: &mut egui::Ui
                             });
                         ui.add_space(8.0);
                         if ui.button("Save & Reload Python").clicked() {
-                            let base = dirs::config_dir()
-                                .unwrap_or_else(|| Path::new(".").into())
-                                .join("DigiCore");
+                            let base = digicore_text_expander::ports::data_path_resolver::DataPathResolver::root();
                             let lib_path = base.join(&cfg.py.library_path);
                             let _ = std::fs::create_dir_all(lib_path.parent().unwrap_or(Path::new(".")));
                             if let Err(e) = std::fs::write(&lib_path, &app.script_library_py_content) {
@@ -229,9 +223,7 @@ pub fn render(app: &mut TextExpanderApp, _ctx: &egui::Context, ui: &mut egui::Ui
                             });
                         ui.add_space(8.0);
                         if ui.button("Save & Reload Lua").clicked() {
-                            let base = dirs::config_dir()
-                                .unwrap_or_else(|| Path::new(".").into())
-                                .join("DigiCore");
+                            let base = digicore_text_expander::ports::data_path_resolver::DataPathResolver::root();
                             let lib_path = base.join(&cfg.lua.library_path);
                             let _ = std::fs::create_dir_all(lib_path.parent().unwrap_or(Path::new(".")));
                             if let Err(e) = std::fs::write(&lib_path, &app.script_library_lua_content) {

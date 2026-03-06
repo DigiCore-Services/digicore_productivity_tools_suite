@@ -126,10 +126,9 @@ impl TextExpanderApp {
         let library_path = storage
             .get(storage_keys::LIBRARY_PATH)
             .unwrap_or_else(|| {
-                dirs::config_dir()
-                    .map(|p| p.join("DigiCore").join("text_expansion_library.json"))
-                    .and_then(|p| p.to_str().map(String::from))
-                    .unwrap_or_else(|| "text_expansion_library.json".to_string())
+                crate::ports::data_path_resolver::DataPathResolver::script_library_path()
+                    .to_string_lossy()
+                    .to_string()
             });
         let sync_url = storage.get(storage_keys::SYNC_URL).unwrap_or_default();
         let template_date_format = storage

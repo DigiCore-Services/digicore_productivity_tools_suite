@@ -9,10 +9,7 @@ use std::path::PathBuf;
 
 /// Path for JSON state file.
 fn state_file_path() -> PathBuf {
-    dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("DigiCore")
-        .join("text_expander_state.json")
+    crate::ports::data_path_resolver::DataPathResolver::state_file_path()
 }
 
 /// Adapter that persists to a JSON file. Load on init; persist on save.

@@ -2,6 +2,7 @@
 //!
 //! Phase 0/1: StoragePort, WindowPort. Phase 2: FileDialogPort, TimerPort.
 
+pub mod data_path_resolver;
 pub mod storage;
 pub mod window;
 pub mod file_dialog;

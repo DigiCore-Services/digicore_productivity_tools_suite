@@ -4,7 +4,6 @@
 
 use super::config::get_config;
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
-use std::path::Path;
 use std::process::Command;
 
 /// Execute Python code. Returns stdout or error string.
@@ -62,9 +61,7 @@ fn load_py_library(path: &str) -> String {
     if path.trim().is_empty() {
         return String::new();
     }
-    let full = dirs::config_dir()
-        .unwrap_or_else(|| Path::new(".").into())
-        .join("DigiCore")
+    let full = crate::ports::data_path_resolver::DataPathResolver::root()
         .join(path);
     std::fs::read_to_string(full).unwrap_or_default()
 }

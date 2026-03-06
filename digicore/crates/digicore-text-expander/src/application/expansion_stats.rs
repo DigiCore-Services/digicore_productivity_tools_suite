@@ -1,6 +1,6 @@
 //! Expansion statistics - tracks expansions, chars saved, and top triggers.
 //!
-//! Persists to %APPDATA%/DigiCore/expansion_stats.json.
+//! Persists to %APPDATA%/com.digicore.text-expander/expansion_stats.json.
 //! Used by Tauri command get_expansion_stats for the Analytics dashboard.
 
 use std::collections::HashMap;
@@ -41,10 +41,7 @@ impl ExpansionStats {
 }
 
 fn stats_file_path() -> PathBuf {
-    dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("DigiCore")
-        .join("expansion_stats.json")
+    crate::ports::data_path_resolver::DataPathResolver::stats_file_path()
 }
 
 static STATS: Mutex<Option<ExpansionStats>> = Mutex::new(None);

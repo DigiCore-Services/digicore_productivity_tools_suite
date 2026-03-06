@@ -1,6 +1,6 @@
 //! Scripting configuration (SE-1, SE-2, SE-3): Externalized config for {js:}, {http:}, {run:}.
 //!
-//! Loads from %APPDATA%/DigiCore/config/scripting.json with fallback to defaults.
+//! Loads from %APPDATA%/com.digicore.text-expander/config/scripting.json with fallback to defaults.
 //! SE-3: Environment-based overrides via DIGICORE_ENV (dev, test, prod).
 
 use serde::{Deserialize, Serialize};
@@ -333,7 +333,7 @@ pub fn set_config(config: ScriptingConfig) {
 }
 
 fn config_path() -> Option<std::path::PathBuf> {
-    dirs::config_dir().map(|p| p.join("DigiCore").join("config").join("scripting.json"))
+    Some(crate::ports::data_path_resolver::DataPathResolver::config_dir().join("scripting.json"))
 }
 
 #[cfg(test)]
