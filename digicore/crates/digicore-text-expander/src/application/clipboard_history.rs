@@ -177,7 +177,7 @@ fn add_entry_inner(
     process_name: String,
     window_title: String,
 ) {
-    if state.entries.first().map(|e| e.content.as_str()) == Some(content.as_str()) {
+    if content != "[Image]" && state.entries.first().map(|e| e.content.as_str()) == Some(content.as_str()) {
         return;
     }
     state.entries.insert(

@@ -60,10 +60,6 @@ fn assets_root_dir() -> PathBuf {
     digicore_text_expander::ports::data_path_resolver::DataPathResolver::clipboard_images_dir()
 }
 
-pub fn default_assets_root_dir() -> PathBuf {
-    digicore_text_expander::ports::data_path_resolver::DataPathResolver::clipboard_images_dir()
-}
-
 fn ensure_column(conn: &Connection, name: &str, def: &str) -> Result<(), String> {
     let exists: Option<String> = conn
         .query_row(

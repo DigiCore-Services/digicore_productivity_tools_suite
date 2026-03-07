@@ -332,9 +332,11 @@ pub fn run() {
         digicore_text_expander::application::clipboard_history::set_entry_observer(Some(Arc::new(
             move |entry| {
                 if entry.content == "[Image]" {
+                    log::debug!("[Clipboard][Observer] Image marker detected, calling sync_current_clipboard_image_to_sqlite");
                     crate::api::sync_current_clipboard_image_to_sqlite(entry.process_name.clone(), entry.window_title.clone());
                     return;
                 }
+                log::debug!("[Clipboard][Observer] Text entry detected: '{}'", entry.content);
                 match crate::api::persist_clipboard_entry_with_settings(
                     &entry.content,
                     &entry.process_name,
@@ -389,12 +391,17 @@ pub fn run() {
         follower_collapse_delay_secs: app_state.ghost_follower_collapse_delay_secs,
     });
     let storage_for_clip = JsonFileStorageAdapter::load();
-    let copy_enabled = storage_for_clip
+    let copy_text_enabled = storage_for_clip
         .get(storage_keys::COPY_TO_CLIPBOARD_ENABLED)
         .map(|v| v == "true")
         .unwrap_or(true);
+    let copy_image_enabled = storage_for_clip
+        .get(storage_keys::COPY_TO_CLIPBOARD_IMAGE_ENABLED)
+        .map(|v| v == "true")
+        .unwrap_or(true);
+
     clipboard_history::update_config(ClipboardHistoryConfig {
-        enabled: copy_enabled,
+        enabled: copy_text_enabled || copy_image_enabled,
         max_depth: if app_state.clip_history_max_depth == 0 {
             usize::MAX
         } else {
@@ -428,6 +435,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_http::init())
+        .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_persisted_scope::init())
         .plugin(tauri_plugin_positioner::init())
         .plugin(prevent_default)
@@ -844,6 +852,7 @@ pub struct ConfigUpdateDto {
 #[taurpc::ipc_type]
 pub struct CopyToClipboardConfigDto {
     pub enabled: bool,
+    pub image_capture_enabled: bool,
     pub min_log_length: u32,
     pub mask_cc: bool,
     pub mask_ssn: bool,

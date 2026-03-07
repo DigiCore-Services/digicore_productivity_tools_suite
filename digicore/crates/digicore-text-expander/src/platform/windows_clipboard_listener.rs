@@ -6,7 +6,7 @@
 
 use digicore_core::domain::ports::WindowContextPort;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::thread;
+use std::{thread, time::Duration};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::Graphics::Gdi::HBRUSH;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -148,9 +148,22 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
 }
 
 fn on_clipboard_update() {
+    log::debug!("[ClipboardListener] WM_CLIPBOARDUPDATE received");
+
     let mut clipboard = match arboard::Clipboard::new() {
         Ok(c) => c,
-        Err(_) => return,
+        Err(e) => {
+            log::warn!("[ClipboardListener] Failed to initialize arboard: {}", e);
+            // Small retry for busy clipboard
+            thread::sleep(Duration::from_millis(100));
+            match arboard::Clipboard::new() {
+                Ok(c) => c,
+                Err(e2) => {
+                    log::error!("[ClipboardListener] Final failure to initialize arboard: {}", e2);
+                    return;
+                }
+            }
+        }
     };
 
     let text = match clipboard.get_text() {
@@ -161,14 +174,19 @@ fn on_clipboard_update() {
                 Some(t)
             }
         }
-        Err(_) => None,
+        Err(e) => {
+            log::trace!("[ClipboardListener] Failed to get text: {}", e);
+            None
+        },
     };
 
-    let content = if let Some(t) = text {
-        t
-    } else if clipboard.get_image().is_ok() {
+    let content = if clipboard.get_image().is_ok() {
+        log::info!("[ClipboardListener] Image detected on clipboard");
         "[Image]".to_string()
+    } else if let Some(t) = text {
+        t
     } else {
+        log::debug!("[ClipboardListener] No text or image found on clipboard");
         return;
     };
 

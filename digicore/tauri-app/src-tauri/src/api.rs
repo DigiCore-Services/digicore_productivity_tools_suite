@@ -108,6 +108,7 @@ fn default_copy_to_clipboard_config(max_history_entries: u32) -> CopyToClipboard
     let image_dir = digicore_text_expander::ports::data_path_resolver::DataPathResolver::clipboard_images_dir();
     CopyToClipboardConfigDto {
         enabled: true,
+        image_capture_enabled: true,
         min_log_length: 1,
         mask_cc: false,
         mask_ssn: false,
@@ -124,6 +125,9 @@ fn load_copy_to_clipboard_config(storage: &JsonFileStorageAdapter, max_history_e
     let mut cfg = default_copy_to_clipboard_config(max_history_entries);
     if let Some(v) = storage.get(storage_keys::COPY_TO_CLIPBOARD_ENABLED) {
         cfg.enabled = v == "true";
+    }
+    if let Some(v) = storage.get(storage_keys::COPY_TO_CLIPBOARD_IMAGE_ENABLED) {
+        cfg.image_capture_enabled = v == "true";
     }
     if let Some(v) = storage.get(storage_keys::COPY_TO_CLIPBOARD_MIN_LOG_LENGTH) {
         if let Ok(parsed) = v.parse::<u32>() {
@@ -157,6 +161,7 @@ fn load_copy_to_clipboard_config(storage: &JsonFileStorageAdapter, max_history_e
 fn save_copy_to_clipboard_config(config: &CopyToClipboardConfigDto) -> Result<(), String> {
     let mut storage = JsonFileStorageAdapter::load();
     storage.set(storage_keys::COPY_TO_CLIPBOARD_ENABLED, &config.enabled.to_string());
+    storage.set(storage_keys::COPY_TO_CLIPBOARD_IMAGE_ENABLED, &config.image_capture_enabled.to_string());
     storage.set(
         storage_keys::COPY_TO_CLIPBOARD_MIN_LOG_LENGTH,
         &config.min_log_length.clamp(1, 2000).to_string(),
@@ -183,7 +188,18 @@ fn save_copy_to_clipboard_config(config: &CopyToClipboardConfigDto) -> Result<()
         storage_keys::COPY_TO_CLIPBOARD_IMAGE_STORAGE_DIR,
         &config.image_storage_dir,
     );
-    storage.persist_if_safe().map(|_| ()).map_err(|e| e.to_string())
+    let result = storage.persist_if_safe().map(|_| ()).map_err(|e| e.to_string());
+    if result.is_ok() {
+        clipboard_history::update_config(ClipboardHistoryConfig {
+            enabled: config.enabled || config.image_capture_enabled,
+            max_depth: if config.max_history_entries == 0 {
+                usize::MAX
+            } else {
+                config.max_history_entries as usize
+            },
+        });
+    }
+    result
 }
 
 fn process_is_blacklisted(process_name: &str, blacklist_csv: &str) -> bool {
@@ -268,7 +284,7 @@ pub(crate) fn persist_clipboard_entry_with_settings(
         .and_then(|s| s.parse::<u32>().ok())
         .unwrap_or(20);
     let cfg = load_copy_to_clipboard_config(&storage, max_depth);
-    if !cfg.enabled || !cfg.json_output_enabled {
+    if !cfg.enabled {
         return Ok(false);
     }
     if process_is_blacklisted(process_name, &cfg.blacklist_processes) {
@@ -281,13 +297,15 @@ pub(crate) fn persist_clipboard_entry_with_settings(
     let inserted = clipboard_repository::insert_entry(&masked, process_name, window_title)?;
     log::info!("[Clipboard] clipboard_repository::insert_entry returned {}", inserted);
     if inserted {
-        if let Err(err) = write_clipboard_text_json_record(
-            &cfg.json_output_dir,
-            &masked,
-            process_name,
-            window_title,
-        ) {
-            diag_log("warn", format!("[Clipboard][json.write_err] {err}"));
+        if cfg.json_output_enabled {
+            if let Err(err) = write_clipboard_text_json_record(
+                &cfg.json_output_dir,
+                &masked,
+                process_name,
+                window_title,
+            ) {
+                diag_log("warn", format!("[Clipboard][json.write_err] {err}"));
+            }
         }
         if cfg.max_history_entries > 0 {
             let _ = clipboard_repository::trim_to_depth(cfg.max_history_entries);
@@ -1353,12 +1371,36 @@ pub(crate) fn sync_current_clipboard_image_to_sqlite(process_name: String, windo
         .and_then(|s| s.parse::<u32>().ok())
         .unwrap_or(20);
     let cfg = load_copy_to_clipboard_config(&storage, max_depth);
-    if !cfg.enabled {
+    if !cfg.enabled && !cfg.image_capture_enabled {
         return;
     }
-    let image = match arboard::Clipboard::new().and_then(|mut c| c.get_image()) {
-        Ok(img) => img,
-        Err(_) => return,
+    if !cfg.image_capture_enabled {
+        return;
+    }
+    let mut image_opt = None;
+    for attempt in 0..3 {
+        if attempt > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(150));
+        }
+        match arboard::Clipboard::new().and_then(|mut c| c.get_image()) {
+            Ok(img) => {
+                log::info!("[Clipboard][capture.image] Detected image: {}x{} ({} bytes) on attempt {}", img.width, img.height, img.bytes.len(), attempt + 1);
+                image_opt = Some(img);
+                break;
+            },
+            Err(e) => {
+                if attempt == 2 {
+                    log::warn!("[Clipboard][capture.image] Final failed to get image from clipboard: {}", e);
+                } else {
+                    log::debug!("[Clipboard][capture.image] Retryable failure to get image (attempt {}): {}", attempt + 1, e);
+                }
+            },
+        }
+    }
+
+    let image = match image_opt {
+        Some(img) => img,
+        None => return,
     };
     if image.width == 0 || image.height == 0 || image.bytes.is_empty() {
         return;
@@ -1772,7 +1814,7 @@ impl Api for ApiImpl {
             let mut guard = self.state.lock().map_err(|e| e.to_string())?;
             guard.clip_history_max_depth = normalized.max_history_entries as usize;
             clipboard_history::update_config(ClipboardHistoryConfig {
-                enabled: normalized.enabled,
+                enabled: normalized.enabled || normalized.image_capture_enabled,
                 max_depth: if normalized.max_history_entries == 0 {
                     usize::MAX
                 } else {
