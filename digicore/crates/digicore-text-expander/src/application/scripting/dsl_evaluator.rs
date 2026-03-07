@@ -10,8 +10,14 @@ pub fn evaluate(expr: &str) -> String {
     if expr.is_empty() {
         return String::new();
     }
-    match meval::eval_str(expr) {
-        Ok(v) => format_number(v),
+    match evalexpr::eval(expr) {
+        Ok(v) => match v.as_float() {
+            Ok(f) => format_number(f),
+            Err(_) => match v.as_int() {
+                Ok(i) => format_number(i as f64),
+                Err(_) => format!("[DSL Error: Result is not a number]"),
+            },
+        },
         Err(e) => format!("[DSL Error: {}]", e),
     }
 }
