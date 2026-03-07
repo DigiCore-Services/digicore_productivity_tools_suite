@@ -35,6 +35,7 @@ type SettingsBundlePreview = {
 
 type CopyToClipboardConfig = {
   enabled: boolean;
+  image_capture_enabled: boolean;
   min_log_length: number;
   mask_cc: boolean;
   mask_ssn: boolean;
@@ -108,6 +109,7 @@ export function ConfigTab({ appState, onConfigLoaded }: ConfigTabProps) {
   const [ghostFollowerOpacity, setGhostFollowerOpacity] = useState(100);
   const [clipMaxDepth, setClipMaxDepth] = useState(20);
   const [copyEnabled, setCopyEnabled] = useState(true);
+  const [copyImageEnabled, setCopyImageEnabled] = useState(true);
   const [copyMinLogLength, setCopyMinLogLength] = useState(1);
   const [copyMaskCc, setCopyMaskCc] = useState(false);
   const [copyMaskSsn, setCopyMaskSsn] = useState(false);
@@ -136,6 +138,14 @@ export function ConfigTab({ appState, onConfigLoaded }: ConfigTabProps) {
   );
   const [importWarningsAcknowledged, setImportWarningsAcknowledged] =
     useState(false);
+  const [lastSavedGroup, setLastSavedGroup] = useState<string | null>(null);
+
+  const showFeedback = (groupName: string) => {
+    setLastSavedGroup(groupName);
+    setTimeout(() => {
+      setLastSavedGroup((prev) => (prev === groupName ? null : prev));
+    }, 3000);
+  };
 
   useEffect(() => {
     if (appState) {
@@ -168,7 +178,7 @@ export function ConfigTab({ appState, onConfigLoaded }: ConfigTabProps) {
       setTheme(
         (typeof localStorage !== "undefined" &&
           localStorage.getItem("digicore-theme")) ||
-          "light"
+        "light"
       );
       onConfigLoaded(appState);
     }
@@ -182,6 +192,7 @@ export function ConfigTab({ appState, onConfigLoaded }: ConfigTabProps) {
           await getTaurpc().get_copy_to_clipboard_config();
         if (cancelled) return;
         setCopyEnabled(!!cfg.enabled);
+        setCopyImageEnabled(!!cfg.image_capture_enabled);
         setCopyMinLogLength(cfg.min_log_length ?? 1);
         setCopyMaskCc(!!cfg.mask_cc);
         setCopyMaskSsn(!!cfg.mask_ssn);
@@ -233,14 +244,20 @@ export function ConfigTab({ appState, onConfigLoaded }: ConfigTabProps) {
     2
   );
 
-  const applyConfig = async (partial: Record<string, unknown>) => {
+  const applyConfig = async (
+    partial: Record<string, unknown>,
+    groupName: string
+  ) => {
     try {
-      await getTaurpc().update_config(partial as Parameters<ReturnType<typeof getTaurpc>["update_config"]>[0]);
+      await getTaurpc().update_config(
+        partial as Parameters<ReturnType<typeof getTaurpc>["update_config"]>[0]
+      );
       await getTaurpc().save_settings();
       const dto = await getTaurpc().get_app_state();
       onConfigLoaded(normalizeAppState(dto));
       setStatus("Settings saved.");
       setStatusError(false);
+      showFeedback(groupName);
     } catch (e) {
       setStatus("Error: " + String(e));
       setStatusError(true);
@@ -255,6 +272,7 @@ export function ConfigTab({ appState, onConfigLoaded }: ConfigTabProps) {
     try {
       await getTaurpc().save_copy_to_clipboard_config({
         enabled: copyEnabled,
+        image_capture_enabled: copyImageEnabled,
         min_log_length: minLen,
         mask_cc: copyMaskCc,
         mask_ssn: copyMaskSsn,
@@ -273,7 +291,8 @@ export function ConfigTab({ appState, onConfigLoaded }: ConfigTabProps) {
       setStatusError(false);
       setClipMaxDepth(maxEntries);
       setLoadedImageStorageDir(copyImageStorageDir);
-      await applyConfig({ clip_history_max_depth: maxEntries });
+      await applyConfig({ clip_history_max_depth: maxEntries }, "core");
+      showFeedback("copy_to_clipboard");
     } catch (e) {
       setStatus("Copy-to-Clipboard save failed: " + String(e));
       setStatusError(true);
@@ -309,7 +328,7 @@ export function ConfigTab({ appState, onConfigLoaded }: ConfigTabProps) {
   const applyTheme = (pref: string) => {
     const resolved = resolveTheme(pref);
     applyThemeToDocument(resolved);
-    emit("digicore-theme-changed", { theme: resolved }).catch(() => {});
+    emit("digicore-theme-changed", { theme: resolved }).catch(() => { });
   };
 
   useEffect(() => {
@@ -368,8 +387,7 @@ export function ConfigTab({ appState, onConfigLoaded }: ConfigTabProps) {
         autostart
       );
       setStatus(
-        `Exported settings bundle with ${count} group${
-          count === 1 ? "" : "s"
+        `Exported settings bundle with ${count} group${count === 1 ? "" : "s"
         } to ${String(path)}`
       );
       setStatusError(false);
@@ -455,8 +473,7 @@ export function ConfigTab({ appState, onConfigLoaded }: ConfigTabProps) {
       const dto = await getTaurpc().get_app_state();
       onConfigLoaded(normalizeAppState(dto));
       setStatus(
-        `Import complete: applied ${result.applied_groups.length} group${
-          result.applied_groups.length === 1 ? "" : "s"
+        `Import complete: applied ${result.applied_groups.length} group${result.applied_groups.length === 1 ? "" : "s"
         }, warnings ${result.warnings.length}.`
       );
       setStatusError(false);
@@ -501,15 +518,23 @@ export function ConfigTab({ appState, onConfigLoaded }: ConfigTabProps) {
         />
         <button
           onClick={() =>
-            applyConfig({
-              template_date_format: templateDate,
-              template_time_format: templateTime,
-            })
+            applyConfig(
+              {
+                template_date_format: templateDate,
+                template_time_format: templateTime,
+              },
+              "templates"
+            )
           }
           className="mt-2 px-3 py-1.5 bg-[var(--dc-accent)] text-white rounded"
         >
-          Apply Templates
+          Save Templates Settings
         </button>
+        {lastSavedGroup === "templates" && (
+          <span className="ml-2 text-emerald-500 font-medium animate-in fade-in duration-300">
+            Saved!
+          </span>
+        )}
       </details>
 
       <details className={sectionCls}>
@@ -523,11 +548,16 @@ export function ConfigTab({ appState, onConfigLoaded }: ConfigTabProps) {
           className={inputCls}
         />
         <button
-          onClick={() => applyConfig({ sync_url: syncUrl })}
+          onClick={() => applyConfig({ sync_url: syncUrl }, "sync")}
           className="mt-2 px-3 py-1.5 bg-[var(--dc-accent)] text-white rounded"
         >
-          Save Sync URL
+          Save Sync URL Settings
         </button>
+        {lastSavedGroup === "sync" && (
+          <span className="ml-2 text-emerald-500 font-medium animate-in fade-in duration-300">
+            Saved!
+          </span>
+        )}
       </details>
 
       <details className={sectionCls}>
@@ -608,20 +638,28 @@ export function ConfigTab({ appState, onConfigLoaded }: ConfigTabProps) {
         />
         <button
           onClick={() =>
-            applyConfig({
-              discovery_enabled: discoveryEnabled,
-              discovery_threshold: discoveryThreshold,
-              discovery_lookback: discoveryLookback,
-              discovery_min_len: discoveryMinLen,
-              discovery_max_len: discoveryMaxLen,
-              discovery_excluded_apps: discoveryExcludedApps,
-              discovery_excluded_window_titles: discoveryExcludedTitles,
-            })
+            applyConfig(
+              {
+                discovery_enabled: discoveryEnabled,
+                discovery_threshold: discoveryThreshold,
+                discovery_lookback: discoveryLookback,
+                discovery_min_len: discoveryMinLen,
+                discovery_max_len: discoveryMaxLen,
+                discovery_excluded_apps: discoveryExcludedApps,
+                discovery_excluded_window_titles: discoveryExcludedTitles,
+              },
+              "discovery"
+            )
           }
           className="mt-2 px-3 py-1.5 bg-[var(--dc-accent)] text-white rounded"
         >
-          Apply Discovery
+          Save Discovery Settings
         </button>
+        {lastSavedGroup === "discovery" && (
+          <span className="ml-2 text-emerald-500 font-medium animate-in fade-in duration-300">
+            Saved!
+          </span>
+        )}
       </details>
 
       <details className={sectionCls}>
@@ -701,19 +739,27 @@ export function ConfigTab({ appState, onConfigLoaded }: ConfigTabProps) {
         />
         <button
           onClick={() =>
-            applyConfig({
-              ghost_suggestor_enabled: ghostSuggestorEnabled,
-              ghost_suggestor_debounce_ms: ghostSuggestorDebounce,
-              ghost_suggestor_display_secs: ghostSuggestorDisplay,
-              ghost_suggestor_snooze_duration_mins: ghostSuggestorSnooze,
-              ghost_suggestor_offset_x: ghostSuggestorOffsetX,
-              ghost_suggestor_offset_y: ghostSuggestorOffsetY,
-            })
+            applyConfig(
+              {
+                ghost_suggestor_enabled: ghostSuggestorEnabled,
+                ghost_suggestor_debounce_ms: ghostSuggestorDebounce,
+                ghost_suggestor_display_secs: ghostSuggestorDisplay,
+                ghost_suggestor_snooze_duration_mins: ghostSuggestorSnooze,
+                ghost_suggestor_offset_x: ghostSuggestorOffsetX,
+                ghost_suggestor_offset_y: ghostSuggestorOffsetY,
+              },
+              "ghost_suggestor"
+            )
           }
           className="mt-2 px-3 py-1.5 bg-[var(--dc-accent)] text-white rounded"
         >
-          Apply Ghost Suggestor
+          Save Ghost Suggestor Settings
         </button>
+        {lastSavedGroup === "ghost_suggestor" && (
+          <span className="ml-2 text-emerald-500 font-medium animate-in fade-in duration-300">
+            Saved!
+          </span>
+        )}
       </details>
 
       <details className={sectionCls}>
@@ -783,25 +829,33 @@ export function ConfigTab({ appState, onConfigLoaded }: ConfigTabProps) {
           onChange={(e) => {
             const v = clampInt(parseIntOr(e.target.value, ghostFollowerOpacity), 10, 100);
             setGhostFollowerOpacity(v);
-            getTaurpc().ghost_follower_set_opacity(v).catch(() => {});
+            getTaurpc().ghost_follower_set_opacity(v).catch(() => { });
           }}
           className="w-full mt-1"
         />
         <button
           onClick={() =>
-            applyConfig({
-              ghost_follower_enabled: ghostFollowerEnabled,
-              ghost_follower_hover_preview: ghostFollowerHover,
-              ghost_follower_collapse_delay_secs: ghostFollowerCollapse,
-              ghost_follower_edge_right: ghostFollowerEdge === "right",
-              ghost_follower_monitor_anchor: monitorAnchorSafe,
-              ghost_follower_opacity: ghostFollowerOpacity,
-            })
+            applyConfig(
+              {
+                ghost_follower_enabled: ghostFollowerEnabled,
+                ghost_follower_hover_preview: ghostFollowerHover,
+                ghost_follower_collapse_delay_secs: ghostFollowerCollapse,
+                ghost_follower_edge_right: ghostFollowerEdge === "right",
+                ghost_follower_monitor_anchor: monitorAnchorSafe,
+                ghost_follower_opacity: ghostFollowerOpacity,
+              },
+              "ghost_follower"
+            )
           }
           className="mt-2 px-3 py-1.5 bg-[var(--dc-accent)] text-white rounded"
         >
-          Apply Ghost Follower
+          Save Ghost Follower Settings
         </button>
+        {lastSavedGroup === "ghost_follower" && (
+          <span className="ml-2 text-emerald-500 font-medium animate-in fade-in duration-300">
+            Saved!
+          </span>
+        )}
       </details>
 
       <details className={sectionCls}>
@@ -828,7 +882,15 @@ export function ConfigTab({ appState, onConfigLoaded }: ConfigTabProps) {
             checked={copyEnabled}
             onChange={(e) => setCopyEnabled(e.target.checked)}
           />
-          Enable Copy-to-Clipboard Capture
+          Enable Copy-to-Clipboard (Text) Capture
+        </label>
+        <label className="block mt-2 flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={copyImageEnabled}
+            onChange={(e) => setCopyImageEnabled(e.target.checked)}
+          />
+          Enable Copy-to-Clipboard (Image) Capture
         </label>
         <label className="block mt-2 flex items-center gap-2">
           <input
@@ -836,7 +898,7 @@ export function ConfigTab({ appState, onConfigLoaded }: ConfigTabProps) {
             checked={copyJsonOutputEnabled}
             onChange={(e) => setCopyJsonOutputEnabled(e.target.checked)}
           />
-          JSON Output Enabled (TXT disabled)
+          Enable JSON Output
         </label>
         <label className="block mt-2">JSON Output Directory:</label>
         <div className="mt-1 flex gap-2">
@@ -942,6 +1004,11 @@ export function ConfigTab({ appState, onConfigLoaded }: ConfigTabProps) {
         >
           Save Copy-to-Clipboard Settings
         </button>
+        {lastSavedGroup === "copy_to_clipboard" && (
+          <span className="ml-2 text-emerald-500 font-medium animate-in fade-in duration-300">
+            Saved!
+          </span>
+        )}
         <button
           onClick={handleClearClipboardHistory}
           className="mt-2 ml-2 px-3 py-1.5 bg-[var(--dc-bg-alt)] border border-[var(--dc-border)] rounded"
@@ -1015,37 +1082,45 @@ export function ConfigTab({ appState, onConfigLoaded }: ConfigTabProps) {
             } catch {
               /* ignore */
             }
-            await applyConfig({
-              expansion_paused: expansionPaused,
-              template_date_format: templateDate,
-              template_time_format: templateTime,
-              sync_url: syncUrl,
-              discovery_enabled: discoveryEnabled,
-              discovery_threshold: discoveryThreshold,
-              discovery_lookback: discoveryLookback,
-              discovery_min_len: discoveryMinLen,
-              discovery_max_len: discoveryMaxLen,
-              discovery_excluded_apps: discoveryExcludedApps,
-              discovery_excluded_window_titles: discoveryExcludedTitles,
-              ghost_suggestor_enabled: ghostSuggestorEnabled,
-              ghost_suggestor_debounce_ms: ghostSuggestorDebounce,
-              ghost_suggestor_display_secs: ghostSuggestorDisplay,
-              ghost_suggestor_snooze_duration_mins: ghostSuggestorSnooze,
-              ghost_suggestor_offset_x: ghostSuggestorOffsetX,
-              ghost_suggestor_offset_y: ghostSuggestorOffsetY,
-              ghost_follower_enabled: ghostFollowerEnabled,
-              ghost_follower_hover_preview: ghostFollowerHover,
-              ghost_follower_collapse_delay_secs: ghostFollowerCollapse,
-              ghost_follower_edge_right: ghostFollowerEdge === "right",
-              ghost_follower_monitor_anchor: monitorAnchorSafe,
-              ghost_follower_opacity: ghostFollowerOpacity,
-              clip_history_max_depth: clipMaxDepth,
-            });
+            await applyConfig(
+              {
+                expansion_paused: expansionPaused,
+                template_date_format: templateDate,
+                template_time_format: templateTime,
+                sync_url: syncUrl,
+                discovery_enabled: discoveryEnabled,
+                discovery_threshold: discoveryThreshold,
+                discovery_lookback: discoveryLookback,
+                discovery_min_len: discoveryMinLen,
+                discovery_max_len: discoveryMaxLen,
+                discovery_excluded_apps: discoveryExcludedApps,
+                discovery_excluded_window_titles: discoveryExcludedTitles,
+                ghost_suggestor_enabled: ghostSuggestorEnabled,
+                ghost_suggestor_debounce_ms: ghostSuggestorDebounce,
+                ghost_suggestor_display_secs: ghostSuggestorDisplay,
+                ghost_suggestor_snooze_duration_mins: ghostSuggestorSnooze,
+                ghost_suggestor_offset_x: ghostSuggestorOffsetX,
+                ghost_suggestor_offset_y: ghostSuggestorOffsetY,
+                ghost_follower_enabled: ghostFollowerEnabled,
+                ghost_follower_hover_preview: ghostFollowerHover,
+                ghost_follower_collapse_delay_secs: ghostFollowerCollapse,
+                ghost_follower_edge_right: ghostFollowerEdge === "right",
+                ghost_follower_monitor_anchor: monitorAnchorSafe,
+                ghost_follower_opacity: ghostFollowerOpacity,
+                clip_history_max_depth: clipMaxDepth,
+              },
+              "all"
+            );
           }}
           className="mt-2 px-3 py-1.5 bg-[var(--dc-accent)] text-white rounded"
         >
           Save All Settings
         </button>
+        {lastSavedGroup === "all" && (
+          <span className="ml-2 text-emerald-500 font-medium animate-in fade-in duration-300">
+            Saved!
+          </span>
+        )}
       </details>
 
       <details className={sectionCls}>

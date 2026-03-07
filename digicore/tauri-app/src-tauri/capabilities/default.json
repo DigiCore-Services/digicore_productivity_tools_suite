@@ -2,7 +2,12 @@
   "$schema": "https://schema.tauri.app/config/2/capability",
   "identifier": "default",
   "description": "Default capabilities for DigiCore Text Expander",
-  "windows": ["main", "ghost-suggestor", "ghost-follower", "quick-search"],
+  "windows": [
+    "main",
+    "ghost-suggestor",
+    "ghost-follower",
+    "quick-search"
+  ],
   "permissions": [
     "core:default",
     "core:window:allow-start-dragging",
@@ -20,14 +25,27 @@
     "dialog:default",
     "positioner:default",
     "store:default",
+    "fs:default",
+    "core:path:default",
+    "core:image:default",
     {
       "identifier": "http:default",
       "allow": [
-        { "url": "https://*.github.com/*" },
-        { "url": "https://*.githubusercontent.com/*" },
-        { "url": "http://localhost:*" },
-        { "url": "http://127.0.0.1:*" },
-        { "url": "https://*" }
+        {
+          "url": "https://*.github.com/*"
+        },
+        {
+          "url": "https://*.githubusercontent.com/*"
+        },
+        {
+          "url": "http://localhost:*"
+        },
+        {
+          "url": "http://127.0.0.1:*"
+        },
+        {
+          "url": "https://*"
+        }
       ]
     }
   ]

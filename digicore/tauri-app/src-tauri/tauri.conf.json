@@ -27,13 +27,24 @@
         "transparent": false,
         "decorations": true
       }
-    ]
+    ],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' asset: https://* http://localhost:* http://127.0.0.1:*;",
+      "assetProtocol": {
+        "enable": true,
+        "scope": [
+          "**"
+        ]
+      }
+    }
   },
   "bundle": {
     "active": true,
     "targets": "all",
     "createUpdaterArtifacts": true,
-    "icon": ["icons/icon.ico"],
+    "icon": [
+      "icons/icon.ico"
+    ],
     "windows": {
       "certificateThumbprint": null,
       "digestAlgorithm": "sha256",
@@ -46,7 +57,9 @@
   },
   "plugins": {
     "sql": {
-      "preload": ["sqlite:digicore.db"]
+      "preload": [
+        "sqlite:digicore.db"
+      ]
     },
     "shell": {
       "open": true
@@ -57,7 +70,9 @@
     },
     "deep-link": {
       "desktop": {
-        "schemes": ["digicore"]
+        "schemes": [
+          "digicore"
+        ]
       }
     }
   }
