@@ -29,6 +29,8 @@ use digicore_text_expander::drivers::hotstring::{
 };
 use digicore_text_expander::application::app_state::AppState;
 use digicore_text_expander::ports::{storage_keys, StoragePort};
+use digicore_text_expander::services::extraction_service::create_extraction_service;
+use digicore_core::domain::{ExtractionSource, ExtractionMimeType};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -118,6 +120,7 @@ fn default_copy_to_clipboard_config(max_history_entries: u32) -> CopyToClipboard
         json_output_enabled: true,
         json_output_dir: json_dir.to_string_lossy().to_string(),
         image_storage_dir: image_dir.to_string_lossy().to_string(),
+        ocr_enabled: true,
     }
 }
 
@@ -155,6 +158,9 @@ fn load_copy_to_clipboard_config(storage: &JsonFileStorageAdapter, max_history_e
     if let Some(v) = storage.get(storage_keys::COPY_TO_CLIPBOARD_IMAGE_STORAGE_DIR) {
         cfg.image_storage_dir = v;
     }
+    if let Some(v) = storage.get(storage_keys::COPY_TO_CLIPBOARD_OCR_ENABLED) {
+        cfg.ocr_enabled = v == "true";
+    }
     cfg
 }
 
@@ -187,6 +193,10 @@ fn save_copy_to_clipboard_config(config: &CopyToClipboardConfigDto) -> Result<()
     storage.set(
         storage_keys::COPY_TO_CLIPBOARD_IMAGE_STORAGE_DIR,
         &config.image_storage_dir,
+    );
+    storage.set(
+        storage_keys::COPY_TO_CLIPBOARD_OCR_ENABLED,
+        &config.ocr_enabled.to_string(),
     );
     let result = storage.persist_if_safe().map(|_| ()).map_err(|e| e.to_string());
     if result.is_ok() {
@@ -1168,6 +1178,59 @@ fn persist_settings_to_storage(state: &AppState) -> Result<(), String> {
         storage_keys::DISCOVERY_EXCLUDED_WINDOW_TITLES,
         &state.discovery_excluded_window_titles,
     );
+    
+    storage.set(storage_keys::CORPUS_ENABLED, &state.corpus_enabled.to_string());
+    storage.set(storage_keys::CORPUS_OUTPUT_DIR, &state.corpus_output_dir);
+    storage.set(storage_keys::CORPUS_SNAPSHOT_DIR, &state.corpus_snapshot_dir);
+    storage.set(storage_keys::CORPUS_SHORTCUT_MODIFIERS, &state.corpus_shortcut_modifiers.to_string());
+    storage.set(storage_keys::CORPUS_SHORTCUT_KEY, &state.corpus_shortcut_key.to_string());
+
+    storage.set(storage_keys::EXTRACTION_ROW_OVERLAP_TOLERANCE, &state.extraction_row_overlap_tolerance.to_string());
+    storage.set(storage_keys::EXTRACTION_CLUSTER_THRESHOLD_FACTOR, &state.extraction_cluster_threshold_factor.to_string());
+    storage.set(storage_keys::EXTRACTION_ZONE_PROXIMITY, &state.extraction_zone_proximity.to_string());
+    storage.set(storage_keys::EXTRACTION_CROSS_ZONE_GAP_FACTOR, &state.extraction_cross_zone_gap_factor.to_string());
+    storage.set(storage_keys::EXTRACTION_SAME_ZONE_GAP_FACTOR, &state.extraction_same_zone_gap_factor.to_string());
+    storage.set(storage_keys::EXTRACTION_SIGNIFICANT_GAP_GATE, &state.extraction_significant_gap_gate.to_string());
+    storage.set(storage_keys::EXTRACTION_CHAR_WIDTH_FACTOR, &state.extraction_char_width_factor.to_string());
+    storage.set(storage_keys::EXTRACTION_BRIDGED_THRESHOLD, &state.extraction_bridged_threshold.to_string());
+    storage.set(storage_keys::EXTRACTION_WORD_SPACING_FACTOR, &state.extraction_word_spacing_factor.to_string());
+
+    storage.set(storage_keys::EXTRACTION_FOOTER_TRIGGERS, &state.extraction_footer_triggers);
+    storage.set(storage_keys::EXTRACTION_TABLE_MIN_CONTIGUOUS_ROWS, &state.extraction_table_min_contiguous_rows.to_string());
+    storage.set(storage_keys::EXTRACTION_TABLE_MIN_AVG_SEGMENTS, &state.extraction_table_min_avg_segments.to_string());
+
+    storage.set(storage_keys::EXTRACTION_ADAPTIVE_PLAINTEXT_CLUSTER_FACTOR, &state.extraction_adaptive_plaintext_cluster_factor.to_string());
+    storage.set(storage_keys::EXTRACTION_ADAPTIVE_PLAINTEXT_GAP_GATE, &state.extraction_adaptive_plaintext_gap_gate.to_string());
+    storage.set(storage_keys::EXTRACTION_ADAPTIVE_TABLE_CLUSTER_FACTOR, &state.extraction_adaptive_table_cluster_factor.to_string());
+    storage.set(storage_keys::EXTRACTION_ADAPTIVE_TABLE_GAP_GATE, &state.extraction_adaptive_table_gap_gate.to_string());
+    storage.set(storage_keys::EXTRACTION_ADAPTIVE_COLUMN_CLUSTER_FACTOR, &state.extraction_adaptive_column_cluster_factor.to_string());
+    storage.set(storage_keys::EXTRACTION_ADAPTIVE_COLUMN_GAP_GATE, &state.extraction_adaptive_column_gap_gate.to_string());
+
+    storage.set(storage_keys::EXTRACTION_REFINEMENT_ENTROPY_THRESHOLD, &state.extraction_refinement_entropy_threshold.to_string());
+    storage.set(storage_keys::EXTRACTION_REFINEMENT_CLUSTER_THRESHOLD_MODIFIER, &state.extraction_refinement_cluster_threshold_modifier.to_string());
+    storage.set(storage_keys::EXTRACTION_REFINEMENT_CROSS_ZONE_GAP_MODIFIER, &state.extraction_refinement_cross_zone_gap_modifier.to_string());
+
+    storage.set(storage_keys::EXTRACTION_CLASSIFIER_GUTTER_WEIGHT, &state.extraction_classifier_gutter_weight.to_string());
+    storage.set(storage_keys::EXTRACTION_CLASSIFIER_DENSITY_WEIGHT, &state.extraction_classifier_density_weight.to_string());
+    storage.set(storage_keys::EXTRACTION_CLASSIFIER_MULTICOLUMN_DENSITY_MAX, &state.extraction_classifier_multicolumn_density_max.to_string());
+    storage.set(storage_keys::EXTRACTION_CLASSIFIER_TABLE_DENSITY_MIN, &state.extraction_classifier_table_density_min.to_string());
+    storage.set(storage_keys::EXTRACTION_CLASSIFIER_TABLE_ENTROPY_MIN, &state.extraction_classifier_table_entropy_min.to_string());
+
+    storage.set(storage_keys::EXTRACTION_COLUMNS_MIN_CONTIGUOUS_ROWS, &state.extraction_columns_min_contiguous_rows.to_string());
+    storage.set(storage_keys::EXTRACTION_COLUMNS_GUTTER_GAP_FACTOR, &state.extraction_columns_gutter_gap_factor.to_string());
+    storage.set(storage_keys::EXTRACTION_COLUMNS_GUTTER_VOID_TOLERANCE, &state.extraction_columns_gutter_void_tolerance.to_string());
+    storage.set(storage_keys::EXTRACTION_COLUMNS_EDGE_MARGIN_TOLERANCE, &state.extraction_columns_edge_margin_tolerance.to_string());
+
+    storage.set(storage_keys::EXTRACTION_HEADERS_MAX_WIDTH_RATIO, &state.extraction_headers_max_width_ratio.to_string());
+    storage.set(storage_keys::EXTRACTION_HEADERS_CENTERED_TOLERANCE, &state.extraction_headers_centered_tolerance.to_string());
+    storage.set(storage_keys::EXTRACTION_HEADERS_H1_SIZE_MULTIPLIER, &state.extraction_headers_h1_size_multiplier.to_string());
+    storage.set(storage_keys::EXTRACTION_HEADERS_H2_SIZE_MULTIPLIER, &state.extraction_headers_h2_size_multiplier.to_string());
+    storage.set(storage_keys::EXTRACTION_HEADERS_H3_SIZE_MULTIPLIER, &state.extraction_headers_h3_size_multiplier.to_string());
+
+    storage.set(storage_keys::EXTRACTION_SCORING_JITTER_PENALTY_WEIGHT, &state.extraction_scoring_jitter_penalty_weight.to_string());
+    storage.set(storage_keys::EXTRACTION_SCORING_SIZE_PENALTY_WEIGHT, &state.extraction_scoring_size_penalty_weight.to_string());
+    storage.set(storage_keys::EXTRACTION_SCORING_LOW_CONFIDENCE_THRESHOLD, &state.extraction_scoring_low_confidence_threshold.to_string());
+
     storage.persist().map_err(|e| e.to_string())
 }
 
@@ -1405,21 +1468,77 @@ pub(crate) fn sync_current_clipboard_image_to_sqlite(process_name: String, windo
     if image.width == 0 || image.height == 0 || image.bytes.is_empty() {
         return;
     }
-    let inserted = clipboard_repository::insert_image_entry(
-        image.bytes.as_ref(),
-        image.width as u32,
-        image.height as u32,
+
+    // Capture initial values for async task
+    let rgba_bytes = image.bytes.to_vec();
+    let width = image.width;
+    let height = image.height;
+    let proc = process_name.clone();
+    let win = window_title.clone();
+    let ocr_enabled = cfg.ocr_enabled;
+
+    let inserted_id = clipboard_repository::insert_image_entry_returning_id(
+        &rgba_bytes,
+        width as u32,
+        height as u32,
         &process_name,
         &window_title,
         Some("image/png"),
         &cfg.image_storage_dir,
-    )
-    .unwrap_or(false);
-    if inserted {
+    ).unwrap_or(0);
+
+    if inserted_id > 0 {
         if cfg.max_history_entries > 0 {
             let _ = clipboard_repository::trim_to_depth(cfg.max_history_entries);
         }
         diag_log("info", "[Clipboard][capture.image] persisted clipboard image");
+
+        // Spawn OCR if enabled
+        if ocr_enabled {
+            tauri::async_runtime::spawn(async move {
+                let dispatcher = create_extraction_service();
+                // Encode raw pixels to PNG before OCR, as Windows Native OCR (WIC) 
+                // requires a container format (PNG/JPG) for its BitmapDecoder.
+                let mut png_bytes = Vec::new();
+                match image::RgbaImage::from_raw(width as u32, height as u32, rgba_bytes) {
+                    Some(img) => {
+                        if let Err(e) = image::DynamicImage::ImageRgba8(img)
+                            .write_to(&mut std::io::Cursor::new(&mut png_bytes), image::ImageFormat::Png) {
+                            log::error!("[Clipboard][OCR] Failed to encode PNG for OCR: {}", e);
+                            return;
+                        }
+                    },
+                    None => {
+                        log::error!("[Clipboard][OCR] Failed to construct RgbaImage from buffer ({}x{})", width, height);
+                        return;
+                    }
+                }
+
+                let source = ExtractionSource::Buffer(png_bytes);
+                let mime = ExtractionMimeType::Png; 
+                
+                log::info!("[Clipboard][OCR] Starting background OCR for parent_id: {}", inserted_id);
+                match dispatcher.extract(source, mime).await {
+                    Ok(result) => {
+                        if !result.text.trim().is_empty() {
+                            let _ = clipboard_repository::insert_extracted_text_entry(
+                                &result.text,
+                                &proc,
+                                &win,
+                                inserted_id,
+                                &result.metadata,
+                            );
+                            log::info!("[Clipboard][OCR] OCR completed and saved for parent_id: {}", inserted_id);
+                        } else {
+                            log::info!("[Clipboard][OCR] OCR completed but no text found for parent_id: {}", inserted_id);
+                        }
+                    },
+                    Err(e) => {
+                        log::error!("[Clipboard][OCR] OCR failed for parent_id {}: {}", inserted_id, e);
+                    }
+                }
+            });
+        }
     }
 }
 
@@ -1651,6 +1770,58 @@ impl Api for ApiImpl {
         if let Some(ref v) = config.script_library_run_allowlist {
             guard.script_library_run_allowlist = v.clone();
         }
+
+        if let Some(v) = config.corpus_enabled { guard.corpus_enabled = v; }
+        if let Some(ref v) = config.corpus_output_dir { guard.corpus_output_dir = v.clone(); }
+        if let Some(ref v) = config.corpus_snapshot_dir { guard.corpus_snapshot_dir = v.clone(); }
+        if let Some(v) = config.corpus_shortcut_modifiers { guard.corpus_shortcut_modifiers = v as u16; }
+        if let Some(v) = config.corpus_shortcut_key { guard.corpus_shortcut_key = v as u16; }
+
+        if let Some(v) = config.extraction_row_overlap_tolerance { guard.extraction_row_overlap_tolerance = v; }
+        if let Some(v) = config.extraction_cluster_threshold_factor { guard.extraction_cluster_threshold_factor = v; }
+        if let Some(v) = config.extraction_zone_proximity { guard.extraction_zone_proximity = v; }
+        if let Some(v) = config.extraction_cross_zone_gap_factor { guard.extraction_cross_zone_gap_factor = v; }
+        if let Some(v) = config.extraction_same_zone_gap_factor { guard.extraction_same_zone_gap_factor = v; }
+        if let Some(v) = config.extraction_significant_gap_gate { guard.extraction_significant_gap_gate = v; }
+        if let Some(v) = config.extraction_char_width_factor { guard.extraction_char_width_factor = v; }
+        if let Some(v) = config.extraction_bridged_threshold { guard.extraction_bridged_threshold = v; }
+        if let Some(v) = config.extraction_word_spacing_factor { guard.extraction_word_spacing_factor = v; }
+
+        if let Some(ref v) = config.extraction_footer_triggers { guard.extraction_footer_triggers = v.clone(); }
+        if let Some(v) = config.extraction_table_min_contiguous_rows { guard.extraction_table_min_contiguous_rows = v as usize; }
+        if let Some(v) = config.extraction_table_min_avg_segments { guard.extraction_table_min_avg_segments = v; }
+
+        if let Some(v) = config.extraction_adaptive_plaintext_cluster_factor { guard.extraction_adaptive_plaintext_cluster_factor = v; }
+        if let Some(v) = config.extraction_adaptive_plaintext_gap_gate { guard.extraction_adaptive_plaintext_gap_gate = v; }
+        if let Some(v) = config.extraction_adaptive_table_cluster_factor { guard.extraction_adaptive_table_cluster_factor = v; }
+        if let Some(v) = config.extraction_adaptive_table_gap_gate { guard.extraction_adaptive_table_gap_gate = v; }
+        if let Some(v) = config.extraction_adaptive_column_cluster_factor { guard.extraction_adaptive_column_cluster_factor = v; }
+        if let Some(v) = config.extraction_adaptive_column_gap_gate { guard.extraction_adaptive_column_gap_gate = v; }
+
+        if let Some(v) = config.extraction_refinement_entropy_threshold { guard.extraction_refinement_entropy_threshold = v; }
+        if let Some(v) = config.extraction_refinement_cluster_threshold_modifier { guard.extraction_refinement_cluster_threshold_modifier = v; }
+        if let Some(v) = config.extraction_refinement_cross_zone_gap_modifier { guard.extraction_refinement_cross_zone_gap_modifier = v; }
+
+        if let Some(v) = config.extraction_classifier_gutter_weight { guard.extraction_classifier_gutter_weight = v; }
+        if let Some(v) = config.extraction_classifier_density_weight { guard.extraction_classifier_density_weight = v; }
+        if let Some(v) = config.extraction_classifier_multicolumn_density_max { guard.extraction_classifier_multicolumn_density_max = v; }
+        if let Some(v) = config.extraction_classifier_table_density_min { guard.extraction_classifier_table_density_min = v; }
+        if let Some(v) = config.extraction_classifier_table_entropy_min { guard.extraction_classifier_table_entropy_min = v; }
+
+        if let Some(v) = config.extraction_columns_min_contiguous_rows { guard.extraction_columns_min_contiguous_rows = v as usize; }
+        if let Some(v) = config.extraction_columns_gutter_gap_factor { guard.extraction_columns_gutter_gap_factor = v; }
+        if let Some(v) = config.extraction_columns_gutter_void_tolerance { guard.extraction_columns_gutter_void_tolerance = v; }
+        if let Some(v) = config.extraction_columns_edge_margin_tolerance { guard.extraction_columns_edge_margin_tolerance = v; }
+
+        if let Some(v) = config.extraction_headers_max_width_ratio { guard.extraction_headers_max_width_ratio = v; }
+        if let Some(v) = config.extraction_headers_centered_tolerance { guard.extraction_headers_centered_tolerance = v; }
+        if let Some(v) = config.extraction_headers_h1_size_multiplier { guard.extraction_headers_h1_size_multiplier = v; }
+        if let Some(v) = config.extraction_headers_h2_size_multiplier { guard.extraction_headers_h2_size_multiplier = v; }
+        if let Some(v) = config.extraction_headers_h3_size_multiplier { guard.extraction_headers_h3_size_multiplier = v; }
+
+        if let Some(v) = config.extraction_scoring_jitter_penalty_weight { guard.extraction_scoring_jitter_penalty_weight = v; }
+        if let Some(v) = config.extraction_scoring_size_penalty_weight { guard.extraction_scoring_size_penalty_weight = v; }
+        if let Some(v) = config.extraction_scoring_low_confidence_threshold { guard.extraction_scoring_low_confidence_threshold = v; }
         sync_discovery_config(
             guard.discovery_enabled,
             discovery::DiscoveryConfig {
@@ -1687,6 +1858,22 @@ impl Api for ApiImpl {
             follower_collapse_delay_secs: guard.ghost_follower_collapse_delay_secs,
         });
         set_expansion_paused(guard.expansion_paused);
+        {
+            use digicore_text_expander::adapters::corpus::{FileSystemCorpusStorageAdapter, OcrBaselineAdapter};
+            use digicore_text_expander::application::corpus_generator::CorpusService;
+            use digicore_core::domain::value_objects::CorpusConfig;
+            let corpus_config = CorpusConfig {
+                enabled: guard.corpus_enabled,
+                output_dir: guard.corpus_output_dir.clone(),
+                snapshot_dir: guard.corpus_snapshot_dir.clone(),
+                shortcut_modifiers: guard.corpus_shortcut_modifiers,
+                shortcut_key: guard.corpus_shortcut_key,
+            };
+            let corpus_storage = std::sync::Arc::new(FileSystemCorpusStorageAdapter::new(corpus_config.output_dir.clone()));
+            let corpus_baseline = std::sync::Arc::new(OcrBaselineAdapter::new(corpus_config.snapshot_dir.clone()));
+            let corpus_service = std::sync::Arc::new(CorpusService::new(corpus_config, corpus_storage, corpus_baseline));
+            digicore_text_expander::drivers::hotstring::update_corpus_service(Some(corpus_service));
+        }
         let _ = get_app(&self.app_handle).emit("ghost-follower-update", ());
         Ok(())
     }
@@ -1710,6 +1897,7 @@ impl Api for ApiImpl {
                 image_width: r.image_width,
                 image_height: r.image_height,
                 image_bytes: r.image_bytes,
+                parent_id: r.parent_id,
             })
             .collect())
     }
@@ -1742,6 +1930,7 @@ impl Api for ApiImpl {
                 image_width: r.image_width,
                 image_height: r.image_height,
                 image_bytes: r.image_bytes,
+                parent_id: r.parent_id,
             })
             .collect())
     }
@@ -3099,8 +3288,8 @@ end
                             ghost_follower_collapse_delay_secs: None,
                             ghost_follower_opacity: None,
                             clip_history_max_depth: None,
-                            script_library_run_disabled: None,
                             script_library_run_allowlist: None,
+                            ..Default::default()
                         })
                         .await?;
                     result.updated_keys = result.updated_keys.saturating_add(2);
@@ -3133,8 +3322,8 @@ end
                             ghost_follower_collapse_delay_secs: None,
                             ghost_follower_opacity: None,
                             clip_history_max_depth: None,
-                            script_library_run_disabled: None,
                             script_library_run_allowlist: None,
+                            ..Default::default()
                         })
                         .await?;
                     result.updated_keys = result.updated_keys.saturating_add(1);
@@ -3209,6 +3398,7 @@ end
                             .get("script_library_run_allowlist")
                             .and_then(|v| v.as_str())
                             .map(str::to_string),
+                        ..Default::default()
                     };
                     self.clone().update_config(cfg).await?;
                     if group == SETTINGS_GROUP_CLIPBOARD_HISTORY {
@@ -3355,8 +3545,8 @@ end
                                 ghost_follower_collapse_delay_secs: None,
                                 ghost_follower_opacity: None,
                                 clip_history_max_depth: Some(copy_cfg.max_history_entries),
-                                script_library_run_disabled: None,
                                 script_library_run_allowlist: None,
+                                ..Default::default()
                             })
                             .await?;
                     }

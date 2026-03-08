@@ -45,6 +45,7 @@ type CopyToClipboardConfig = {
   json_output_enabled: boolean;
   json_output_dir: string;
   image_storage_dir: string;
+  ocr_enabled: boolean;
 };
 
 type PreviewBadge = {
@@ -77,6 +78,8 @@ const SETTINGS_GROUP_OPTIONS = [
   { id: "copy_to_clipboard", label: "Copy-to-Clipboard" },
   { id: "core", label: "Core" },
   { id: "script_runtime", label: "Script Runtime" },
+  { id: "corpus", label: "Corpus Generation" },
+  { id: "extraction", label: "Extraction Engine" },
   { id: "appearance", label: "Appearance" },
 ] as const;
 
@@ -118,8 +121,62 @@ export function ConfigTab({ appState, onConfigLoaded }: ConfigTabProps) {
   const [copyJsonOutputEnabled, setCopyJsonOutputEnabled] = useState(true);
   const [copyJsonOutputDir, setCopyJsonOutputDir] = useState("");
   const [copyImageStorageDir, setCopyImageStorageDir] = useState("");
+  const [copyOcrEnabled, setCopyOcrEnabled] = useState(true);
   const [loadedImageStorageDir, setLoadedImageStorageDir] = useState("");
   const [expansionPaused, setExpansionPaused] = useState(false);
+
+  const [corpusEnabled, setCorpusEnabled] = useState(false);
+  const [corpusOutputDir, setCorpusOutputDir] = useState("");
+  const [corpusSnapshotDir, setCorpusSnapshotDir] = useState("");
+  const [corpusShortcutModifiers, setCorpusShortcutModifiers] = useState(0);
+  const [corpusShortcutKey, setCorpusShortcutKey] = useState(0);
+
+  const [extractionRowOverlapTolerance, setExtractionRowOverlapTolerance] = useState(0.4);
+  const [extractionClusterThresholdFactor, setExtractionClusterThresholdFactor] = useState(0.85);
+  const [extractionZoneProximity, setExtractionZoneProximity] = useState(1.0);
+  const [extractionCrossZoneGapFactor, setExtractionCrossZoneGapFactor] = useState(0.35);
+  const [extractionSameZoneGapFactor, setExtractionSameZoneGapFactor] = useState(0.2);
+  const [extractionSignificantGapGate, setExtractionSignificantGapGate] = useState(0.8);
+  const [extractionCharWidthFactor, setExtractionCharWidthFactor] = useState(1.5);
+  const [extractionBridgedThreshold, setExtractionBridgedThreshold] = useState(0.15);
+  const [extractionWordSpacingFactor, setExtractionWordSpacingFactor] = useState(0.4);
+
+  const [extractionFooterTriggers, setExtractionFooterTriggers] = useState("");
+  const [extractionTableMinContiguousRows, setExtractionTableMinContiguousRows] = useState(3);
+  const [extractionTableMinAvgSegments, setExtractionTableMinAvgSegments] = useState(2.0);
+
+  const [extractionAdaptivePlaintextClusterFactor, setExtractionAdaptivePlaintextClusterFactor] = useState(1.2);
+  const [extractionAdaptivePlaintextGapGate, setExtractionAdaptivePlaintextGapGate] = useState(0.3);
+  const [extractionAdaptiveTableClusterFactor, setExtractionAdaptiveTableClusterFactor] = useState(0.5);
+  const [extractionAdaptiveTableGapGate, setExtractionAdaptiveTableGapGate] = useState(0.5);
+  const [extractionAdaptiveColumnClusterFactor, setExtractionAdaptiveColumnClusterFactor] = useState(1.5);
+  const [extractionAdaptiveColumnGapGate, setExtractionAdaptiveColumnGapGate] = useState(0.8);
+
+  const [extractionRefinementEntropyThreshold, setExtractionRefinementEntropyThreshold] = useState(0.6);
+  const [extractionRefinementClusterThresholdModifier, setExtractionRefinementClusterThresholdModifier] = useState(0.8);
+  const [extractionRefinementCrossZoneGapModifier, setExtractionRefinementCrossZoneGapModifier] = useState(1.2);
+
+  const [extractionClassifierGutterWeight, setExtractionClassifierGutterWeight] = useState(2.0);
+  const [extractionClassifierDensityWeight, setExtractionClassifierDensityWeight] = useState(1.5);
+  const [extractionClassifierMulticolumnDensityMax, setExtractionClassifierMulticolumnDensityMax] = useState(1.5);
+  const [extractionClassifierTableDensityMin, setExtractionClassifierTableDensityMin] = useState(1.5);
+  const [extractionClassifierTableEntropyMin, setExtractionClassifierTableEntropyMin] = useState(0.3);
+
+  const [extractionColumnsMinContiguousRows, setExtractionColumnsMinContiguousRows] = useState(3);
+  const [extractionColumnsGutterGapFactor, setExtractionColumnsGutterGapFactor] = useState(0.6);
+  const [extractionColumnsGutterVoidTolerance, setExtractionColumnsGutterVoidTolerance] = useState(0.25);
+  const [extractionColumnsEdgeMarginTolerance, setExtractionColumnsEdgeMarginTolerance] = useState(1.5);
+
+  const [extractionHeadersMaxWidthRatio, setExtractionHeadersMaxWidthRatio] = useState(0.7);
+  const [extractionHeadersCenteredTolerance, setExtractionHeadersCenteredTolerance] = useState(0.1);
+  const [extractionHeadersH1SizeMultiplier, setExtractionHeadersH1SizeMultiplier] = useState(1.5);
+  const [extractionHeadersH2SizeMultiplier, setExtractionHeadersH2SizeMultiplier] = useState(1.2);
+  const [extractionHeadersH3SizeMultiplier, setExtractionHeadersH3SizeMultiplier] = useState(1.1);
+
+  const [extractionScoringJitterPenaltyWeight, setExtractionScoringJitterPenaltyWeight] = useState(0.2);
+  const [extractionScoringSizePenaltyWeight, setExtractionScoringSizePenaltyWeight] = useState(0.1);
+  const [extractionScoringLowConfidenceThreshold, setExtractionScoringLowConfidenceThreshold] = useState(60.0);
+
   const [autostart, setAutostart] = useState(false);
   const [theme, setTheme] = useState("light");
   const [updateChecking, setUpdateChecking] = useState(false);
@@ -175,6 +232,58 @@ export function ConfigTab({ appState, onConfigLoaded }: ConfigTabProps) {
       setGhostFollowerOpacity(appState.ghost_follower_opacity ?? 100);
       setClipMaxDepth(appState.clip_history_max_depth ?? 20);
       setExpansionPaused(!!appState.expansion_paused);
+
+      setCorpusEnabled(!!appState.corpus_enabled);
+      setCorpusOutputDir(appState.corpus_output_dir || "");
+      setCorpusSnapshotDir(appState.corpus_snapshot_dir || "");
+      setCorpusShortcutModifiers(appState.corpus_shortcut_modifiers ?? 0);
+      setCorpusShortcutKey(appState.corpus_shortcut_key ?? 0);
+
+      setExtractionRowOverlapTolerance(appState.extraction_row_overlap_tolerance ?? 0.4);
+      setExtractionClusterThresholdFactor(appState.extraction_cluster_threshold_factor ?? 0.85);
+      setExtractionZoneProximity(appState.extraction_zone_proximity ?? 1.0);
+      setExtractionCrossZoneGapFactor(appState.extraction_cross_zone_gap_factor ?? 0.35);
+      setExtractionSameZoneGapFactor(appState.extraction_same_zone_gap_factor ?? 0.2);
+      setExtractionSignificantGapGate(appState.extraction_significant_gap_gate ?? 0.8);
+      setExtractionCharWidthFactor(appState.extraction_char_width_factor ?? 1.5);
+      setExtractionBridgedThreshold(appState.extraction_bridged_threshold ?? 0.15);
+      setExtractionWordSpacingFactor(appState.extraction_word_spacing_factor ?? 0.4);
+      setExtractionFooterTriggers(appState.extraction_footer_triggers || "");
+      setExtractionTableMinContiguousRows(appState.extraction_table_min_contiguous_rows ?? 3);
+      setExtractionTableMinAvgSegments(appState.extraction_table_min_avg_segments ?? 2.0);
+
+      setExtractionAdaptivePlaintextClusterFactor(appState.extraction_adaptive_plaintext_cluster_factor ?? 1.2);
+      setExtractionAdaptivePlaintextGapGate(appState.extraction_adaptive_plaintext_gap_gate ?? 0.3);
+      setExtractionAdaptiveTableClusterFactor(appState.extraction_adaptive_table_cluster_factor ?? 0.5);
+      setExtractionAdaptiveTableGapGate(appState.extraction_adaptive_table_gap_gate ?? 0.5);
+      setExtractionAdaptiveColumnClusterFactor(appState.extraction_adaptive_column_cluster_factor ?? 1.5);
+      setExtractionAdaptiveColumnGapGate(appState.extraction_adaptive_column_gap_gate ?? 0.8);
+
+      setExtractionRefinementEntropyThreshold(appState.extraction_refinement_entropy_threshold ?? 0.6);
+      setExtractionRefinementClusterThresholdModifier(appState.extraction_refinement_cluster_threshold_modifier ?? 0.8);
+      setExtractionRefinementCrossZoneGapModifier(appState.extraction_refinement_cross_zone_gap_modifier ?? 1.2);
+
+      setExtractionClassifierGutterWeight(appState.extraction_classifier_gutter_weight ?? 2.0);
+      setExtractionClassifierDensityWeight(appState.extraction_classifier_density_weight ?? 1.5);
+      setExtractionClassifierMulticolumnDensityMax(appState.extraction_classifier_multicolumn_density_max ?? 1.5);
+      setExtractionClassifierTableDensityMin(appState.extraction_classifier_table_density_min ?? 1.5);
+      setExtractionClassifierTableEntropyMin(appState.extraction_classifier_table_entropy_min ?? 0.3);
+
+      setExtractionColumnsMinContiguousRows(appState.extraction_columns_min_contiguous_rows ?? 3);
+      setExtractionColumnsGutterGapFactor(appState.extraction_columns_gutter_gap_factor ?? 0.6);
+      setExtractionColumnsGutterVoidTolerance(appState.extraction_columns_gutter_void_tolerance ?? 0.25);
+      setExtractionColumnsEdgeMarginTolerance(appState.extraction_columns_edge_margin_tolerance ?? 1.5);
+
+      setExtractionHeadersMaxWidthRatio(appState.extraction_headers_max_width_ratio ?? 0.7);
+      setExtractionHeadersCenteredTolerance(appState.extraction_headers_centered_tolerance ?? 0.1);
+      setExtractionHeadersH1SizeMultiplier(appState.extraction_headers_h1_size_multiplier ?? 1.5);
+      setExtractionHeadersH2SizeMultiplier(appState.extraction_headers_h2_size_multiplier ?? 1.2);
+      setExtractionHeadersH3SizeMultiplier(appState.extraction_headers_h3_size_multiplier ?? 1.1);
+
+      setExtractionScoringJitterPenaltyWeight(appState.extraction_scoring_jitter_penalty_weight ?? 0.2);
+      setExtractionScoringSizePenaltyWeight(appState.extraction_scoring_size_penalty_weight ?? 0.1);
+      setExtractionScoringLowConfidenceThreshold(appState.extraction_scoring_low_confidence_threshold ?? 60.0);
+
       setTheme(
         (typeof localStorage !== "undefined" &&
           localStorage.getItem("digicore-theme")) ||
@@ -201,6 +310,7 @@ export function ConfigTab({ appState, onConfigLoaded }: ConfigTabProps) {
         setCopyJsonOutputEnabled(cfg.json_output_enabled ?? true);
         setCopyJsonOutputDir(cfg.json_output_dir || "");
         setCopyImageStorageDir(cfg.image_storage_dir || "");
+        setCopyOcrEnabled(!!cfg.ocr_enabled);
         setLoadedImageStorageDir(cfg.image_storage_dir || "");
         if (typeof cfg.max_history_entries === "number") {
           setClipMaxDepth(cfg.max_history_entries);
@@ -282,6 +392,7 @@ export function ConfigTab({ appState, onConfigLoaded }: ConfigTabProps) {
         json_output_enabled: copyJsonOutputEnabled,
         json_output_dir: copyJsonOutputDir,
         image_storage_dir: copyImageStorageDir,
+        ocr_enabled: copyOcrEnabled,
       });
       setStatus(
         imagePathChanged
@@ -892,6 +1003,16 @@ export function ConfigTab({ appState, onConfigLoaded }: ConfigTabProps) {
           />
           Enable Copy-to-Clipboard (Image) Capture
         </label>
+        {copyImageEnabled && (
+          <label className="block mt-2 ml-6 flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={copyOcrEnabled}
+              onChange={(e) => setCopyOcrEnabled(e.target.checked)}
+            />
+            Enable Image OCR Text Capture
+          </label>
+        )}
         <label className="block mt-2 flex items-center gap-2">
           <input
             type="checkbox"
@@ -1108,6 +1229,57 @@ export function ConfigTab({ appState, onConfigLoaded }: ConfigTabProps) {
                 ghost_follower_monitor_anchor: monitorAnchorSafe,
                 ghost_follower_opacity: ghostFollowerOpacity,
                 clip_history_max_depth: clipMaxDepth,
+
+                corpus_enabled: corpusEnabled,
+                corpus_output_dir: corpusOutputDir,
+                corpus_snapshot_dir: corpusSnapshotDir,
+                corpus_shortcut_modifiers: corpusShortcutModifiers,
+                corpus_shortcut_key: corpusShortcutKey,
+
+                extraction_row_overlap_tolerance: extractionRowOverlapTolerance,
+                extraction_cluster_threshold_factor: extractionClusterThresholdFactor,
+                extraction_zone_proximity: extractionZoneProximity,
+                extraction_cross_zone_gap_factor: extractionCrossZoneGapFactor,
+                extraction_same_zone_gap_factor: extractionSameZoneGapFactor,
+                extraction_significant_gap_gate: extractionSignificantGapGate,
+                extraction_char_width_factor: extractionCharWidthFactor,
+                extraction_bridged_threshold: extractionBridgedThreshold,
+                extraction_word_spacing_factor: extractionWordSpacingFactor,
+                extraction_footer_triggers: extractionFooterTriggers,
+                extraction_table_min_contiguous_rows: extractionTableMinContiguousRows,
+                extraction_table_min_avg_segments: extractionTableMinAvgSegments,
+
+                extraction_adaptive_plaintext_cluster_factor: extractionAdaptivePlaintextClusterFactor,
+                extraction_adaptive_plaintext_gap_gate: extractionAdaptivePlaintextGapGate,
+                extraction_adaptive_table_cluster_factor: extractionAdaptiveTableClusterFactor,
+                extraction_adaptive_table_gap_gate: extractionAdaptiveTableGapGate,
+                extraction_adaptive_column_cluster_factor: extractionAdaptiveColumnClusterFactor,
+                extraction_adaptive_column_gap_gate: extractionAdaptiveColumnGapGate,
+
+                extraction_refinement_entropy_threshold: extractionRefinementEntropyThreshold,
+                extraction_refinement_cluster_threshold_modifier: extractionRefinementClusterThresholdModifier,
+                extraction_refinement_cross_zone_gap_modifier: extractionRefinementCrossZoneGapModifier,
+
+                extraction_classifier_gutter_weight: extractionClassifierGutterWeight,
+                extraction_classifier_density_weight: extractionClassifierDensityWeight,
+                extraction_classifier_multicolumn_density_max: extractionClassifierMulticolumnDensityMax,
+                extraction_classifier_table_density_min: extractionClassifierTableDensityMin,
+                extraction_classifier_table_entropy_min: extractionClassifierTableEntropyMin,
+
+                extraction_columns_min_contiguous_rows: extractionColumnsMinContiguousRows,
+                extraction_columns_gutter_gap_factor: extractionColumnsGutterGapFactor,
+                extraction_columns_gutter_void_tolerance: extractionColumnsGutterVoidTolerance,
+                extraction_columns_edge_margin_tolerance: extractionColumnsEdgeMarginTolerance,
+
+                extraction_headers_max_width_ratio: extractionHeadersMaxWidthRatio,
+                extraction_headers_centered_tolerance: extractionHeadersCenteredTolerance,
+                extraction_headers_h1_size_multiplier: extractionHeadersH1SizeMultiplier,
+                extraction_headers_h2_size_multiplier: extractionHeadersH2SizeMultiplier,
+                extraction_headers_h3_size_multiplier: extractionHeadersH3SizeMultiplier,
+
+                extraction_scoring_jitter_penalty_weight: extractionScoringJitterPenaltyWeight,
+                extraction_scoring_size_penalty_weight: extractionScoringSizePenaltyWeight,
+                extraction_scoring_low_confidence_threshold: extractionScoringLowConfidenceThreshold,
               },
               "all"
             );
@@ -1117,6 +1289,221 @@ export function ConfigTab({ appState, onConfigLoaded }: ConfigTabProps) {
           Save All Settings
         </button>
         {lastSavedGroup === "all" && (
+          <span className="ml-2 text-emerald-500 font-medium animate-in fade-in duration-300">
+            Saved!
+          </span>
+        )}
+      </details>
+
+      <details className={sectionCls}>
+        <summary className="cursor-pointer font-bold">Corpus Generation</summary>
+        <p className="text-sm text-[var(--dc-text-muted)] mt-1">
+          Save samples automatically into dataset folders for heuristic tuning.
+        </p>
+        <label className="block mt-2 flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={corpusEnabled}
+            onChange={(e) => setCorpusEnabled(e.target.checked)}
+          />
+          Enable automatic corpus generation
+        </label>
+        <label className="block mt-2">Corpus output directory:</label>
+        <div className="flex gap-2">
+          <input
+            type="text"
+            value={corpusOutputDir}
+            onChange={(e) => setCorpusOutputDir(e.target.value)}
+            placeholder="C:\Users\...\corpus"
+            className={inputCls}
+          />
+          <button
+            type="button"
+            onClick={() => chooseDirectory(corpusOutputDir, setCorpusOutputDir)}
+            className="px-2 py-1 bg-[var(--dc-bg-alt)] border border-[var(--dc-border)] rounded text-sm min-w-[32px] hover:bg-[var(--dc-border)]"
+            title="Browse folder..."
+          >
+            ...
+          </button>
+        </div>
+        <label className="block mt-2">Corpus snapshot directory:</label>
+        <div className="flex gap-2">
+          <input
+            type="text"
+            value={corpusSnapshotDir}
+            onChange={(e) => setCorpusSnapshotDir(e.target.value)}
+            placeholder="C:\Users\...\snapshots"
+            className={inputCls}
+          />
+          <button
+            type="button"
+            onClick={() => chooseDirectory(corpusSnapshotDir, setCorpusSnapshotDir)}
+            className="px-2 py-1 bg-[var(--dc-bg-alt)] border border-[var(--dc-border)] rounded text-sm min-w-[32px] hover:bg-[var(--dc-border)]"
+            title="Browse folder..."
+          >
+            ...
+          </button>
+        </div>
+
+        <button
+          onClick={() =>
+            applyConfig(
+              {
+                corpus_enabled: corpusEnabled,
+                corpus_output_dir: corpusOutputDir,
+                corpus_snapshot_dir: corpusSnapshotDir,
+                corpus_shortcut_modifiers: corpusShortcutModifiers,
+                corpus_shortcut_key: corpusShortcutKey,
+              },
+              "corpus"
+            )
+          }
+          className="mt-3 px-3 py-1.5 bg-[var(--dc-accent)] text-white rounded"
+        >
+          Save Corpus Settings
+        </button>
+        {lastSavedGroup === "corpus" && (
+          <span className="ml-2 text-emerald-500 font-medium animate-in fade-in duration-300">
+            Saved!
+          </span>
+        )}
+      </details>
+
+      <details className={sectionCls}>
+        <summary className="cursor-pointer font-bold">Extraction Engine (Advanced)</summary>
+        <p className="text-sm text-[var(--dc-text-muted)] mt-1">
+          Adjust heuristics for Layout-Aware OCR, Grid Alignment, and semantic tables.
+        </p>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-2">
+          <div>
+            <h4 className="font-semibold mb-1 text-sm text-[var(--dc-accent)] border-b border-[var(--dc-border)] pb-1">General OCR Geometry</h4>
+            <label className="block mt-1 text-sm">Row overlap tolerance (0.0-1.0):</label>
+            <input type="number" step="0.05" min="0" max="1" value={extractionRowOverlapTolerance} onChange={(e) => setExtractionRowOverlapTolerance(parseFloat(e.target.value))} className={inputCls} />
+
+            <label className="block mt-1 text-sm">Cluster threshold factor:</label>
+            <input type="number" step="0.05" value={extractionClusterThresholdFactor} onChange={(e) => setExtractionClusterThresholdFactor(parseFloat(e.target.value))} className={inputCls} />
+
+            <label className="block mt-1 text-sm">Zone proximity:</label>
+            <input type="number" step="0.1" value={extractionZoneProximity} onChange={(e) => setExtractionZoneProximity(parseFloat(e.target.value))} className={inputCls} />
+
+            <label className="block mt-1 text-sm">Cross-zone gap factor:</label>
+            <input type="number" step="0.05" value={extractionCrossZoneGapFactor} onChange={(e) => setExtractionCrossZoneGapFactor(parseFloat(e.target.value))} className={inputCls} />
+
+            <label className="block mt-1 text-sm">Same-zone gap factor:</label>
+            <input type="number" step="0.05" value={extractionSameZoneGapFactor} onChange={(e) => setExtractionSameZoneGapFactor(parseFloat(e.target.value))} className={inputCls} />
+
+            <label className="block mt-1 text-sm">Significant gap gate (e.g. 0.8):</label>
+            <input type="number" step="0.1" value={extractionSignificantGapGate} onChange={(e) => setExtractionSignificantGapGate(parseFloat(e.target.value))} className={inputCls} />
+          </div>
+
+          <div>
+            <h4 className="font-semibold mb-1 text-sm text-[var(--dc-accent)] border-b border-[var(--dc-border)] pb-1">Adaptive Gap Scaling</h4>
+            <label className="block mt-1 text-sm">Char width factor:</label>
+            <input type="number" step="0.1" value={extractionCharWidthFactor} onChange={(e) => setExtractionCharWidthFactor(parseFloat(e.target.value))} className={inputCls} />
+
+            <label className="block mt-1 text-sm">Bridged threshold:</label>
+            <input type="number" step="0.05" value={extractionBridgedThreshold} onChange={(e) => setExtractionBridgedThreshold(parseFloat(e.target.value))} className={inputCls} />
+
+            <label className="block mt-1 text-sm">Word spacing factor:</label>
+            <input type="number" step="0.1" value={extractionWordSpacingFactor} onChange={(e) => setExtractionWordSpacingFactor(parseFloat(e.target.value))} className={inputCls} />
+
+            <h4 className="font-semibold mt-3 mb-1 text-sm text-[var(--dc-accent)] border-b border-[var(--dc-border)] pb-1">Table Reconstruction</h4>
+            <label className="block mt-1 text-sm">Min contiguous rows:</label>
+            <input type="number" min="1" value={extractionTableMinContiguousRows} onChange={(e) => setExtractionTableMinContiguousRows(parseIntOr(e.target.value, 3))} className={inputCls} />
+
+            <label className="block mt-1 text-sm">Min average segments:</label>
+            <input type="number" step="0.5" value={extractionTableMinAvgSegments} onChange={(e) => setExtractionTableMinAvgSegments(parseFloat(e.target.value))} className={inputCls} />
+          </div>
+
+          <div>
+            <h4 className="font-semibold mb-1 text-sm text-[var(--dc-accent)] border-b border-[var(--dc-border)] pb-1">Adaptive Refinement</h4>
+            <label className="block mt-1 text-sm">Plaintext gap gate:</label>
+            <input type="number" step="0.1" value={extractionAdaptivePlaintextGapGate} onChange={(e) => setExtractionAdaptivePlaintextGapGate(parseFloat(e.target.value))} className={inputCls} />
+
+            <label className="block mt-1 text-sm">Table cluster factor:</label>
+            <input type="number" step="0.1" value={extractionAdaptiveTableClusterFactor} onChange={(e) => setExtractionAdaptiveTableClusterFactor(parseFloat(e.target.value))} className={inputCls} />
+
+            <label className="block mt-1 text-sm">Column gap gate:</label>
+            <input type="number" step="0.1" value={extractionAdaptiveColumnGapGate} onChange={(e) => setExtractionAdaptiveColumnGapGate(parseFloat(e.target.value))} className={inputCls} />
+
+            <label className="block mt-1 text-sm">Refinement Entropy Threshold:</label>
+            <input type="number" step="0.1" value={extractionRefinementEntropyThreshold} onChange={(e) => setExtractionRefinementEntropyThreshold(parseFloat(e.target.value))} className={inputCls} />
+          </div>
+
+          <div>
+            <h4 className="font-semibold mb-1 text-sm text-[var(--dc-accent)] border-b border-[var(--dc-border)] pb-1">Headers & Scoring</h4>
+            <label className="block mt-1 text-sm">Header Max Width Ratio:</label>
+            <input type="number" step="0.1" value={extractionHeadersMaxWidthRatio} onChange={(e) => setExtractionHeadersMaxWidthRatio(parseFloat(e.target.value))} className={inputCls} />
+
+            <label className="block mt-1 text-sm">H1 Size Multiplier:</label>
+            <input type="number" step="0.1" value={extractionHeadersH1SizeMultiplier} onChange={(e) => setExtractionHeadersH1SizeMultiplier(parseFloat(e.target.value))} className={inputCls} />
+
+            <label className="block mt-1 text-sm">Scoring Jitter Penalty Weight:</label>
+            <input type="number" step="0.1" value={extractionScoringJitterPenaltyWeight} onChange={(e) => setExtractionScoringJitterPenaltyWeight(parseFloat(e.target.value))} className={inputCls} />
+
+            <label className="block mt-1 text-sm">Low Confidence Threshold (0-100):</label>
+            <input type="number" step="5" value={extractionScoringLowConfidenceThreshold} onChange={(e) => setExtractionScoringLowConfidenceThreshold(parseFloat(e.target.value))} className={inputCls} />
+          </div>
+        </div>
+
+        <button
+          onClick={() =>
+            applyConfig(
+              {
+                extraction_row_overlap_tolerance: extractionRowOverlapTolerance,
+                extraction_cluster_threshold_factor: extractionClusterThresholdFactor,
+                extraction_zone_proximity: extractionZoneProximity,
+                extraction_cross_zone_gap_factor: extractionCrossZoneGapFactor,
+                extraction_same_zone_gap_factor: extractionSameZoneGapFactor,
+                extraction_significant_gap_gate: extractionSignificantGapGate,
+                extraction_char_width_factor: extractionCharWidthFactor,
+                extraction_bridged_threshold: extractionBridgedThreshold,
+                extraction_word_spacing_factor: extractionWordSpacingFactor,
+                extraction_footer_triggers: extractionFooterTriggers,
+                extraction_table_min_contiguous_rows: extractionTableMinContiguousRows,
+                extraction_table_min_avg_segments: extractionTableMinAvgSegments,
+
+                extraction_adaptive_plaintext_cluster_factor: extractionAdaptivePlaintextClusterFactor,
+                extraction_adaptive_plaintext_gap_gate: extractionAdaptivePlaintextGapGate,
+                extraction_adaptive_table_cluster_factor: extractionAdaptiveTableClusterFactor,
+                extraction_adaptive_table_gap_gate: extractionAdaptiveTableGapGate,
+                extraction_adaptive_column_cluster_factor: extractionAdaptiveColumnClusterFactor,
+                extraction_adaptive_column_gap_gate: extractionAdaptiveColumnGapGate,
+
+                extraction_refinement_entropy_threshold: extractionRefinementEntropyThreshold,
+                extraction_refinement_cluster_threshold_modifier: extractionRefinementClusterThresholdModifier,
+                extraction_refinement_cross_zone_gap_modifier: extractionRefinementCrossZoneGapModifier,
+
+                extraction_classifier_gutter_weight: extractionClassifierGutterWeight,
+                extraction_classifier_density_weight: extractionClassifierDensityWeight,
+                extraction_classifier_multicolumn_density_max: extractionClassifierMulticolumnDensityMax,
+                extraction_classifier_table_density_min: extractionClassifierTableDensityMin,
+                extraction_classifier_table_entropy_min: extractionClassifierTableEntropyMin,
+
+                extraction_columns_min_contiguous_rows: extractionColumnsMinContiguousRows,
+                extraction_columns_gutter_gap_factor: extractionColumnsGutterGapFactor,
+                extraction_columns_gutter_void_tolerance: extractionColumnsGutterVoidTolerance,
+                extraction_columns_edge_margin_tolerance: extractionColumnsEdgeMarginTolerance,
+
+                extraction_headers_max_width_ratio: extractionHeadersMaxWidthRatio,
+                extraction_headers_centered_tolerance: extractionHeadersCenteredTolerance,
+                extraction_headers_h1_size_multiplier: extractionHeadersH1SizeMultiplier,
+                extraction_headers_h2_size_multiplier: extractionHeadersH2SizeMultiplier,
+                extraction_headers_h3_size_multiplier: extractionHeadersH3SizeMultiplier,
+
+                extraction_scoring_jitter_penalty_weight: extractionScoringJitterPenaltyWeight,
+                extraction_scoring_size_penalty_weight: extractionScoringSizePenaltyWeight,
+                extraction_scoring_low_confidence_threshold: extractionScoringLowConfidenceThreshold,
+              },
+              "extraction"
+            )
+          }
+          className="mt-4 px-3 py-1.5 bg-[var(--dc-accent)] text-white rounded"
+        >
+          Save Extraction Settings
+        </button>
+        {lastSavedGroup === "extraction" && (
           <span className="ml-2 text-emerald-500 font-medium animate-in fade-in duration-300">
             Saved!
           </span>
