@@ -1,0 +1,4 @@
+| 1. | Complete |  | interactive auth on a machine with a browser. |
+|---|---|---|---|
+| 2. | Export | credentials: |  |
+| gws |  | auth export --unmasked > credentials . j son |  |

@@ -1,0 +1,4 @@
+| Entity | Name |  | Entity Year | O Accounting | Method | O | Cash |
+|---|---|---|---|---|---|---|---|
+| FEIN |  |  |  | a cash |  |  |  |
+| TABLE | 1: | ASSETS |  |  |  |  |  |

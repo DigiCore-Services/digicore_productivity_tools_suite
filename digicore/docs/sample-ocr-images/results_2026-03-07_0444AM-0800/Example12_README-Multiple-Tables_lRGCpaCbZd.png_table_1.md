@@ -1,0 +1,2 @@
+| GOOGLE WORKSPACE | CLI SANITIZE MODE warn (default) or block |
+|---|---|

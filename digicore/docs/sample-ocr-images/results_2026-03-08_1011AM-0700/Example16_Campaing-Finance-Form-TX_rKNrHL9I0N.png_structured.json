@@ -1,0 +1,55 @@
+[
+  {
+    "y_top": 907.0,
+    "y_bottom": 1095.0,
+    "column_centers": [
+      76.5,
+      399.5,
+      588.5,
+      1961.5
+    ],
+    "headers": [
+      [
+        "Date",
+        "Full name",
+        "of contributor out-of-state PAC (ID#:—)",
+        "Amount of Contribution ($)"
+      ]
+    ],
+    "body": [
+      [
+        "09/27/2018",
+        "Bobbitt,",
+        "JB $1,000.00",
+        ""
+      ],
+      [
+        "",
+        "Contributor",
+        "address; City; State; Zip Code",
+        ""
+      ]
+    ],
+    "footers": []
+  },
+  {
+    "y_top": 1253.0,
+    "y_bottom": 1290.0,
+    "column_centers": [
+      76.5,
+      399.5,
+      588.5,
+      1961.5
+    ],
+    "headers": [
+      [
+        "",
+        "Houston,",
+        "TX 77080",
+        ""
+      ]
+    ],
+    "body": [],
+    "footers": []
+  }
+]

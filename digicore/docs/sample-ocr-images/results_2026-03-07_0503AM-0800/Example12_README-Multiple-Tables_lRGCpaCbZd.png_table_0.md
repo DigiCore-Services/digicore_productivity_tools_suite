@@ -1,0 +1,4 @@
+| GOOGLE WORKSPACE | CLI SANITIZE TEMPLATE Default Model Armor template |
+|---|---|
+| GOOGLE WORKSPACE | CLI SANITIZE MODE warn (default) or block |
+| Environment | Variables |

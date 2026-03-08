@@ -1,0 +1,26 @@
+[
+  {
+    "y_top": 216.0,
+    "y_bottom": 401.0,
+    "column_centers": [
+      31.0,
+      314.5,
+      540.5
+    ],
+    "headers": [
+      [
+        "1.",
+        "SCHEDULE",
+        "A1: MONETARY POLITICAL CONTRIBUTIONS 28,350.00"
+      ]
+    ],
+    "body": [
+      [
+        "",
+        "SCHEDULE",
+        "A2: NON-MONETARY (IN-KIND) POLITICAL CONTRIBUTIONS"
+      ]
+    ],
+    "footers": []
+  }
+]

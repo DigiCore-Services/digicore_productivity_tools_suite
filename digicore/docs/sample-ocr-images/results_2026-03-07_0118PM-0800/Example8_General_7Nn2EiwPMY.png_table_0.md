@@ -1,0 +1,3 @@
+| You | can complete OAuth either manually or with browser automation. |  |
+|---|---|---|
+| ' | Human | flow: run gws auth login , open the printed URL, approve scopes. |

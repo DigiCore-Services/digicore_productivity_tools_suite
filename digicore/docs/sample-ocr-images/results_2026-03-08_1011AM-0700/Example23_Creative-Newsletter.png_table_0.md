@@ -1,0 +1,6 @@
+| TEC'S | TRENDS | SustainableCampusproject | & MILESTONES |
+|---|---|---|---|
+|  | EXPLORING NEW | FRONTIERS, TRENDS, AND SUCCESS STORIES |  |
+|  | EMERGING | CASE STUDY: GREEN | COMMUNITY |
+|  | TECHNOLOGY | ENERGY SOLUTIONS | ACHIEVEMENTS |
+| TEC'S | TRENDS | SustainableCampusproject | & MILESTONES |

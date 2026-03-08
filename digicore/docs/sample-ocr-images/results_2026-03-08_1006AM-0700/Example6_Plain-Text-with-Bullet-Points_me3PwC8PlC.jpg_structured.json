@@ -1,0 +1,119 @@
+[
+  {
+    "y_top": 132.0,
+    "y_bottom": 170.0,
+    "column_centers": [
+      19.0,
+      119.5,
+      207.0,
+      334.5,
+      565.5,
+      881.5,
+      1163.5
+    ],
+    "headers": [
+      [
+        "•",
+        "True",
+        "Layout",
+        "Preservation:",
+        "The OCR engine",
+        "now performs",
+        "a global margin"
+      ]
+    ],
+    "body": [],
+    "footers": []
+  },
+  {
+    "y_top": 323.0,
+    "y_bottom": 361.0,
+    "column_centers": [
+      119.5,
+      334.5
+    ],
+    "headers": [
+      [
+        "paragraphs,",
+        "and sub-levels."
+      ]
+    ],
+    "body": [],
+    "footers": []
+  },
+  {
+    "y_top": 514.0,
+    "y_bottom": 680.0,
+    "column_centers": [
+      19.0,
+      119.5,
+      207.0,
+      294.0,
+      334.5,
+      565.5,
+      703.0,
+      826.0
+    ],
+    "headers": [
+      [
+        "",
+        "matches",
+        "",
+        "the",
+        "visual density",
+        "of the",
+        "original",
+        "image."
+      ]
+    ],
+    "body": [
+      [
+        "UX",
+        "",
+        "Polish:",
+        "",
+        "\"Copied!\"",
+        "Feedback",
+        "",
+        ""
+      ]
+    ],
+    "footers": []
+  },
+  {
+    "y_top": 868.0,
+    "y_bottom": 967.0,
+    "column_centers": [
+      119.5,
+      294.0,
+      334.5,
+      565.5,
+      826.0,
+      881.5,
+      1163.5
+    ],
+    "headers": [
+      [
+        "the View",
+        "Full",
+        "Content",
+        "modal.",
+        "",
+        "",
+        ""
+      ]
+    ],
+    "body": [
+      [
+        "Matched",
+        "Aesthetics: This",
+        "",
+        "feedback uses",
+        "a",
+        "refined fade-in",
+        "animation,"
+      ]
+    ],
+    "footers": []
+  }
+]

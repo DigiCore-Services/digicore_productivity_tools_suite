@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Analysis: Example10_Plain-Text_c7d7413737.png</title>
+    <style>
+        body { font-family: 'Inter', system-ui, sans-serif; background: #0b0b0d; color: #e4e4e7; margin: 0; padding: 0; height: 100vh; overflow: hidden; display: flex; flex-direction: column; }
+        
+        /* Top Navigation */
+        .top-bar { background: #121215; border-bottom: 1px solid #27272a; padding: 0.75rem 1.5rem; display: flex; justify-content: space-between; align-items: center; z-index: 100; }
+        .nav-left { display: flex; align-items: center; gap: 1.5rem; }
+        .back-link { color: #a1a1aa; text-decoration: none; font-size: 0.875rem; display: flex; align-items: center; gap: 0.5rem; }
+        .back-link:hover { color: #fff; }
+        h1 { margin: 0; font-size: 1.125rem; font-weight: 700; color: #fff; }
+        
+        .status-pill { display: flex; align-items: center; gap: 1rem; }
+        .accuracy-badge { padding: 0.4rem 0.8rem; border-radius: 99px; font-weight: 700; font-size: 0.875rem; }
+        .success { background: rgba(34, 197, 94, 0.1); color: #22c55e; border: 1px solid rgba(34, 197, 94, 0.2); }
+        .warning { background: rgba(245, 158, 11, 0.1); color: #f59e0b; border: 1px solid rgba(245, 158, 11, 0.2); }
+        .danger { background: rgba(239, 68, 68, 0.1); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.2); }
+
+        /* Secondary Toolbar */
+        .toolbar { background: #18181b; border-bottom: 1px solid #27272a; padding: 0.5rem 1.5rem; display: flex; gap: 1rem; align-items: center; }
+        .view-toggle { display: flex; background: #09090b; border-radius: 8px; padding: 2px; border: 1px solid #27272a; }
+        .toggle-btn { padding: 0.4rem 0.8rem; border: none; background: transparent; color: #71717a; font-size: 0.75rem; font-weight: 600; cursor: pointer; border-radius: 6px; transition: all 0.2s; }
+        .toggle-btn.active { background: #27272a; color: #fff; }
+        
+        /* Main Workspace */
+        .workspace { flex: 1; display: grid; grid-template-columns: 350px 1fr; overflow: hidden; }
+        
+        /* Sidebar (Source Image) */
+        .sidebar { background: #09090b; border-right: 1px solid #27272a; padding: 1.5rem; overflow-y: auto; display: flex; flex-direction: column; gap: 1rem; }
+        .sidebar-label { font-size: 0.75rem; font-weight: 600; text-transform: uppercase; color: #52525b; letter-spacing: 0.05em; }
+        .source-img-container { background: #121215; border: 1px solid #27272a; border-radius: 8px; overflow: hidden; cursor: zoom-in; position: relative; }
+        .source-img-container img { width: 100%; display: block; opacity: 0.8; transition: opacity 0.2s; }
+        .source-img-container:hover img { opacity: 1; }
+        
+        /* Content Pane */
+        .content-pane { background: #121215; overflow: hidden; position: relative; }
+        .view-pane { position: absolute; inset: 0; display: none; flex-direction: column; }
+        .view-pane.active { display: flex; }
+        
+        /* Side-by-Side Sync View */
+        .sync-layout { display: flex; height: 100%; }
+        .sync-column { flex: 1; border-right: 1px solid #27272a; display: flex; flex-direction: column; overflow: hidden; }
+        .sync-column:last-child { border-right: none; }
+        .sync-header { padding: 0.5rem 1rem; background: #09090b; border-bottom: 1px solid #27272a; font-size: 0.7rem; font-weight: 700; color: #71717a; text-transform: uppercase; }
+        .sync-scroll { flex: 1; overflow-y: auto; padding: 1.5rem; font-family: 'JetBrains Mono', 'Consolas', monospace; font-size: 13px; line-height: 1.6; white-space: pre-wrap; color: #d4d4d8; }
+        
+        /* Highlight Diff View */
+        .diff-layout { height: 100%; overflow-y: auto; padding: 2rem; font-family: 'JetBrains Mono', 'Consolas', monospace; font-size: 14px; line-height: 1.7; white-space: pre-wrap; word-break: break-all; }
+        .diff-add { background: rgba(34, 197, 94, 0.25); color: #4ade80; text-decoration: none; padding: 1px 0; border-bottom: 1px solid rgba(34, 197, 94, 0.5); }
+        .diff-del { background: rgba(239, 68, 68, 0.25); color: #f87171; text-decoration: line-through; padding: 1px 0; border-bottom: 1px solid rgba(239, 68, 68, 0.5); }
+        
+        /* Scrollbar styling */
+        ::-webkit-scrollbar-thumb:hover { background: #3f3f46; }
+
+        /* Heatmap Styles */
+        .diag-coerced { border-bottom: 2px solid #3b82f6; background: rgba(59, 130, 246, 0.1); } /* Blue */
+        .diag-bridged { border-bottom: 2px solid #f59e0b; background: rgba(245, 158, 11, 0.1); } /* Amber */
+        
+        .heatmap-overlay { position: absolute; inset: 0; pointer-events: none; z-index: 10; width: 100%; }
+        .heatmap-rect { stroke-width: 1; fill-opacity: 0.15; transition: fill-opacity 0.2s; }
+        .heatmap-rect.coerced { fill: #3b82f6; stroke: #3b82f6; }
+        .heatmap-rect.bridged { fill: #f59e0b; stroke: #f59e0b; }
+        .heatmap-rect.low_confidence { fill: #ef4444; stroke: #ef4444; fill-opacity: 0.3; } /* Red */
+        .heatmap-rect:hover { fill-opacity: 0.6; }
+
+        .legend { margin-top: 1rem; padding: 0.75rem; background: #18181b; border: 1px solid #27272a; border-radius: 8px; font-size: 0.7rem; }
+        .legend-item { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.4rem; }
+        .legend-item:last-child { margin-bottom: 0; }
+        .legend-dot { width: 8px; height: 8px; border-radius: 2px; }
+    </style>
+</head>
+<body>
+    <div class="top-bar">
+        <div class="nav-left">
+            <a href="summary.html" class="back-link">← Back</a>
+            <h1>Example10_Plain-Text_c7d7413737.png</h1>
+            <span class="accuracy-badge" style="background: rgba(168, 85, 247, 0.1); color: #a855f7; border: 1px solid rgba(168, 85, 247, 0.2); margin-left: 0.5rem;">STRUCTURED</span>
+            <span class="accuracy-badge" style="background: #27272a; color: #fff; border: 1px solid #3f3f46; margin-left: 0.5rem;">126ms</span>
+         <span class="accuracy-badge medium" style="border: 1px solid currentColor; margin-left: 0.5rem;">ENTROPY: 35.0 (MEDIUM)</span>
+         <span class="accuracy-badge" style="background: #18181b; color: #a1a1aa; border: 1px solid #27272a; margin-left: 0.5rem;">PROFILE: FORMS_TABLES</span>
+        </div>
+        <div class="status-pill">
+            <div id="metrics" style="font-size: 0.75rem; color: #71717a;">Analyzing...</div>
+            <div class="accuracy-badge success">100% Match</div>
+        </div>
+    </div>
+
+    <div class="toolbar">
+        <div class="view-toggle">
+            <button class="toggle-btn active" onclick="setView(event, 'diff')">Visual Diff</button>
+            <button class="toggle-btn" onclick="setView(event, 'side')">Side-by-Side</button>
+            <button class="toggle-btn" onclick="setView(event, 'raw')">Raw Output</button>
+        </div>
+        <div style="font-size: 0.75rem; color: #52525b;">Phase 35 Diagnostics</div>
+    </div>
+    
+    <div class="workspace">
+        <div class="sidebar">
+            <span class="sidebar-label">Source Document & Heatmap</span>
+            <div class="source-img-container" id="img-container">
+                <a href="../Example10_Plain-Text_c7d7413737.png" target="_blank"><img id="source-img" src="../Example10_Plain-Text_c7d7413737.png" alt="source" /></a>
+                <svg id="diag-svg" class="heatmap-overlay" viewBox="0 0 1000 1000" preserveAspectRatio="none"></svg>
+            </div>
+            
+            <div class="legend">
+                <div class="legend-item">
+                    <div class="legend-dot" style="background: #3b82f6;"></div>
+                    <span><b>Coerced</b>: Symbol snapped to column (|)</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-dot" style="background: #f59e0b;"></div>
+                    <span><b>Bridged</b>: Large gap reconstruction</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-dot" style="background: #ef4444;"></div>
+                    <span><b>Low Confidence</b>: High geometric jitter</span>
+                </div>
+            </div>
+
+            <div style="font-size: 0.7rem; color: #52525b; line-height: 1.4;">
+                Heatmap shows structural corrections. <br/>
+                Hover to brighten. Click to zoom.
+            </div>
+        </div>
+        
+        <div class="content-pane">
+            <!-- Visual Diff Pane -->
+            <div id="pane-diff" class="view-pane active">
+                <div id="diff-content" class="diff-layout"></div>
+            </div>
+            
+            <!-- Side-by-Side Sync Pane -->
+            <div id="pane-side" class="view-pane">
+                <div class="sync-layout">
+                    <div class="sync-column">
+                        <div class="sync-header">Baseline (Expected)</div>
+                        <div id="scroll-left" class="sync-scroll">MSI vs NSIS
+
+# MSI (Microsoft Installer) and NSIS (Nullsoft Scriptable Install System) are both popular tools for
+## creating Windows  installers, but they differ significantly in architecture, flexibility, and use cases.
+## MSI is a Microsoft-developed installation package format that uses a database-driven approach. It
+## is widely supported by enterprise deployment tools like Group Policy, SCCM, and Intune. MSI
+## packages are transactional, meaning installations can be rolled back if something fails, and they
+| follow strict Windows Installer rules. Tools like WiX, InstallShield, and | Advanced Installer generate | 
+## MSI files, making them ideal for corporate environments where compliance, repair, and upgrade
+| mechanisms are | important. | 
+## NSIS, on the other hand, is an open-source, script-based installer system originally created by
+## Nullsoft. It allows developers to write . NSI scripts that define every aspect of the installation
+## process, from Ul customization to file operations and registry edits. NSIS is lightweight, produces
+## small EXE installers, and supports extensive customization through plugins and scripting logic.
+## This makes it a good choice for consumer-facing software where installer size and flexibility are
+priorities.
+Example NSIS Script:
+
+ utFi1e "Mylnstaller.exe"
+  Section
+   Setout-Path "$INSTDIR"
+   File "AppFinder.exe"
+   CreateShortcut "$SMPROGRAMS\My Program. Ink " "$1NSTDIR\AppFinder.exe"
+  SectionEnd
+
+## This script installs AppFinder.exe and creates a Start Menu shortcut. It's compiled with
+makensis.exe into a distributable EXE.</div>
+                    </div>
+                    <div class="sync-column">
+                        <div class="sync-header">Latest Run (Actual)</div>
+                        <div id="scroll-right" class="sync-scroll">MSI vs NSIS
+
+# MSI (Microsoft Installer) and NSIS (Nullsoft Scriptable Install System) are both popular tools for
+## creating Windows  installers, but they differ significantly in architecture, flexibility, and use cases.
+## MSI is a Microsoft-developed installation package format that uses a database-driven approach. It
+## is widely supported by enterprise deployment tools like Group Policy, SCCM, and Intune. MSI
+## packages are transactional, meaning installations can be rolled back if something fails, and they
+| follow strict Windows Installer rules. Tools like WiX, InstallShield, and | Advanced Installer generate | 
+## MSI files, making them ideal for corporate environments where compliance, repair, and upgrade
+| mechanisms are | important. | 
+## NSIS, on the other hand, is an open-source, script-based installer system originally created by
+## Nullsoft. It allows developers to write . NSI scripts that define every aspect of the installation
+## process, from Ul customization to file operations and registry edits. NSIS is lightweight, produces
+## small EXE installers, and supports extensive customization through plugins and scripting logic.
+## This makes it a good choice for consumer-facing software where installer size and flexibility are
+priorities.
+Example NSIS Script:
+
+ utFi1e "Mylnstaller.exe"
+  Section
+   Setout-Path "$INSTDIR"
+   File "AppFinder.exe"
+   CreateShortcut "$SMPROGRAMS\My Program. Ink " "$1NSTDIR\AppFinder.exe"
+  SectionEnd
+
+## This script installs AppFinder.exe and creates a Start Menu shortcut. It's compiled with
+makensis.exe into a distributable EXE.</div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Raw Pane -->
+            <div id="pane-raw" class="view-pane">
+                <div class="diff-layout" style="color: #a1a1aa;">MSI vs NSIS
+
+# MSI (Microsoft Installer) and NSIS (Nullsoft Scriptable Install System) are both popular tools for
+## creating Windows  installers, but they differ significantly in architecture, flexibility, and use cases.
+## MSI is a Microsoft-developed installation package format that uses a database-driven approach. It
+## is widely supported by enterprise deployment tools like Group Policy, SCCM, and Intune. MSI
+## packages are transactional, meaning installations can be rolled back if something fails, and they
+| follow strict Windows Installer rules. Tools like WiX, InstallShield, and | Advanced Installer generate | 
+## MSI files, making them ideal for corporate environments where compliance, repair, and upgrade
+| mechanisms are | important. | 
+## NSIS, on the other hand, is an open-source, script-based installer system originally created by
+## Nullsoft. It allows developers to write . NSI scripts that define every aspect of the installation
+## process, from Ul customization to file operations and registry edits. NSIS is lightweight, produces
+## small EXE installers, and supports extensive customization through plugins and scripting logic.
+## This makes it a good choice for consumer-facing software where installer size and flexibility are
+priorities.
+Example NSIS Script:
+
+ utFi1e "Mylnstaller.exe"
+  Section
+   Setout-Path "$INSTDIR"
+   File "AppFinder.exe"
+   CreateShortcut "$SMPROGRAMS\My Program. Ink " "$1NSTDIR\AppFinder.exe"
+  SectionEnd
+
+## This script installs AppFinder.exe and creates a Start Menu shortcut. It's compiled with
+makensis.exe into a distributable EXE.</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const diagnostics = [{"confidence":96,"h":44.0,"text":"MSI vs NSIS","type":"normal","w":167.05650329589844,"x":40.0,"y":34.0},{"confidence":98,"h":44.0,"text":"MSI (Microsoft Installer) and","type":"normal","w":440.4217224121094,"x":38.0,"y":150.0},{"confidence":100,"h":44.0,"text":"NSIS (Nullsoft Scriptable Install","type":"normal","w":501.1695251464844,"x":584.0,"y":150.0},{"confidence":84,"h":44.0,"text":"System)","type":"normal","w":106.30868530273438,"x":1180.0,"y":150.0},{"confidence":70,"h":44.0,"text":"are both popular tools for","type":"normal","w":394.86083984375,"x":1345.0,"y":150.0},{"confidence":98,"h":41.0,"text":"creating","type":"normal","w":121.49564361572266,"x":38.0,"y":218.0},{"confidence":98,"h":41.0,"text":"Windows","type":"normal","w":106.30868530273438,"x":199.0,"y":218.0},{"confidence":89,"h":41.0,"text":"installers,","type":"normal","w":167.05650329589844,"x":382.0,"y":218.0},{"confidence":84,"h":41.0,"text":"but they differ significantly in architecture,","type":"normal","w":698.5999755859375,"x":571.0,"y":218.0},{"confidence":60,"h":41.0,"text":"flexibility, and use cases.","type":"normal","w":410.04779052734375,"x":1358.0,"y":218.0},{"confidence":97,"h":41.0,"text":"MSI is a","type":"normal","w":121.49564361572266,"x":39.0,"y":284.0},{"confidence":100,"h":41.0,"text":"Microsoft-developed","type":"normal","w":288.5521545410156,"x":200.0,"y":284.0},{"confidence":88,"h":41.0,"text":"installation package format that","type":"normal","w":485.9825744628906,"x":594.0,"y":284.0},{"confidence":92,"h":41.0,"text":"uses a","type":"normal","w":91.12173461914062,"x":1199.0,"y":284.0},{"confidence":88,"h":41.0,"text":"database-driven approach. It","type":"normal","w":425.2347412109375,"x":1330.0,"y":284.0},{"confidence":97,"h":41.0,"text":"is widely","type":"normal","w":136.68260192871094,"x":39.0,"y":350.0},{"confidence":90,"h":41.0,"text":"supported by enterprise deployment tools like Group","type":"normal","w":774.5347290039062,"x":208.0,"y":350.0},{"confidence":100,"h":41.0,"text":"Policy,","type":"normal","w":106.30868530273438,"x":1193.0,"y":350.0},{"confidence":100,"h":41.0,"text":"SCCM,","type":"normal","w":75.93477630615234,"x":1320.0,"y":350.0},{"confidence":83,"h":41.0,"text":"and Intune. MSI","type":"normal","w":227.80433654785156,"x":1455.0,"y":350.0},{"confidence":97,"h":41.0,"text":"packages","type":"normal","w":121.49564361572266,"x":39.0,"y":416.0},{"confidence":88,"h":41.0,"text":"are transactional, meaning installations can be rolled","type":"normal","w":820.0955810546875,"x":229.0,"y":416.0},{"confidence":67,"h":41.0,"text":"back","type":"normal","w":60.74782180786133,"x":1220.0,"y":416.0},{"confidence":100,"h":41.0,"text":"if something fails, and they","type":"normal","w":425.2347412109375,"x":1320.0,"y":416.0},{"confidence":100,"h":38.0,"text":"follow strict Windows Installer rules. Tools like WiX, InstallShield, and","type":"normal","w":1108.647705078125,"x":37.0,"y":482.0},{"confidence":83,"h":38.0,"text":"Advanced Installer generate","type":"normal","w":410.04779052734375,"x":1334.0,"y":482.0},{"confidence":97,"h":41.0,"text":"MSI files,","type":"normal","w":151.8695526123047,"x":39.0,"y":548.0},{"confidence":78,"h":41.0,"text":"making","type":"normal","w":91.12173461914062,"x":218.0,"y":548.0},{"confidence":89,"h":41.0,"text":"them ideal","type":"normal","w":151.8695526123047,"x":364.0,"y":548.0},{"confidence":83,"h":41.0,"text":"for corporate environments where","type":"normal","w":485.9825744628906,"x":570.0,"y":548.0},{"confidence":76,"h":41.0,"text":"compliance,","type":"normal","w":167.05650329589844,"x":1213.0,"y":548.0},{"confidence":90,"h":41.0,"text":"repair, and upgrade","type":"normal","w":288.5521545410156,"x":1449.0,"y":548.0},{"confidence":98,"h":41.0,"text":"mechanisms are","type":"normal","w":212.61737060546875,"x":38.0,"y":614.0},{"confidence":83,"h":41.0,"text":"important.","type":"normal","w":151.8695526123047,"x":359.0,"y":614.0},{"confidence":98,"h":41.0,"text":"NSIS, on","type":"normal","w":121.49564361572266,"x":38.0,"y":680.0},{"confidence":92,"h":41.0,"text":"the other","type":"normal","w":136.68260192871094,"x":206.0,"y":680.0},{"confidence":84,"h":41.0,"text":"hand, is an","type":"normal","w":167.05650329589844,"x":386.0,"y":680.0},{"confidence":88,"h":41.0,"text":"open-source, script-based installer system originally created by","type":"normal","w":971.9651489257812,"x":594.0,"y":680.0},{"confidence":97,"h":41.0,"text":"Nullsoft.","type":"normal","w":136.68260192871094,"x":39.0,"y":746.0},{"confidence":90,"h":41.0,"text":"It allows","type":"normal","w":136.68260192871094,"x":208.0,"y":746.0},{"confidence":100,"h":41.0,"text":"developers","type":"normal","w":151.8695526123047,"x":373.0,"y":746.0},{"confidence":98,"h":41.0,"text":"to write . NSI scripts that define","type":"normal","w":516.3565063476562,"x":585.0,"y":746.0},{"confidence":72,"h":41.0,"text":"every","type":"normal","w":75.93477630615234,"x":1216.0,"y":746.0},{"confidence":92,"h":41.0,"text":"aspect","type":"normal","w":91.12173461914062,"x":1326.0,"y":746.0},{"confidence":75,"h":41.0,"text":"of the installation","type":"normal","w":288.5521545410156,"x":1462.0,"y":746.0},{"confidence":97,"h":41.0,"text":"process,","type":"normal","w":121.49564361572266,"x":39.0,"y":812.0},{"confidence":95,"h":41.0,"text":"from Ul customization to file operations and registry","type":"normal","w":804.9086303710938,"x":204.0,"y":812.0},{"confidence":88,"h":41.0,"text":"edits. NSIS is","type":"normal","w":212.61737060546875,"x":1183.0,"y":812.0},{"confidence":100,"h":41.0,"text":"lightweight, produces","type":"normal","w":318.9260559082031,"x":1441.0,"y":812.0},{"confidence":98,"h":41.0,"text":"small EXE installers, and supports extensive customization through plugins","type":"normal","w":1123.834716796875,"x":38.0,"y":878.0},{"confidence":96,"h":41.0,"text":"and scripting logic.","type":"normal","w":303.7391052246094,"x":1444.0,"y":878.0},{"confidence":100,"h":41.0,"text":"This makes it a good choice","type":"normal","w":410.04779052734375,"x":37.0,"y":944.0},{"confidence":82,"h":41.0,"text":"for consumer-facing software where installer size and flexibility are","type":"normal","w":1047.89990234375,"x":569.0,"y":944.0},{"confidence":98,"h":41.0,"text":"priorities.","type":"normal","w":167.05650329589844,"x":38.0,"y":1010.0},{"confidence":97,"h":41.0,"text":"Example","type":"normal","w":106.30868530273438,"x":39.0,"y":1076.0},{"confidence":88,"h":41.0,"text":"NSIS Script:","type":"normal","w":182.24346923828125,"x":210.0,"y":1076.0},{"confidence":60,"h":37.0,"text":"OutFi1e \"Mylnstaller.exe\"","type":"normal","w":379.67388916015625,"x":76.0,"y":1184.0},{"confidence":60,"h":30.0,"text":"Section","type":"normal","w":106.30868530273438,"x":77.0,"y":1235.0},{"confidence":97,"h":36.0,"text":"Setout-Path","type":"normal","w":167.05650329589844,"x":101.0,"y":1284.0},{"confidence":82,"h":36.0,"text":"\"$INSTDIR\"","type":"normal","w":151.8695526123047,"x":358.0,"y":1284.0},{"confidence":100,"h":38.0,"text":"File","type":"normal","w":60.74782180786133,"x":103.0,"y":1336.0},{"confidence":77,"h":38.0,"text":"\"AppFinder.exe\"","type":"normal","w":227.80433654785156,"x":219.0,"y":1336.0},{"confidence":96,"h":39.0,"text":"CreateShortcut \"$SMPROGRAMS\\My Program. Ink \" \"$1NSTDIR\\AppFinder.exe\"","type":"normal","w":1063.0869140625,"x":100.0,"y":1385.0},{"confidence":60,"h":30.0,"text":"SectionEnd","type":"normal","w":151.8695526123047,"x":77.0,"y":1436.0},{"confidence":100,"h":41.0,"text":"This script installs AppFinder.exe and creates a Start Menu","type":"normal","w":896.0303955078125,"x":37.0,"y":1553.0},{"confidence":83,"h":41.0,"text":"shortcut. It's","type":"normal","w":212.61737060546875,"x":1207.0,"y":1553.0},{"confidence":91,"h":41.0,"text":"compiled with","type":"normal","w":197.430419921875,"x":1448.0,"y":1553.0},{"confidence":81,"h":32.0,"text":"makensis.exe into a distributable EXE.","type":"normal","w":577.1043090820312,"x":53.0,"y":1619.0}];
+        const expectedRaw = `MSI vs NSIS
+
+# MSI (Microsoft Installer) and NSIS (Nullsoft Scriptable Install System) are both popular tools for
+## creating Windows  installers, but they differ significantly in architecture, flexibility, and use cases.
+## MSI is a Microsoft-developed installation package format that uses a database-driven approach. It
+## is widely supported by enterprise deployment tools like Group Policy, SCCM, and Intune. MSI
+## packages are transactional, meaning installations can be rolled back if something fails, and they
+| follow strict Windows Installer rules. Tools like WiX, InstallShield, and | Advanced Installer generate | 
+## MSI files, making them ideal for corporate environments where compliance, repair, and upgrade
+| mechanisms are | important. | 
+## NSIS, on the other hand, is an open-source, script-based installer system originally created by
+## Nullsoft. It allows developers to write . NSI scripts that define every aspect of the installation
+## process, from Ul customization to file operations and registry edits. NSIS is lightweight, produces
+## small EXE installers, and supports extensive customization through plugins and scripting logic.
+## This makes it a good choice for consumer-facing software where installer size and flexibility are
+priorities.
+Example NSIS Script:
+
+ utFi1e "Mylnstaller.exe"
+  Section
+   Setout-Path "$INSTDIR"
+   File "AppFinder.exe"
+   CreateShortcut "$SMPROGRAMS\My Program. Ink " "$1NSTDIR\AppFinder.exe"
+  SectionEnd
+
+## This script installs AppFinder.exe and creates a Start Menu shortcut. It's compiled with
+makensis.exe into a distributable EXE.`;
+        const actualRaw = `MSI vs NSIS
+
+# MSI (Microsoft Installer) and NSIS (Nullsoft Scriptable Install System) are both popular tools for
+## creating Windows  installers, but they differ significantly in architecture, flexibility, and use cases.
+## MSI is a Microsoft-developed installation package format that uses a database-driven approach. It
+## is widely supported by enterprise deployment tools like Group Policy, SCCM, and Intune. MSI
+## packages are transactional, meaning installations can be rolled back if something fails, and they
+| follow strict Windows Installer rules. Tools like WiX, InstallShield, and | Advanced Installer generate | 
+## MSI files, making them ideal for corporate environments where compliance, repair, and upgrade
+| mechanisms are | important. | 
+## NSIS, on the other hand, is an open-source, script-based installer system originally created by
+## Nullsoft. It allows developers to write . NSI scripts that define every aspect of the installation
+## process, from Ul customization to file operations and registry edits. NSIS is lightweight, produces
+## small EXE installers, and supports extensive customization through plugins and scripting logic.
+## This makes it a good choice for consumer-facing software where installer size and flexibility are
+priorities.
+Example NSIS Script:
+
+ utFi1e "Mylnstaller.exe"
+  Section
+   Setout-Path "$INSTDIR"
+   File "AppFinder.exe"
+   CreateShortcut "$SMPROGRAMS\My Program. Ink " "$1NSTDIR\AppFinder.exe"
+  SectionEnd
+
+## This script installs AppFinder.exe and creates a Start Menu shortcut. It's compiled with
+makensis.exe into a distributable EXE.`;
+
+        window.onload = () => {
+            const img = document.getElementById('source-img');
+            const svg = document.getElementById('diag-svg');
+            
+            if (img.complete) initHeatmap();
+            else img.onload = initHeatmap;
+
+            function initHeatmap() {
+                if (!diagnostics) return;
+                const naturalW = img.naturalWidth;
+                const naturalH = img.naturalHeight;
+                svg.setAttribute('viewBox', `0 0 ${naturalW} ${naturalH}`);
+                
+                let svgHtml = '';
+                for (const d of diagnostics) {
+                    const title = d.confidence ? `Confidence: ${d.confidence}%` : d.text;
+                    svgHtml += `<rect x="${d.x}" y="${d.y}" width="${d.w}" height="${d.h}" class="heatmap-rect ${d.type}"><title>${title}</title></rect>`;
+                }
+                svg.innerHTML = svgHtml;
+            }
+        };
+
+        function setView(event, view) {
+            document.querySelectorAll('.view-pane').forEach(p => p.classList.remove('active'));
+            document.querySelectorAll('.toggle-btn').forEach(b => b.classList.remove('active'));
+            
+            document.getElementById('pane-' + view).classList.add('active');
+            event.target.classList.add('active');
+        }
+
+        // Word-Level Diffing (Myers LCS)
+        function computeWordDiff(s1, s2) {
+            // Split by words, preserving whitespace/newlines as individual tokens
+            const tokenize = (s) => s.split(/(\s+)/);
+            const words1 = tokenize(s1);
+            const words2 = tokenize(s2);
+            
+            let n = words1.length, m = words2.length;
+            let dp = Array.from({length: n + 1}, () => Array(m + 1).fill(0));
+            
+            for (let i = 1; i <= n; i++) {
+                for (let j = 1; j <= m; j++) {
+                    if (words1[i-1] === words2[j-1]) dp[i][j] = dp[i-1][j-1] + 1;
+                    else dp[i][j] = Math.max(dp[i-1][j], dp[i][j-1]);
+                }
+            }
+
+            let result = '';
+            let i = n, j = m;
+            let chunks = [];
+            let adds = 0, dels = 0;
+
+            while (i > 0 || j > 0) {
+                if (i > 0 && j > 0 && words1[i-1] === words2[j-1]) {
+                    chunks.push({type: 'equal', text: words1[i-1]});
+                    i--; j--;
+                } else if (j > 0 && (i === 0 || dp[i][j-1] >= dp[i-1][j])) {
+                    chunks.push({type: 'add', text: words2[j-1]});
+                    adds++;
+                    j--;
+                } else {
+                    chunks.push({type: 'del', text: words1[i-1]});
+                    dels++;
+                    i--;
+                }
+            }
+            
+            chunks.reverse();
+            const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br/>');
+            
+            let html = '';
+            for (let c of chunks) {
+                if (c.type === 'equal') html += `<span>${esc(c.text)}</span>`;
+                else if (c.type === 'add') html += `<span class="diff-add">${esc(c.text)}</span>`;
+                else html += `<span class="diff-del">${esc(c.text)}</span>`;
+            }
+            
+            document.getElementById('metrics').innerText = `Words: +${adds} -${dels}`;
+            return html;
+        }
+
+        // Synchronized Scrolling
+        const leftScroll = document.getElementById('scroll-left');
+        const rightScroll = document.getElementById('scroll-right');
+        
+        let isSyncingLeftScroll = false;
+        let isSyncingRightScroll = false;
+
+        leftScroll.onscroll = function() {
+            if (!isSyncingLeftScroll) {
+                isSyncingRightScroll = true;
+                rightScroll.scrollTop = leftScroll.scrollTop;
+            }
+            isSyncingLeftScroll = false;
+        };
+
+        rightScroll.onscroll = function() {
+            if (!isSyncingRightScroll) {
+                isSyncingLeftScroll = true;
+                leftScroll.scrollTop = rightScroll.scrollTop;
+            }
+            isSyncingRightScroll = false;
+        };
+
+        // Initialize
+        try {
+            document.getElementById('diff-content').innerHTML = computeWordDiff(expectedRaw, actualRaw);
+        } catch (e) {
+            document.getElementById('diff-content').innerText = "Error: " + e.message;
+        }
+    </script>
+</body>
+</html>

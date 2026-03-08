@@ -1,0 +1,2 @@
+| is widely supported by enterprise deployment tools like Group | SCCM, | Policy, | and Intune. MSI |
+|---|---|---|---|

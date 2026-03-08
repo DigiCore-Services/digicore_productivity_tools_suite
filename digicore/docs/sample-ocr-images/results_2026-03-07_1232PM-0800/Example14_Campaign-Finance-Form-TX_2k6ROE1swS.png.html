@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Analysis: Example14_Campaign-Finance-Form-TX_2k6ROE1swS.png</title>
+    <style>
+        body { font-family: 'Inter', system-ui, sans-serif; background: #0b0b0d; color: #e4e4e7; margin: 0; padding: 0; height: 100vh; overflow: hidden; display: flex; flex-direction: column; }
+        
+        /* Top Navigation */
+        .top-bar { background: #121215; border-bottom: 1px solid #27272a; padding: 0.75rem 1.5rem; display: flex; justify-content: space-between; align-items: center; z-index: 100; }
+        .nav-left { display: flex; align-items: center; gap: 1.5rem; }
+        .back-link { color: #a1a1aa; text-decoration: none; font-size: 0.875rem; display: flex; align-items: center; gap: 0.5rem; }
+        .back-link:hover { color: #fff; }
+        h1 { margin: 0; font-size: 1.125rem; font-weight: 700; color: #fff; }
+        
+        .status-pill { display: flex; align-items: center; gap: 1rem; }
+        .accuracy-badge { padding: 0.4rem 0.8rem; border-radius: 99px; font-weight: 700; font-size: 0.875rem; }
+        .success { background: rgba(34, 197, 94, 0.1); color: #22c55e; border: 1px solid rgba(34, 197, 94, 0.2); }
+        .warning { background: rgba(245, 158, 11, 0.1); color: #f59e0b; border: 1px solid rgba(245, 158, 11, 0.2); }
+        .danger { background: rgba(239, 68, 68, 0.1); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.2); }
+
+        /* Secondary Toolbar */
+        .toolbar { background: #18181b; border-bottom: 1px solid #27272a; padding: 0.5rem 1.5rem; display: flex; gap: 1rem; align-items: center; }
+        .view-toggle { display: flex; background: #09090b; border-radius: 8px; padding: 2px; border: 1px solid #27272a; }
+        .toggle-btn { padding: 0.4rem 0.8rem; border: none; background: transparent; color: #71717a; font-size: 0.75rem; font-weight: 600; cursor: pointer; border-radius: 6px; transition: all 0.2s; }
+        .toggle-btn.active { background: #27272a; color: #fff; }
+        
+        /* Main Workspace */
+        .workspace { flex: 1; display: grid; grid-template-columns: 350px 1fr; overflow: hidden; }
+        
+        /* Sidebar (Source Image) */
+        .sidebar { background: #09090b; border-right: 1px solid #27272a; padding: 1.5rem; overflow-y: auto; display: flex; flex-direction: column; gap: 1rem; }
+        .sidebar-label { font-size: 0.75rem; font-weight: 600; text-transform: uppercase; color: #52525b; letter-spacing: 0.05em; }
+        .source-img-container { background: #121215; border: 1px solid #27272a; border-radius: 8px; overflow: hidden; cursor: zoom-in; position: relative; }
+        .source-img-container img { width: 100%; display: block; opacity: 0.8; transition: opacity 0.2s; }
+        .source-img-container:hover img { opacity: 1; }
+        
+        /* Content Pane */
+        .content-pane { background: #121215; overflow: hidden; position: relative; }
+        .view-pane { position: absolute; inset: 0; display: none; flex-direction: column; }
+        .view-pane.active { display: flex; }
+        
+        /* Side-by-Side Sync View */
+        .sync-layout { display: flex; height: 100%; }
+        .sync-column { flex: 1; border-right: 1px solid #27272a; display: flex; flex-direction: column; overflow: hidden; }
+        .sync-column:last-child { border-right: none; }
+        .sync-header { padding: 0.5rem 1rem; background: #09090b; border-bottom: 1px solid #27272a; font-size: 0.7rem; font-weight: 700; color: #71717a; text-transform: uppercase; }
+        .sync-scroll { flex: 1; overflow-y: auto; padding: 1.5rem; font-family: 'JetBrains Mono', 'Consolas', monospace; font-size: 13px; line-height: 1.6; white-space: pre-wrap; color: #d4d4d8; }
+        
+        /* Highlight Diff View */
+        .diff-layout { height: 100%; overflow-y: auto; padding: 2rem; font-family: 'JetBrains Mono', 'Consolas', monospace; font-size: 14px; line-height: 1.7; white-space: pre-wrap; word-break: break-all; }
+        .diff-add { background: rgba(34, 197, 94, 0.25); color: #4ade80; text-decoration: none; padding: 1px 0; border-bottom: 1px solid rgba(34, 197, 94, 0.5); }
+        .diff-del { background: rgba(239, 68, 68, 0.25); color: #f87171; text-decoration: line-through; padding: 1px 0; border-bottom: 1px solid rgba(239, 68, 68, 0.5); }
+        
+        /* Scrollbar styling */
+        ::-webkit-scrollbar-thumb:hover { background: #3f3f46; }
+
+        /* Heatmap Styles */
+        .diag-coerced { border-bottom: 2px solid #3b82f6; background: rgba(59, 130, 246, 0.1); } /* Blue */
+        .diag-bridged { border-bottom: 2px solid #f59e0b; background: rgba(245, 158, 11, 0.1); } /* Amber */
+        
+        .heatmap-overlay { position: absolute; inset: 0; pointer-events: none; z-index: 10; width: 100%; }
+        .heatmap-rect { stroke-width: 1; fill-opacity: 0.15; transition: fill-opacity 0.2s; }
+        .heatmap-rect.coerced { fill: #3b82f6; stroke: #3b82f6; }
+        .heatmap-rect.bridged { fill: #f59e0b; stroke: #f59e0b; }
+        .heatmap-rect.low_confidence { fill: #ef4444; stroke: #ef4444; fill-opacity: 0.3; } /* Red */
+        .heatmap-rect:hover { fill-opacity: 0.6; }
+
+        .legend { margin-top: 1rem; padding: 0.75rem; background: #18181b; border: 1px solid #27272a; border-radius: 8px; font-size: 0.7rem; }
+        .legend-item { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.4rem; }
+        .legend-item:last-child { margin-bottom: 0; }
+        .legend-dot { width: 8px; height: 8px; border-radius: 2px; }
+    </style>
+</head>
+<body>
+    <div class="top-bar">
+        <div class="nav-left">
+            <a href="summary.html" class="back-link">← Back</a>
+            <h1>Example14_Campaign-Finance-Form-TX_2k6ROE1swS.png</h1>
+            <span class="accuracy-badge" style="background: rgba(168, 85, 247, 0.1); color: #a855f7; border: 1px solid rgba(168, 85, 247, 0.2); margin-left: 0.5rem;">STRUCTURED</span>
+            <span class="accuracy-badge" style="background: #27272a; color: #fff; border: 1px solid #3f3f46; margin-left: 0.5rem;">95ms</span>
+         <span class="accuracy-badge low" style="border: 1px solid currentColor; margin-left: 0.5rem;">ENTROPY: 18.0 (LOW)</span>
+         <span class="accuracy-badge" style="background: #18181b; color: #a1a1aa; border: 1px solid #27272a; margin-left: 0.5rem;">PROFILE: FORMS_TABLES</span>
+        </div>
+        <div class="status-pill">
+            <div id="metrics" style="font-size: 0.75rem; color: #71717a;">Analyzing...</div>
+            <div class="accuracy-badge success">100% Match</div>
+        </div>
+    </div>
+
+    <div class="toolbar">
+        <div class="view-toggle">
+            <button class="toggle-btn active" onclick="setView(event, 'diff')">Visual Diff</button>
+            <button class="toggle-btn" onclick="setView(event, 'side')">Side-by-Side</button>
+            <button class="toggle-btn" onclick="setView(event, 'raw')">Raw Output</button>
+        </div>
+        <div style="font-size: 0.75rem; color: #52525b;">Phase 35 Diagnostics</div>
+    </div>
+    
+    <div class="workspace">
+        <div class="sidebar">
+            <span class="sidebar-label">Source Document & Heatmap</span>
+            <div class="source-img-container" id="img-container">
+                <a href="../Example14_Campaign-Finance-Form-TX_2k6ROE1swS.png" target="_blank"><img id="source-img" src="../Example14_Campaign-Finance-Form-TX_2k6ROE1swS.png" alt="source" /></a>
+                <svg id="diag-svg" class="heatmap-overlay" viewBox="0 0 1000 1000" preserveAspectRatio="none"></svg>
+            </div>
+            
+            <div class="legend">
+                <div class="legend-item">
+                    <div class="legend-dot" style="background: #3b82f6;"></div>
+                    <span><b>Coerced</b>: Symbol snapped to column (|)</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-dot" style="background: #f59e0b;"></div>
+                    <span><b>Bridged</b>: Large gap reconstruction</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-dot" style="background: #ef4444;"></div>
+                    <span><b>Low Confidence</b>: High geometric jitter</span>
+                </div>
+            </div>
+
+            <div style="font-size: 0.7rem; color: #52525b; line-height: 1.4;">
+                Heatmap shows structural corrections. <br/>
+                Hover to brighten. Click to zoom.
+            </div>
+        </div>
+        
+        <div class="content-pane">
+            <!-- Visual Diff Pane -->
+            <div id="pane-diff" class="view-pane active">
+                <div id="diff-content" class="diff-layout"></div>
+            </div>
+            
+            <!-- Side-by-Side Sync Pane -->
+            <div id="pane-side" class="view-pane">
+                <div class="sync-layout">
+                    <div class="sync-column">
+                        <div class="sync-header">Baseline (Expected)</div>
+                        <div id="scroll-left" class="sync-scroll">CAMPAIGN FINANCE REPORT COVER SHEET PG 1
+
+                                                        1 Filer ID      2 Total pages filed:The GPAC Instruction Guide explains how to complete this form. (Ethics Commission Filers)                                                                                                     7                                                           00082952
+3 COMMITTEE NAME OFFICE USE ONLY
+  Citizens for a Quality Judiciary                                                                                        Date Received
+                                                                                        ELECTRONICALLY FILED
+                                                                                        10/04/2018
+
+4 COMMITTEE ADDRESS/ PO BOX; APT / SUITE CITY; STATE; ZIP CODE
+  ADDRESS                   5120 Woodway Drive, Suite 5004      Date Hand-delivered or Date Postmarked
+
+     Change of Address
+                   Houston, TX 77056      Receipt # Amount
+
+                                                                                        Date Processed
+
+                                                                                        Date Imaged
+
+5 CAMPAIGN MS / MRS / MR FIRST      MI
+  TREASURER                   Mr. Brian  NAME</div>
+                    </div>
+                    <div class="sync-column">
+                        <div class="sync-header">Latest Run (Actual)</div>
+                        <div id="scroll-right" class="sync-scroll">CAMPAIGN FINANCE REPORT COVER SHEET PG 1
+
+                                                        1 Filer ID      2 Total pages filed:The GPAC Instruction Guide explains how to complete this form. (Ethics Commission Filers)                                                                                                     7                                                           00082952
+3 COMMITTEE NAME OFFICE USE ONLY
+  Citizens for a Quality Judiciary                                                                                        Date Received
+                                                                                        ELECTRONICALLY FILED
+                                                                                        10/04/2018
+
+4 COMMITTEE ADDRESS/ PO BOX; APT / SUITE CITY; STATE; ZIP CODE
+  ADDRESS                   5120 Woodway Drive, Suite 5004      Date Hand-delivered or Date Postmarked
+
+     Change of Address
+                   Houston, TX 77056      Receipt # Amount
+
+                                                                                        Date Processed
+
+                                                                                        Date Imaged
+
+5 CAMPAIGN MS / MRS / MR FIRST      MI
+  TREASURER                   Mr. Brian  NAME</div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Raw Pane -->
+            <div id="pane-raw" class="view-pane">
+                <div class="diff-layout" style="color: #a1a1aa;">CAMPAIGN FINANCE REPORT COVER SHEET PG 1
+
+                                                        1 Filer ID      2 Total pages filed:The GPAC Instruction Guide explains how to complete this form. (Ethics Commission Filers)                                                                                                     7                                                           00082952
+3 COMMITTEE NAME OFFICE USE ONLY
+  Citizens for a Quality Judiciary                                                                                        Date Received
+                                                                                        ELECTRONICALLY FILED
+                                                                                        10/04/2018
+
+4 COMMITTEE ADDRESS/ PO BOX; APT / SUITE CITY; STATE; ZIP CODE
+  ADDRESS                   5120 Woodway Drive, Suite 5004      Date Hand-delivered or Date Postmarked
+
+     Change of Address
+                   Houston, TX 77056      Receipt # Amount
+
+                                                                                        Date Processed
+
+                                                                                        Date Imaged
+
+5 CAMPAIGN MS / MRS / MR FIRST      MI
+  TREASURER                   Mr. Brian  NAME</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const diagnostics = [{"h":36.0,"text":"3 COMMITTEE NAME OFFICE USE ONLY","type":"bridged","w":720.0,"x":21.0,"y":328.0},{"h":33.0,"text":"Mr. Brian","type":"bridged","w":202.5,"x":470.0,"y":1286.0},{"confidence":60,"h":50.0,"text":"CAMPAIGN FINANCE REPORT COVER SHEET PG 1","type":"normal","w":550.723388671875,"x":82.0,"y":27.0},{"confidence":60,"h":30.0,"text":"1 Filer ID","type":"normal","w":137.68084716796875,"x":1302.0,"y":169.0},{"confidence":88,"h":30.0,"text":"2 Total pages filed:","type":"normal","w":275.3616943359375,"x":2001.0,"y":169.0},{"confidence":100,"h":37.0,"text":"The GPAC Instruction Guide explains how to complete this form. (Ethics Commission Filers)","type":"normal","w":1225.3594970703125,"x":21.0,"y":202.0},{"confidence":60,"h":31.0,"text":"7","type":"normal","w":13.768084526062012,"x":2297.0,"y":240.0},{"confidence":60,"h":31.0,"text":"00082952","type":"normal","w":110.1446762084961,"x":1361.0,"y":266.0},{"confidence":100,"h":36.0,"text":"3 COMMITTEE NAME OFFICE USE ONLY","type":"normal","w":440.5787048339844,"x":21.0,"y":328.0},{"confidence":60,"h":42.0,"text":"Citizens for a Quality Judiciary","type":"normal","w":440.5787048339844,"x":82.0,"y":393.0},{"confidence":80,"h":24.0,"text":"Date Received","type":"normal","w":178.98509216308594,"x":2007.0,"y":422.0},{"confidence":79,"h":32.0,"text":"ELECTRONICALLY FILED","type":"normal","w":275.3616943359375,"x":2008.0,"y":484.0},{"confidence":80,"h":33.0,"text":"10/04/2018","type":"normal","w":137.68084716796875,"x":2007.0,"y":551.0},{"confidence":100,"h":33.0,"text":"4 COMMITTEE ADDRESS/ PO BOX; APT / SUITE CITY; STATE; ZIP CODE","type":"normal","w":853.6212158203125,"x":21.0,"y":630.0},{"confidence":60,"h":29.0,"text":"ADDRESS","type":"normal","w":96.37659454345703,"x":80.0,"y":677.0},{"confidence":60,"h":42.0,"text":"5120 Woodway Drive, Suite 5004","type":"normal","w":413.04254150390625,"x":469.0,"y":695.0},{"confidence":80,"h":42.0,"text":"Date Hand-delivered or Date Postmarked","type":"normal","w":523.1871948242188,"x":2007.0,"y":695.0},{"confidence":60,"h":29.0,"text":"Change of Address","type":"normal","w":234.05743408203125,"x":146.0,"y":796.0},{"confidence":60,"h":37.0,"text":"Houston, TX 77056","type":"normal","w":234.05743408203125,"x":470.0,"y":837.0},{"confidence":80,"h":37.0,"text":"Receipt # Amount","type":"normal","w":220.2893524169922,"x":2007.0,"y":837.0},{"confidence":80,"h":23.0,"text":"Date Processed","type":"normal","w":192.75318908691406,"x":2007.0,"y":969.0},{"confidence":80,"h":30.0,"text":"Date Imaged","type":"normal","w":151.4489288330078,"x":2007.0,"y":1093.0},{"confidence":98,"h":30.0,"text":"5 CAMPAIGN MS / MRS / MR FIRST","type":"normal","w":413.04254150390625,"x":22.0,"y":1219.0},{"confidence":100,"h":30.0,"text":"MI","type":"normal","w":27.536169052124023,"x":1992.0,"y":1219.0},{"confidence":60,"h":29.0,"text":"TREASURER","type":"normal","w":123.91275787353516,"x":80.0,"y":1266.0},{"confidence":60,"h":33.0,"text":"Mr. Brian","type":"normal","w":123.91275787353516,"x":470.0,"y":1286.0},{"confidence":60,"h":29.0,"text":"NAME","type":"normal","w":55.07233810424805,"x":82.0,"y":1313.0}];
+        const expectedRaw = `CAMPAIGN FINANCE REPORT COVER SHEET PG 1
+
+                                                        1 Filer ID      2 Total pages filed:The GPAC Instruction Guide explains how to complete this form. (Ethics Commission Filers)                                                                                                     7                                                           00082952
+3 COMMITTEE NAME OFFICE USE ONLY
+  Citizens for a Quality Judiciary                                                                                        Date Received
+                                                                                        ELECTRONICALLY FILED
+                                                                                        10/04/2018
+
+4 COMMITTEE ADDRESS/ PO BOX; APT / SUITE CITY; STATE; ZIP CODE
+  ADDRESS                   5120 Woodway Drive, Suite 5004      Date Hand-delivered or Date Postmarked
+
+     Change of Address
+                   Houston, TX 77056      Receipt # Amount
+
+                                                                                        Date Processed
+
+                                                                                        Date Imaged
+
+5 CAMPAIGN MS / MRS / MR FIRST      MI
+  TREASURER                   Mr. Brian  NAME`;
+        const actualRaw = `CAMPAIGN FINANCE REPORT COVER SHEET PG 1
+
+                                                        1 Filer ID      2 Total pages filed:The GPAC Instruction Guide explains how to complete this form. (Ethics Commission Filers)                                                                                                     7                                                           00082952
+3 COMMITTEE NAME OFFICE USE ONLY
+  Citizens for a Quality Judiciary                                                                                        Date Received
+                                                                                        ELECTRONICALLY FILED
+                                                                                        10/04/2018
+
+4 COMMITTEE ADDRESS/ PO BOX; APT / SUITE CITY; STATE; ZIP CODE
+  ADDRESS                   5120 Woodway Drive, Suite 5004      Date Hand-delivered or Date Postmarked
+
+     Change of Address
+                   Houston, TX 77056      Receipt # Amount
+
+                                                                                        Date Processed
+
+                                                                                        Date Imaged
+
+5 CAMPAIGN MS / MRS / MR FIRST      MI
+  TREASURER                   Mr. Brian  NAME`;
+
+        window.onload = () => {
+            const img = document.getElementById('source-img');
+            const svg = document.getElementById('diag-svg');
+            
+            if (img.complete) initHeatmap();
+            else img.onload = initHeatmap;
+
+            function initHeatmap() {
+                if (!diagnostics) return;
+                const naturalW = img.naturalWidth;
+                const naturalH = img.naturalHeight;
+                svg.setAttribute('viewBox', `0 0 ${naturalW} ${naturalH}`);
+                
+                let svgHtml = '';
+                for (const d of diagnostics) {
+                    const title = d.confidence ? `Confidence: ${d.confidence}%` : d.text;
+                    svgHtml += `<rect x="${d.x}" y="${d.y}" width="${d.w}" height="${d.h}" class="heatmap-rect ${d.type}"><title>${title}</title></rect>`;
+                }
+                svg.innerHTML = svgHtml;
+            }
+        };
+
+        function setView(event, view) {
+            document.querySelectorAll('.view-pane').forEach(p => p.classList.remove('active'));
+            document.querySelectorAll('.toggle-btn').forEach(b => b.classList.remove('active'));
+            
+            document.getElementById('pane-' + view).classList.add('active');
+            event.target.classList.add('active');
+        }
+
+        // Word-Level Diffing (Myers LCS)
+        function computeWordDiff(s1, s2) {
+            // Split by words, preserving whitespace/newlines as individual tokens
+            const tokenize = (s) => s.split(/(\s+)/);
+            const words1 = tokenize(s1);
+            const words2 = tokenize(s2);
+            
+            let n = words1.length, m = words2.length;
+            let dp = Array.from({length: n + 1}, () => Array(m + 1).fill(0));
+            
+            for (let i = 1; i <= n; i++) {
+                for (let j = 1; j <= m; j++) {
+                    if (words1[i-1] === words2[j-1]) dp[i][j] = dp[i-1][j-1] + 1;
+                    else dp[i][j] = Math.max(dp[i-1][j], dp[i][j-1]);
+                }
+            }
+
+            let result = '';
+            let i = n, j = m;
+            let chunks = [];
+            let adds = 0, dels = 0;
+
+            while (i > 0 || j > 0) {
+                if (i > 0 && j > 0 && words1[i-1] === words2[j-1]) {
+                    chunks.push({type: 'equal', text: words1[i-1]});
+                    i--; j--;
+                } else if (j > 0 && (i === 0 || dp[i][j-1] >= dp[i-1][j])) {
+                    chunks.push({type: 'add', text: words2[j-1]});
+                    adds++;
+                    j--;
+                } else {
+                    chunks.push({type: 'del', text: words1[i-1]});
+                    dels++;
+                    i--;
+                }
+            }
+            
+            chunks.reverse();
+            const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br/>');
+            
+            let html = '';
+            for (let c of chunks) {
+                if (c.type === 'equal') html += `<span>${esc(c.text)}</span>`;
+                else if (c.type === 'add') html += `<span class="diff-add">${esc(c.text)}</span>`;
+                else html += `<span class="diff-del">${esc(c.text)}</span>`;
+            }
+            
+            document.getElementById('metrics').innerText = `Words: +${adds} -${dels}`;
+            return html;
+        }
+
+        // Synchronized Scrolling
+        const leftScroll = document.getElementById('scroll-left');
+        const rightScroll = document.getElementById('scroll-right');
+        
+        let isSyncingLeftScroll = false;
+        let isSyncingRightScroll = false;
+
+        leftScroll.onscroll = function() {
+            if (!isSyncingLeftScroll) {
+                isSyncingRightScroll = true;
+                rightScroll.scrollTop = leftScroll.scrollTop;
+            }
+            isSyncingLeftScroll = false;
+        };
+
+        rightScroll.onscroll = function() {
+            if (!isSyncingRightScroll) {
+                isSyncingLeftScroll = true;
+                leftScroll.scrollTop = rightScroll.scrollTop;
+            }
+            isSyncingRightScroll = false;
+        };
+
+        // Initialize
+        try {
+            document.getElementById('diff-content').innerHTML = computeWordDiff(expectedRaw, actualRaw);
+        } catch (e) {
+            document.getElementById('diff-content').innerText = "Error: " + e.message;
+        }
+    </script>
+</body>
+</html>

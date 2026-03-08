@@ -1,0 +1,5 @@
+---
+source: crates/digicore-text-expander/tests/ocr_regression_tests.rs
+expression: actual_text
+---
+eth/ sqrt    Ooe

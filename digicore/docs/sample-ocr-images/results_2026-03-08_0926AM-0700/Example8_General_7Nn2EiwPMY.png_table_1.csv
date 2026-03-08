@@ -1,0 +1,7 @@
+"","control","once the localhost callback succeeds.",""
+"If consent","","shows ""Google hasn't verified this app"" (testing mode), click Continue. If scope checkboxes",""
+"appear, select","","","required scopes (or Select all) before continuing."
+"Headless","","/","CI (export flow)"
+"1.","Complete","","interactive auth on a machine with a browser."
+"2.","Export","credentials:",""
+"gws","","auth export --unmasked > credentials . j son",""

@@ -1,0 +1,4 @@
+|  | EMERGING | CASE STUDY: GREEN | COMMUNITY |
+|---|---|---|---|
+|  | TECHNOLOGY | ENERGY SOLUTIONS | ACHIEVEMENTS |
+| TEC'S | TRENDS | SustainableCampusproject | & MILESTONES |

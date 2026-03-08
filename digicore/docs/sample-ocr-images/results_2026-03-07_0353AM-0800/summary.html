@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>OCR Wall of Fame - 2026-03-07_0353AM-0800</title>
+    <style>
+        body { font-family: 'Inter', system-ui, sans-serif; background: #0f0f11; color: #e4e4e7; margin: 0; padding: 2rem; }
+        .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #27272a; padding-bottom: 2rem; margin-bottom: 3rem; }
+        h1 { margin: 0; font-weight: 800; background: linear-gradient(to right, #60a5fa, #a855f7); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        .stats { display: flex; gap: 2rem; }
+        .stat-box { background: #18181b; padding: 1rem 1.5rem; border-radius: 12px; border: 1px solid #27272a; text-align: center; }
+        .stat-val { display: block; font-size: 1.5rem; font-weight: 700; color: #fff; }
+        .stat-lbl { font-size: 0.875rem; color: #a1a1aa; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 1.5rem; }
+        .card { background: #18181b; border-radius: 16px; border: 1px solid #27272a; overflow: hidden; display: flex; flex-direction: column; transition: transform 0.2s, border-color 0.2s; }
+        .card:hover { transform: translateY(-4px); border-color: #3f3f46; }
+        .card-content { padding: 1.5rem; flex: 1; }
+        h3 { margin: 0 0 1rem 0; font-size: 1rem; color: #fff; word-break: break-all; }
+        .gauge-container { position: relative; height: 12px; background: #27272a; border-radius: 6px; overflow: hidden; margin-top: 1rem; }
+        .gauge { height: 100%; transition: width 1s ease-out; }
+        .card.success .gauge { background: #22c55e; }
+        .card.warning .gauge { background: #f59e0b; }
+        .card.danger .gauge { background: #ef4444; }
+        .acc-label { position: absolute; right: 0; top: -20px; font-size: 0.75rem; font-weight: 600; }
+        .view-btn { background: #27272a; color: #fff; text-decoration: none; text-align: center; padding: 0.75rem; font-size: 0.875rem; font-weight: 600; border-top: 1px solid #3f3f46; transition: background 0.2s; }
+        .view-btn:hover { background: #3f3f46; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div>
+            <h1>OCR Wall of Fame</h1>
+            <p style="color: #a1a1aa; margin: 0.5rem 0 0 0;">Regression Test Run Performance Dashboard</p>
+        </div>
+        <div class="stats">
+            <div class="stat-box">
+                <span class="stat-val">20</span>
+                <span class="stat-lbl">Images</span>
+            </div>
+            <div class="stat-box">
+                <span class="stat-val">67%</span>
+                <span class="stat-lbl">Avg Accuracy</span>
+            </div>
+        </div>
+    </div>
+    <div class="grid">
+        <div class="card warning">
+                <div class="card-content">
+                    <h3>Example10_Plain-Text_c7d7413737.png</h3>
+                    <div class="gauge-container">
+                        <div class="gauge" style="width: 90%"></div>
+                        <span class="acc-label">90% Match</span>
+                    </div>
+                </div>
+                <a href="Example10_Plain-Text_c7d7413737.png.html" class="view-btn">Details</a>
+            </div><div class="card success">
+                <div class="card-content">
+                    <h3>Example11_Photo-with-Text_p99mnOdI8D.jpg</h3>
+                    <div class="gauge-container">
+                        <div class="gauge" style="width: 100%"></div>
+                        <span class="acc-label">100% Match</span>
+                    </div>
+                </div>
+                <a href="Example11_Photo-with-Text_p99mnOdI8D.jpg.html" class="view-btn">Details</a>
+            </div><div class="card danger">
+                <div class="card-content">
+                    <h3>Example12_README-Multiple-Tables_lRGCpaCbZd.png</h3>
+                    <div class="gauge-container">
+                        <div class="gauge" style="width: 39%"></div>
+                        <span class="acc-label">39% Match</span>
+                    </div>
+                </div>
+                <a href="Example12_README-Multiple-Tables_lRGCpaCbZd.png.html" class="view-btn">Details</a>
+            </div><div class="card danger">
+                <div class="card-content">
+                    <h3>Example13_Receipt-Ukrainian-President_yanukovychleaks-img132.jpg</h3>
+                    <div class="gauge-container">
+                        <div class="gauge" style="width: 18%"></div>
+                        <span class="acc-label">18% Match</span>
+                    </div>
+                </div>
+                <a href="Example13_Receipt-Ukrainian-President_yanukovychleaks-img132.jpg.html" class="view-btn">Details</a>
+            </div><div class="card success">
+                <div class="card-content">
+                    <h3>Example14_Campaign-Finance-Form-TX_2k6ROE1swS.png</h3>
+                    <div class="gauge-container">
+                        <div class="gauge" style="width: 100%"></div>
+                        <span class="acc-label">100% Match</span>
+                    </div>
+                </div>
+                <a href="Example14_Campaign-Finance-Form-TX_2k6ROE1swS.png.html" class="view-btn">Details</a>
+            </div><div class="card success">
+                <div class="card-content">
+                    <h3>Example15_Campaing-Finance-Form-TX_k7N1bqRNCE.png</h3>
+                    <div class="gauge-container">
+                        <div class="gauge" style="width: 100%"></div>
+                        <span class="acc-label">100% Match</span>
+                    </div>
+                </div>
+                <a href="Example15_Campaing-Finance-Form-TX_k7N1bqRNCE.png.html" class="view-btn">Details</a>
+            </div><div class="card danger">
+                <div class="card-content">
+                    <h3>Example16_Campaing-Finance-Form-TX_rKNrHL9I0N.png</h3>
+                    <div class="gauge-container">
+                        <div class="gauge" style="width: 66%"></div>
+                        <span class="acc-label">66% Match</span>
+                    </div>
+                </div>
+                <a href="Example16_Campaing-Finance-Form-TX_rKNrHL9I0N.png.html" class="view-btn">Details</a>
+            </div><div class="card success">
+                <div class="card-content">
+                    <h3>Example17_Legal_Carter_page_fisa_BAICxhxOCf.png</h3>
+                    <div class="gauge-container">
+                        <div class="gauge" style="width: 100%"></div>
+                        <span class="acc-label">100% Match</span>
+                    </div>
+                </div>
+                <a href="Example17_Legal_Carter_page_fisa_BAICxhxOCf.png.html" class="view-btn">Details</a>
+            </div><div class="card warning">
+                <div class="card-content">
+                    <h3>Example18_Receipt-Misc_Xja2El1rbo.jpg</h3>
+                    <div class="gauge-container">
+                        <div class="gauge" style="width: 82%"></div>
+                        <span class="acc-label">82% Match</span>
+                    </div>
+                </div>
+                <a href="Example18_Receipt-Misc_Xja2El1rbo.jpg.html" class="view-btn">Details</a>
+            </div><div class="card danger">
+                <div class="card-content">
+                    <h3>Example19_Multi-Column_BZE4AOmSS6.png</h3>
+                    <div class="gauge-container">
+                        <div class="gauge" style="width: 41%"></div>
+                        <span class="acc-label">41% Match</span>
+                    </div>
+                </div>
+                <a href="Example19_Multi-Column_BZE4AOmSS6.png.html" class="view-btn">Details</a>
+            </div><div class="card warning">
+                <div class="card-content">
+                    <h3>Example1_Column-Data_OQjhJGtlge.png</h3>
+                    <div class="gauge-container">
+                        <div class="gauge" style="width: 92%"></div>
+                        <span class="acc-label">92% Match</span>
+                    </div>
+                </div>
+                <a href="Example1_Column-Data_OQjhJGtlge.png.html" class="view-btn">Details</a>
+            </div><div class="card success">
+                <div class="card-content">
+                    <h3>Example20_whitefish_energy_vs_commonwealth_puerto_rico-pdf.png</h3>
+                    <div class="gauge-container">
+                        <div class="gauge" style="width: 100%"></div>
+                        <span class="acc-label">100% Match</span>
+                    </div>
+                </div>
+                <a href="Example20_whitefish_energy_vs_commonwealth_puerto_rico-pdf.png.html" class="view-btn">Details</a>
+            </div><div class="card danger">
+                <div class="card-content">
+                    <h3>Example2_Mostly-Plain-Text_FC5ehkj2xd.png</h3>
+                    <div class="gauge-container">
+                        <div class="gauge" style="width: 46%"></div>
+                        <span class="acc-label">46% Match</span>
+                    </div>
+                </div>
+                <a href="Example2_Mostly-Plain-Text_FC5ehkj2xd.png.html" class="view-btn">Details</a>
+            </div><div class="card danger">
+                <div class="card-content">
+                    <h3>Example3_Simple-Table_6a7b23a.png</h3>
+                    <div class="gauge-container">
+                        <div class="gauge" style="width: 46%"></div>
+                        <span class="acc-label">46% Match</span>
+                    </div>
+                </div>
+                <a href="Example3_Simple-Table_6a7b23a.png.html" class="view-btn">Details</a>
+            </div><div class="card danger">
+                <div class="card-content">
+                    <h3>Example4_Multi-Column-Paragraphs_YgP8dl5AW3.png</h3>
+                    <div class="gauge-container">
+                        <div class="gauge" style="width: 52%"></div>
+                        <span class="acc-label">52% Match</span>
+                    </div>
+                </div>
+                <a href="Example4_Multi-Column-Paragraphs_YgP8dl5AW3.png.html" class="view-btn">Details</a>
+            </div><div class="card danger">
+                <div class="card-content">
+                    <h3>Example5_Table-combined-with-Plain-Text_7hdlmNFDk5.png</h3>
+                    <div class="gauge-container">
+                        <div class="gauge" style="width: 55%"></div>
+                        <span class="acc-label">55% Match</span>
+                    </div>
+                </div>
+                <a href="Example5_Table-combined-with-Plain-Text_7hdlmNFDk5.png.html" class="view-btn">Details</a>
+            </div><div class="card danger">
+                <div class="card-content">
+                    <h3>Example6_Plain-Text-with-Bullet-Points_me3PwC8PlC.jpg</h3>
+                    <div class="gauge-container">
+                        <div class="gauge" style="width: 58%"></div>
+                        <span class="acc-label">58% Match</span>
+                    </div>
+                </div>
+                <a href="Example6_Plain-Text-with-Bullet-Points_me3PwC8PlC.jpg.html" class="view-btn">Details</a>
+            </div><div class="card success">
+                <div class="card-content">
+                    <h3>Example7_README_cdb7028c2a.png</h3>
+                    <div class="gauge-container">
+                        <div class="gauge" style="width: 100%"></div>
+                        <span class="acc-label">100% Match</span>
+                    </div>
+                </div>
+                <a href="Example7_README_cdb7028c2a.png.html" class="view-btn">Details</a>
+            </div><div class="card danger">
+                <div class="card-content">
+                    <h3>Example8_General_7Nn2EiwPMY.png</h3>
+                    <div class="gauge-container">
+                        <div class="gauge" style="width: 24%"></div>
+                        <span class="acc-label">24% Match</span>
+                    </div>
+                </div>
+                <a href="Example8_General_7Nn2EiwPMY.png.html" class="view-btn">Details</a>
+            </div><div class="card danger">
+                <div class="card-content">
+                    <h3>Example9_Zillow-Listing_wlFZVBDNSr.png</h3>
+                    <div class="gauge-container">
+                        <div class="gauge" style="width: 32%"></div>
+                        <span class="acc-label">32% Match</span>
+                    </div>
+                </div>
+                <a href="Example9_Zillow-Listing_wlFZVBDNSr.png.html" class="view-btn">Details</a>
+            </div>
+    </div>
+</body>
+</html>

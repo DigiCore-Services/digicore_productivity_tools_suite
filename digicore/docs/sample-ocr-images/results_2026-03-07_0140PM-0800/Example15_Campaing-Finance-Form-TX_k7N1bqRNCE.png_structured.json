@@ -1,0 +1,75 @@
+[
+  {
+    "y_top": 216.0,
+    "y_bottom": 401.0,
+    "column_centers": [
+      31.0,
+      314.5,
+      540.5
+    ],
+    "rows": [
+      [
+        "1.",
+        "SCHEDULE",
+        "A1: MONETARY POLITICAL CONTRIBUTIONS 28,350.00"
+      ],
+      [
+        "",
+        "SCHEDULE",
+        "A2: NON-MONETARY (IN-KIND) POLITICAL CONTRIBUTIONS"
+      ]
+    ]
+  },
+  {
+    "y_top": 514.0,
+    "y_bottom": 401.0,
+    "column_centers": [
+      31.0,
+      314.5,
+      540.5
+    ],
+    "rows": [
+      [
+        "",
+        "SCHEDULE",
+        "B: PLEDGED CONTRIBUTIONS"
+      ],
+      [
+        "",
+        "SCHEDULE",
+        "Cl: MONETARY CONTRIBUTIONS FROM CORPORATION OR LABOR"
+      ],
+      [
+        "1.",
+        "SCHEDULE",
+        "A1: MONETARY POLITICAL CONTRIBUTIONS 28,350.00"
+      ],
+      [
+        "",
+        "SCHEDULE",
+        "A2: NON-MONETARY (IN-KIND) POLITICAL CONTRIBUTIONS"
+      ]
+    ]
+  },
+  {
+    "y_top": 514.0,
+    "y_bottom": 667.0,
+    "column_centers": [
+      31.0,
+      314.5,
+      540.5
+    ],
+    "rows": [
+      [
+        "",
+        "SCHEDULE",
+        "B: PLEDGED CONTRIBUTIONS"
+      ],
+      [
+        "",
+        "SCHEDULE",
+        "Cl: MONETARY CONTRIBUTIONS FROM CORPORATION OR LABOR"
+      ]
+    ]
+  }
+]

@@ -1,0 +1,107 @@
+[
+  {
+    "y_top": 218.0,
+    "y_bottom": 259.0,
+    "column_centers": [
+      38.5,
+      203.0,
+      373.0,
+      589.0,
+      1332.5
+    ],
+    "headers": [
+      [
+        "creating",
+        "Windows",
+        "installers,",
+        "but they differ significantly in architecture,",
+        "flexibility, and use cases."
+      ]
+    ],
+    "body": [],
+    "footers": []
+  },
+  {
+    "y_top": 350.0,
+    "y_bottom": 391.0,
+    "column_centers": [
+      38.5,
+      1204.5,
+      1332.5,
+      1451.5
+    ],
+    "headers": [
+      [
+        "is widely supported by enterprise deployment tools like Group",
+        "Policy,",
+        "SCCM,",
+        "and Intune. MSI"
+      ]
+    ],
+    "body": [],
+    "footers": []
+  },
+  {
+    "y_top": 482.0,
+    "y_bottom": 655.0,
+    "column_centers": [
+      38.5,
+      203.0,
+      373.0,
+      589.0,
+      1204.5,
+      1332.5,
+      1451.5
+    ],
+    "headers": [
+      [
+        "follow strict Windows Installer rules. Tools like WiX, InstallShield, and",
+        "",
+        "",
+        "",
+        "",
+        "Advanced Installer generate",
+        ""
+      ]
+    ],
+    "body": [
+      [
+        "MSI files,",
+        "making",
+        "them ideal",
+        "for corporate environments where",
+        "compliance,",
+        "",
+        "repair, and upgrade"
+      ],
+      [
+        "mechanisms are",
+        "",
+        "important.",
+        "",
+        "",
+        "",
+        ""
+      ]
+    ],
+    "footers": []
+  },
+  {
+    "y_top": 812.0,
+    "y_bottom": 853.0,
+    "column_centers": [
+      38.5,
+      203.0,
+      1451.5
+    ],
+    "headers": [
+      [
+        "process,",
+        "from Ul customization to file operations and registry edits. NSIS is",
+        "lightweight, produces"
+      ]
+    ],
+    "body": [],
+    "footers": []
+  }
+]

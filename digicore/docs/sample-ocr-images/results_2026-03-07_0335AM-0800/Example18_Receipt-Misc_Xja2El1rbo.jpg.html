@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Detail: Example18_Receipt-Misc_Xja2El1rbo.jpg</title>
+    <style>
+        body { font-family: 'Inter', system-ui, sans-serif; background: #0f0f11; color: #e4e4e7; margin: 0; padding: 2rem; }
+        .nav { margin-bottom: 2rem; }
+        .nav a { color: #60a5fa; text-decoration: none; font-size: 0.875rem; }
+        .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 2rem; }
+        h1 { margin: 0; font-size: 1.5rem; color: #fff; }
+        .accuracy-badge { padding: 0.5rem 1rem; border-radius: 20px; font-weight: 700; }
+        .success { background: rgba(34, 197, 94, 0.1); color: #22c55e; border: 1px solid rgba(34, 197, 94, 0.2); }
+        .warning { background: rgba(245, 158, 11, 0.1); color: #f59e0b; border: 1px solid rgba(245, 158, 11, 0.2); }
+        .danger { background: rgba(239, 68, 68, 0.1); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.2); }
+        
+        .layout { display: flex; gap: 2rem; height: calc(100vh - 200px); }
+        .pane { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+        .pane-label { font-size: 0.75rem; font-weight: 600; text-transform: uppercase; color: #a1a1aa; margin-bottom: 0.5rem; letter-spacing: 0.05em; }
+        .pane-content { flex: 1; background: #18181b; border: 1px solid #27272a; border-radius: 12px; overflow: auto; padding: 1.5rem; }
+        
+        img { max-width: 100%; border-radius: 4px; border: 1px solid #3f3f46; }
+        pre { margin: 0; white-space: pre-wrap; font-family: 'JetBrains Mono', 'Consolas', monospace; font-size: 13px; line-height: 1.6; color: #d4d4d8; }
+        
+        .diff-view { background: #09090b; padding: 1rem; border-radius: 8px; font-family: monospace; white-space: pre-wrap; overflow-wrap: break-word; }
+        .diff-add { background: rgba(34, 197, 94, 0.2); color: #4ade80; text-decoration: none; }
+        .diff-del { background: rgba(239, 68, 68, 0.2); color: #f87171; text-decoration: line-through; }
+    </style>
+</head>
+<body>
+    <div class="nav"><a href="summary.html">← Back to Dashboard</a></div>
+    <div class="header">
+        <div>
+            <h1>Example18_Receipt-Misc_Xja2El1rbo.jpg</h1>
+            <p style="color: #a1a1aa; margin: 0.5rem 0 0 0;">Interactive Analysis & Visual Diff</p>
+        </div>
+        <div class="accuracy-badge warning">82% Match</div>
+    </div>
+    
+    <div class="layout">
+        <div class="pane">
+            <span class="pane-label">Source Image</span>
+            <div class="pane-content">
+                <a href="../Example18_Receipt-Misc_Xja2El1rbo.jpg" target="_blank"><img src="../Example18_Receipt-Misc_Xja2El1rbo.jpg" alt="source" /></a>
+            </div>
+        </div>
+        
+        <div class="pane">
+            <span class="pane-label">Output vs Baseline Diff</span>
+            <div class="pane-content">
+                <div id="diff-container" class="diff-view">Computing visual diff...</div>
+            </div>
+        </div>
+        
+        <div class="pane">
+            <span class="pane-label">Raw Extraction</span>
+            <div class="pane-content">
+                <pre>ITEM PRICE TOTAL
+| ORANGE SLICE 40 | 1 | 1.40 | 
+|---|---|---|
+| CHEEZ-IT 2.72 | 1 | 2.72 | 
+| TOWN HOUSE CRACKERS 3. 47 | 1 | 3.47 | 
+| CHEWY CHIPS AHOY 04 | 1 | 3 04 | 
+| RAMEN SOUP 0.35 15 |  | 5.25 | 
+| BEEFSTICK 0.31 | 6 | 1.86 | 
+| NACHO CHEESE DORITO 0. 45 | 3 | 1.35 | 
+| KOOL AID GRAPE . 1.38 | 1 | 1.38 | 
+| CLEAR TANG 1. 47 | 1 |  |</pre>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/diff_match_patch/20121111/diff_match_patch.js"></script>
+    <script>
+        function computeDiff() {
+            const dmp = new diff_match_patch();
+            const text1 = `|
+| CHEEZ-IT 2.72 | 1 | 2.72 | 
+| TOWN HOUSE CRACKERS 3. 47 | 1 | 3.47 | 
+| CHEWY CHIPS AHOY 04 | 1 | 3 04 | 
+| RAMEN SOUP 0.35 15 |  | 5.25 | 
+| BEEFSTICK 0.31 | 6 | 1.86 | 
+| NACHO CHEESE DORITO 0. 45 | 3 | 1.35 | 
+| KOOL AID GRAPE . 1.38 | 1 | 1.38 | 
+| CLEAR TANG 1. 47 | 1 |  |`;
+            const text2 = `ITEM PRICE TOTAL
+| ORANGE SLICE 40 | 1 | 1.40 | 
+|---|---|---|
+| CHEEZ-IT 2.72 | 1 | 2.72 | 
+| TOWN HOUSE CRACKERS 3. 47 | 1 | 3.47 | 
+| CHEWY CHIPS AHOY 04 | 1 | 3 04 | 
+| RAMEN SOUP 0.35 15 |  | 5.25 | 
+| BEEFSTICK 0.31 | 6 | 1.86 | 
+| NACHO CHEESE DORITO 0. 45 | 3 | 1.35 | 
+| KOOL AID GRAPE . 1.38 | 1 | 1.38 | 
+| CLEAR TANG 1. 47 | 1 |  |`;
+            const diffs = dmp.diff_main(text1, text2);
+            dmp.diff_cleanupSemantic(diffs);
+            
+            let html = '';
+            for (let i = 0; i < diffs.length; i++) {
+                const type = diffs[i][0];
+                const text = diffs[i][1].replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br/>');
+                
+                if (type === 0) {
+                    html += '<span>' + text + '</span>';
+                } else if (type === 1) {
+                    html += '<span class="diff-add">' + text + '</span>';
+                } else if (type === -1) {
+                    html += '<span class="diff-del">' + text + '</span>';
+                }
+            }
+            document.getElementById('diff-container').innerHTML = html;
+        }
+        
+        // Wait for library load or fallback
+        if (typeof diff_match_patch !== 'undefined') {
+            computeDiff();
+        } else {
+            document.getElementById('diff-container').innerText = "(Note: Diff library could not be loaded. Please ensure you have internet access to view the visual diff or check local extraction.)";
+        }
+    </script>
+</body>
+</html>

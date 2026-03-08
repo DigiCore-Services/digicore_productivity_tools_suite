@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Detail: Example12_README-Multiple-Tables_lRGCpaCbZd.png</title>
+    <style>
+        body { font-family: 'Inter', system-ui, sans-serif; background: #0f0f11; color: #e4e4e7; margin: 0; padding: 2rem; }
+        .nav { margin-bottom: 2rem; }
+        .nav a { color: #60a5fa; text-decoration: none; font-size: 0.875rem; }
+        .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 2rem; }
+        h1 { margin: 0; font-size: 1.5rem; color: #fff; }
+        .accuracy-badge { padding: 0.5rem 1rem; border-radius: 20px; font-weight: 700; }
+        .success { background: rgba(34, 197, 94, 0.1); color: #22c55e; border: 1px solid rgba(34, 197, 94, 0.2); }
+        .warning { background: rgba(245, 158, 11, 0.1); color: #f59e0b; border: 1px solid rgba(245, 158, 11, 0.2); }
+        .danger { background: rgba(239, 68, 68, 0.1); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.2); }
+        
+        .layout { display: flex; gap: 2rem; height: calc(100vh - 200px); }
+        .pane { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+        .pane-label { font-size: 0.75rem; font-weight: 600; text-transform: uppercase; color: #a1a1aa; margin-bottom: 0.5rem; letter-spacing: 0.05em; }
+        .pane-content { flex: 1; background: #18181b; border: 1px solid #27272a; border-radius: 12px; overflow: auto; padding: 1.5rem; }
+        
+        img { max-width: 100%; border-radius: 4px; border: 1px solid #3f3f46; }
+        pre { margin: 0; white-space: pre-wrap; font-family: 'JetBrains Mono', 'Consolas', monospace; font-size: 13px; line-height: 1.6; color: #d4d4d8; }
+        
+        .diff-view { background: #09090b; padding: 1rem; border-radius: 8px; font-family: monospace; white-space: pre-wrap; overflow-wrap: break-word; }
+        .diff-add { background: rgba(34, 197, 94, 0.2); color: #4ade80; text-decoration: none; }
+        .diff-del { background: rgba(239, 68, 68, 0.2); color: #f87171; text-decoration: line-through; }
+    </style>
+</head>
+<body>
+    <div class="nav"><a href="summary.html">← Back to Dashboard</a></div>
+    <div class="header">
+        <div>
+            <h1>Example12_README-Multiple-Tables_lRGCpaCbZd.png</h1>
+            <p style="color: #a1a1aa; margin: 0.5rem 0 0 0;">Interactive Analysis & Visual Diff</p>
+        </div>
+        <div class="accuracy-badge danger">39% Match</div>
+    </div>
+    
+    <div class="layout">
+        <div class="pane">
+            <span class="pane-label">Source Image</span>
+            <div class="pane-content">
+                <a href="../Example12_README-Multiple-Tables_lRGCpaCbZd.png" target="_blank"><img src="../Example12_README-Multiple-Tables_lRGCpaCbZd.png" alt="source" /></a>
+            </div>
+        </div>
+        
+        <div class="pane">
+            <span class="pane-label">Output vs Baseline Diff</span>
+            <div class="pane-content">
+                <div id="diff-container" class="diff-view">Computing visual diff...</div>
+            </div>
+        </div>
+        
+        <div class="pane">
+            <span class="pane-label">Raw Extraction</span>
+            <div class="pane-content">
+                <pre>README Code      of conduct AR Contributing Apache-2.0 license Security
+
+   gws gmail users messages get - -params
+      --sanitize "projects/P/locations/ L/templates/T"
+
+                          Variable Description
+
+| GOOGLE WORKSPACE | CLI SANITIZE TEMPLATE Default Model Armor template | 
+|---|---|
+
+| GOOGLE WORKSPACE | CLI SANITIZE MODE warn (default) or block | 
+
+| Environment | Variables | 
+
+All variables are optional. See .env.example for a copy-paste template.
+
+                         Variable Description
+
+| GOOGLE WORKSPACE | CLI TOKEN Pre-obtained OAuth2 access token (highest priority) |  | 
+|---|---|---|
+
+| GOOGLE WORKSPACE | CLI CREDENTIALS FILE Path | to OAuth credentials JSON (user or service account) | 
+
+| I CLIENT_ID I OAuth client ID |  | (alternative to client_secret.json | 
+                                                      I OAuth client secret (paired with CLIENT _ID ) I
+                                                  I Override config      directory (default: N/ . config/gws ) I</pre>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function computeDiff(s1, s2) {
+            let n = s1.length, m = s2.length;
+            let dp = Array.from({length: n + 1}, () => Array(m + 1).fill(0));
+            for (let i = 1; i <= n; i++) {
+                for (let j = 1; j <= m; j++) {
+                    if (s1[i-1] === s2[j-1]) dp[i][j] = dp[i-1][j-1] + 1;
+                    else dp[i][j] = Math.max(dp[i-1][j], dp[i][j-1]);
+                }
+            }
+
+            let result = '';
+            let i = n, j = m;
+            let chunks = [];
+            while (i > 0 || j > 0) {
+                if (i > 0 && j > 0 && s1[i-1] === s2[j-1]) {
+                    chunks.push({type: 'equal', text: s1[i-1]});
+                    i--; j--;
+                } else if (j > 0 && (i === 0 || dp[i][j-1] >= dp[i-1][j])) {
+                    chunks.push({type: 'add', text: s2[j-1]});
+                    j--;
+                } else {
+                    chunks.push({type: 'del', text: s1[i-1]});
+                    i--;
+                }
+            }
+            
+            chunks.reverse();
+            let current = null;
+            let buffer = '';
+            
+            const flush = () => {
+                if (!current) return;
+                const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br/>');
+                if (current === 'equal') result += `<span>${esc(buffer)}</span>`;
+                else if (current === 'add') result += `<span class="diff-add">${esc(buffer)}</span>`;
+                else result += `<span class="diff-del">${esc(buffer)}</span>`;
+                buffer = '';
+            };
+
+            for (let c of chunks) {
+                if (c.type !== current) {
+                    flush();
+                    current = c.type;
+                }
+                buffer += c.text;
+            }
+            flush();
+            return result;
+        }
+
+        try {
+            const expected = `|
+
+| GOOGLE WORKSPACE | CLI CREDENTIALS FILE Path | to OAuth credentials JSON (user or service account) | 
+
+| I CLIENT_ID I OAuth client ID |  | (alternative to client_secret.json | 
+                                                      I OAuth client secret (paired with CLIENT _ID ) I
+                                                  I Override config      directory (default: N/ . config/gws ) I`;
+            const actual = `README Code      of conduct AR Contributing Apache-2.0 license Security
+
+   gws gmail users messages get - -params
+      --sanitize "projects/P/locations/ L/templates/T"
+
+                          Variable Description
+
+| GOOGLE WORKSPACE | CLI SANITIZE TEMPLATE Default Model Armor template | 
+|---|---|
+
+| GOOGLE WORKSPACE | CLI SANITIZE MODE warn (default) or block | 
+
+| Environment | Variables | 
+
+All variables are optional. See .env.example for a copy-paste template.
+
+                         Variable Description
+
+| GOOGLE WORKSPACE | CLI TOKEN Pre-obtained OAuth2 access token (highest priority) |  | 
+|---|---|---|
+
+| GOOGLE WORKSPACE | CLI CREDENTIALS FILE Path | to OAuth credentials JSON (user or service account) | 
+
+| I CLIENT_ID I OAuth client ID |  | (alternative to client_secret.json | 
+                                                      I OAuth client secret (paired with CLIENT _ID ) I
+                                                  I Override config      directory (default: N/ . config/gws ) I`;
+            document.getElementById('diff-container').innerHTML = computeDiff(expected, actual);
+        } catch (e) {
+            document.getElementById('diff-container').innerText = "Error computing diff: " + e.message;
+        }
+    </script>
+</body>
+</html>

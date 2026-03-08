@@ -1,0 +1,2 @@
+| Nullsoft. | It allows | developers | to write . NSI scripts | that define | every | aspect | of the installation |
+|---|---|---|---|---|---|---|---|
