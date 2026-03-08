@@ -1,4 +1,0 @@
-| GOOGLE WORKSPACE | CLI TOKEN Pre-obtained OAuth2 access token (highest priority) |  |
-|---|---|---|
-| GOOGLE WORKSPACE | CLI CREDENTIALS FILE Path | to OAuth credentials JSON (user or service account) |
-| I CLIENT_ID I OAuth client ID |  | (alternative to client_secret.json |

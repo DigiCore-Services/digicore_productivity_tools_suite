@@ -653,7 +653,7 @@ mod tests {
         use std::sync::Arc;
 
         let geocode_url =
-            "https://geocoding-api.open-meteo.com/v1/search?name=Tokyo&count=15&language=en&format=json";
+            "https://geocoding-api.open-meteo.com/v1/search?name=Tokyo&count=8&language=en&format=json";
         let forecast_url =
             "https://api.open-meteo.com/v1/forecast?latitude=35.6762&longitude=139.6503&current_weather=true";
 

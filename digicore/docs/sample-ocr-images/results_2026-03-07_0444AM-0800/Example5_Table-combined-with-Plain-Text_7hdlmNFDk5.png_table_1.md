@@ -1,2 +1,0 @@
-| --page-all | Auto-paginate, one JSON line per page (NDJSON) | off |
-|---|---|---|

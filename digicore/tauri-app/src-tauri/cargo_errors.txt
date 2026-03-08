@@ -1,0 +1,67 @@
+﻿cargo.exe : warning: unused import: 
+`SoftwareBitmap`
+At line:1 char:1
++ & "C:\Users\pinea\.cargo\bin\cargo.exe" check 
+--color never 2>&1 | Ou ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (warn 
+   ing: unused import: `SoftwareBitmap`:String)   
+  [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+ --> crates\digicore-text-expander\src\adapters\ex
+traction\windows_ocr.rs:3:49
+  |
+3 | use 
+windows::Graphics::Imaging::{BitmapDecoder, 
+SoftwareBitmap};
+  |                                               
+  ^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of 
+`#[warn(unused)]`) on by default
+
+warning: unused import: 
+`std::collections::HashMap`
+ --> crates\digicore-text-expander\src\adapters\ex
+traction\windows_ocr.rs:6:5
+  |
+6 | use std::collections::HashMap;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: `digicore-text-expander` (lib) generated 
+2 warnings (run `cargo fix --lib -p 
+digicore-text-expander` to apply 2 suggestions)
+    Checking digicore-text-expander-tauri v0.1.0 (
+C:\Users\pinea\Scripts\AHK_AutoHotKey\digicore\tau
+ri-app\src-tauri)
+warning: unused import: `ExtractionDispatcher`
+  --> tauri-app\src-tauri\src\api.rs:32:60
+   |
+32 | use digicore_text_expander::services::extract
+ion_service::{ExtractionDispatcher, 
+create_extraction_service};
+   |                                              
+              ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of 
+`#[warn(unused)]`) on by default
+
+warning: function `insert_image_entry` is never 
+used
+   --> tauri-app\src-tauri\src\clipboard_repositor
+y.rs:260:8
+    |
+260 | pub fn insert_image_entry(
+    |        ^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of 
+`#[warn(unused)]`) on by default
+
+warning: `digicore-text-expander-tauri` (lib) 
+generated 2 warnings (run `cargo fix --lib -p 
+digicore-text-expander-tauri` to apply 1 
+suggestion)
+    Finished `dev` profile [unoptimized + 
+debuginfo] target(s) in 6.27s

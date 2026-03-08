@@ -1,2 +1,0 @@
-| Adrienne | Anthoula | 22 |
-|---|---|---|

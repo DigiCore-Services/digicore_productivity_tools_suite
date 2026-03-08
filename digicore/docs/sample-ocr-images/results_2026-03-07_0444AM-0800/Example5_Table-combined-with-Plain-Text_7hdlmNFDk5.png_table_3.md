@@ -1,2 +1,0 @@
-| --page-delay <MS> | Delay between pages | 100 ms |
-|---|---|---|

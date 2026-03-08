@@ -43,6 +43,58 @@ export interface AppState {
   clip_history_max_depth: number;
   script_library_run_disabled: boolean;
   script_library_run_allowlist: string;
+
+  corpus_enabled: boolean;
+  corpus_output_dir: string;
+  corpus_snapshot_dir: string;
+  corpus_shortcut_modifiers: number;
+  corpus_shortcut_key: number;
+
+  extraction_row_overlap_tolerance: number;
+  extraction_cluster_threshold_factor: number;
+  extraction_zone_proximity: number;
+  extraction_cross_zone_gap_factor: number;
+  extraction_same_zone_gap_factor: number;
+  extraction_significant_gap_gate: number;
+  extraction_char_width_factor: number;
+  extraction_bridged_threshold: number;
+  extraction_word_spacing_factor: number;
+
+  extraction_footer_triggers: string;
+  extraction_table_min_contiguous_rows: number;
+  extraction_table_min_avg_segments: number;
+
+  extraction_adaptive_plaintext_cluster_factor: number;
+  extraction_adaptive_plaintext_gap_gate: number;
+  extraction_adaptive_table_cluster_factor: number;
+  extraction_adaptive_table_gap_gate: number;
+  extraction_adaptive_column_cluster_factor: number;
+  extraction_adaptive_column_gap_gate: number;
+
+  extraction_refinement_entropy_threshold: number;
+  extraction_refinement_cluster_threshold_modifier: number;
+  extraction_refinement_cross_zone_gap_modifier: number;
+
+  extraction_classifier_gutter_weight: number;
+  extraction_classifier_density_weight: number;
+  extraction_classifier_multicolumn_density_max: number;
+  extraction_classifier_table_density_min: number;
+  extraction_classifier_table_entropy_min: number;
+
+  extraction_columns_min_contiguous_rows: number;
+  extraction_columns_gutter_gap_factor: number;
+  extraction_columns_gutter_void_tolerance: number;
+  extraction_columns_edge_margin_tolerance: number;
+
+  extraction_headers_max_width_ratio: number;
+  extraction_headers_centered_tolerance: number;
+  extraction_headers_h1_size_multiplier: number;
+  extraction_headers_h2_size_multiplier: number;
+  extraction_headers_h3_size_multiplier: number;
+
+  extraction_scoring_jitter_penalty_weight: number;
+  extraction_scoring_size_penalty_weight: number;
+  extraction_scoring_low_confidence_threshold: number;
 }
 
 export interface ClipEntry {
@@ -60,6 +112,7 @@ export interface ClipEntry {
   image_width?: number | null;
   image_height?: number | null;
   image_bytes?: number | null;
+  parent_id?: number | null;
 }
 
 export interface InteractiveVarDto {

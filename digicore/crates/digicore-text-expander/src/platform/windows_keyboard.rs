@@ -126,9 +126,21 @@ unsafe extern "system" fn hook_proc(code: c_int, wparam: WPARAM, lparam: LPARAM)
 const VK_SHIFT: u16 = 0x10;
 const VK_CONTROL: u16 = 0x11;
 
+const VK_MENU: u16 = 0x12;
+
 /// Check if Ctrl key is currently pressed (for Ghost Suggestor Ctrl+Tab).
 pub fn is_ctrl_pressed() -> bool {
     unsafe { (GetAsyncKeyState(VK_CONTROL as i32) as u16 & 0x8000) != 0 }
+}
+
+/// Check if Alt key is currently pressed.
+pub fn is_alt_pressed() -> bool {
+    unsafe { (GetAsyncKeyState(VK_MENU as i32) as u16 & 0x8000) != 0 }
+}
+
+/// Check if Shift key is currently pressed.
+pub fn is_shift_pressed() -> bool {
+    unsafe { (GetAsyncKeyState(VK_SHIFT as i32) as u16 & 0x8000) != 0 }
 }
 
 /// Get character from virtual key using ToUnicodeEx (respects keyboard layout).

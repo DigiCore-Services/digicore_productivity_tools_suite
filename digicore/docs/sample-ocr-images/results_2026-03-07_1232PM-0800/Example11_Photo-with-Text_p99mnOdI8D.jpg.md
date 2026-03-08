@@ -1,1 +1,0 @@
-e# th/ sqrt# Ooe

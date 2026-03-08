@@ -1,4 +1,0 @@
-| Date | Full name | of contributor out-of-state PAC (ID#:—) | Amount of Contribution ($) |
-|---|---|---|---|
-| 09/27/2018 | Bobbitt, | JB $1,000.00 |  |
-|  | Contributor | address; City; State; Zip Code |  |

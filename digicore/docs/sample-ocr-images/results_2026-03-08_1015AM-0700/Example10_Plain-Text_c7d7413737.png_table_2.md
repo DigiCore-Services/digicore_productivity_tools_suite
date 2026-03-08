@@ -1,4 +1,0 @@
-| follow strict Windows Installer rules. Tools like WiX, InstallShield, and | Advanced Installer generate |  |  |  |
-|---|---|---|---|---|
-| MSI files, making |  | them ideal for corporate environments where | compliance, | repair, and upgrade |
-| mechanisms are |  | important. |  |  |

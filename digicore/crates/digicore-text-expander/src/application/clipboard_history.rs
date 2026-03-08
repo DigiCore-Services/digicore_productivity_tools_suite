@@ -56,7 +56,9 @@ pub fn set_entry_observer(observer: Option<EntryObserver>) {
 /// Seeds with current clipboard content on startup so existing content is visible.
 pub fn start(config: ClipboardHistoryConfig) {
     CLIP_ENABLED.store(config.enabled, Ordering::SeqCst);
+    #[allow(unused_mut)]
     let mut entries = Vec::new();
+    #[allow(unused_mut)]
     let mut last_content = None;
 
     #[cfg(not(test))]

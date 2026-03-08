@@ -290,22 +290,6 @@ fn suggest_phrase(phrase: &str, count: u32) {
     }
 }
 
-/// Show Windows toast in lower-right corner (AHK-style pop-up).
-fn show_toast(phrase: &str, count: u32) {
-    use winrt_toast_reborn::{Text, Toast, ToastManager};
-    let body = format!("Add \"{}\" as snippet? (typed {}x)", phrase, count);
-    debug_log(&format!("discovery: show_toast phrase={:?}", phrase));
-    let manager = ToastManager::new(ToastManager::POWERSHELL_AUM_ID);
-    let mut toast = Toast::new();
-    toast
-        .text1("DigiCore Discovery")
-        .text2(Text::new(&body));
-    match manager.show(&toast) {
-        Ok(()) => debug_log("discovery: toast shown OK"),
-        Err(e) => debug_log(&format!("discovery: toast FAILED: {:?}", e)),
-    }
-}
-
 /// Take the last suggestion for UI display. Returns None if none pending.
 pub fn take_suggestion() -> Option<(String, u32)> {
     std::mem::take(&mut *LAST_SUGGESTION.lock().unwrap())

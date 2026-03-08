@@ -22,6 +22,7 @@ pub struct ClipboardRow {
     pub image_width: Option<u32>,
     pub image_height: Option<u32>,
     pub image_bytes: Option<u32>,
+    pub parent_id: Option<u32>,
 }
 
 static DB_PATH: OnceLock<PathBuf> = OnceLock::new();
@@ -109,7 +110,8 @@ pub fn init(db_path: PathBuf) -> Result<(), String> {
             thumb_path TEXT,
             image_width INTEGER,
             image_height INTEGER,
-            image_bytes INTEGER
+            image_bytes INTEGER,
+            parent_id INTEGER
         );
         CREATE INDEX IF NOT EXISTS idx_clipboard_history_created_at
             ON clipboard_history(created_at_unix_ms DESC);
@@ -125,6 +127,7 @@ pub fn init(db_path: PathBuf) -> Result<(), String> {
     ensure_column(&conn, "image_width", "INTEGER")?;
     ensure_column(&conn, "image_height", "INTEGER")?;
     ensure_column(&conn, "image_bytes", "INTEGER")?;
+    ensure_column(&conn, "parent_id", "INTEGER")?;
     let _ = DB_CONN.set(Mutex::new(conn));
     Ok(())
 }
@@ -138,7 +141,7 @@ fn conn_guard() -> Result<std::sync::MutexGuard<'static, Connection>, String> {
 
 fn latest_content_hash(conn: &Connection) -> Result<Option<String>, String> {
     conn.query_row(
-        "SELECT content_hash FROM clipboard_history ORDER BY id DESC LIMIT 1",
+        "SELECT content_hash FROM clipboard_history WHERE parent_id IS NULL ORDER BY id DESC LIMIT 1",
         [],
         |row| row.get::<_, String>(0),
     )
@@ -162,9 +165,9 @@ pub fn insert_entry(content: &str, process_name: &str, window_title: &str) -> Re
     log::info!("[ClipboardRepository] Inserting text entry, hash: {}", hash);
     conn.execute(
         "INSERT INTO clipboard_history (
-            content, process_name, window_title, char_count, word_count, content_hash, created_at_unix_ms, entry_type
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'text')",
-        params![content, process_name, window_title, chars, words, hash, now_ms],
+            content, process_name, window_title, char_count, word_count, content_hash, created_at_unix_ms, entry_type, parent_id
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'text', ?8)",
+        params![content, process_name, window_title, chars, words, hash, now_ms, None::<u32>],
     )
     .map_err(|e| e.to_string())?;
     log::info!("[ClipboardRepository] Text insertion successful, row_id: {}", conn.last_insert_rowid());
@@ -254,7 +257,8 @@ fn ensure_row_thumbnail(row: &mut ClipboardRow) {
     }
 }
 
-pub fn insert_image_entry(
+
+pub fn insert_image_entry_returning_id(
     rgba_bytes: &[u8],
     width: u32,
     height: u32,
@@ -262,25 +266,25 @@ pub fn insert_image_entry(
     window_title: &str,
     mime_type: Option<&str>,
     image_storage_dir: &str,
-) -> Result<bool, String> {
+) -> Result<u32, String> {
     if rgba_bytes.is_empty() || width == 0 || height == 0 {
-        return Ok(false);
+        return Ok(0);
     }
     let hash = image_hash(rgba_bytes, width, height);
     let conn = conn_guard()?;
     if latest_content_hash(&conn)?.as_deref() == Some(hash.as_str()) {
-        return Ok(false);
+        return Ok(0);
     }
     let (image_path, thumb_path) =
         save_image_assets(&hash, width, height, rgba_bytes, image_storage_dir)?;
     let content = format!("[Image] {}x{} {}", width, height, mime_type.unwrap_or("image/png"));
     let now_ms = now_unix_ms() as i64;
-    log::info!("[ClipboardRepository] Inserting image entry, hash: {}", hash);
+    log::info!("[ClipboardRepository] Inserting image entry (id-return), hash: {}", hash);
     conn.execute(
         "INSERT INTO clipboard_history (
             content, process_name, window_title, char_count, word_count, content_hash, created_at_unix_ms, entry_type,
-            mime_type, image_path, thumb_path, image_width, image_height, image_bytes
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'image', ?8, ?9, ?10, ?11, ?12, ?13)",
+            mime_type, image_path, thumb_path, image_width, image_height, image_bytes, parent_id
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'image', ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
         params![
             content,
             process_name,
@@ -294,12 +298,13 @@ pub fn insert_image_entry(
             thumb_path,
             width as i64,
             height as i64,
-            rgba_bytes.len() as i64
+            rgba_bytes.len() as i64,
+            None::<u32>
         ],
     )
     .map_err(|e| e.to_string())?;
-    log::info!("[ClipboardRepository] Image insertion successful, row_id: {}", conn.last_insert_rowid());
-    Ok(true)
+    
+    Ok(conn.last_insert_rowid() as u32)
 }
 
 pub fn migrate_image_assets_root(old_root: &str, new_root: &str) -> Result<u32, String> {
@@ -400,6 +405,7 @@ fn map_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ClipboardRow> {
         image_width: row.get::<_, Option<i64>>(11)?.map(|v| v as u32),
         image_height: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
         image_bytes: row.get::<_, Option<i64>>(13)?.map(|v| v as u32),
+        parent_id: row.get::<_, Option<i64>>(14)?.map(|v| v as u32),
     })
 }
 
@@ -409,7 +415,7 @@ pub fn list_entries(search: Option<&str>, limit: u32) -> Result<Vec<ClipboardRow
     let mut rows = Vec::new();
     let select_sql = "SELECT
             id, content, process_name, window_title, char_count, word_count, created_at_unix_ms,
-            entry_type, mime_type, image_path, thumb_path, image_width, image_height, image_bytes
+            entry_type, mime_type, image_path, thumb_path, image_width, image_height, image_bytes, parent_id
         FROM clipboard_history";
     if let Some(search_raw) = search {
         let search_trim = search_raw.trim();
@@ -545,7 +551,7 @@ pub fn get_entry_by_id(id: u32) -> Result<Option<ClipboardRow>, String> {
         .prepare(
             "SELECT
                 id, content, process_name, window_title, char_count, word_count, created_at_unix_ms,
-                entry_type, mime_type, image_path, thumb_path, image_width, image_height, image_bytes
+                entry_type, mime_type, image_path, thumb_path, image_width, image_height, image_bytes, parent_id
              FROM clipboard_history
              WHERE id = ?1
              LIMIT 1",
@@ -640,4 +646,35 @@ pub fn count() -> Result<u32, String> {
         .query_row("SELECT COUNT(1) FROM clipboard_history", [], |row| row.get::<_, i64>(0))
         .map_err(|e| e.to_string())?;
     Ok(total.max(0) as u32)
+}
+
+pub fn insert_extracted_text_entry(
+    content: &str,
+    process_name: &str,
+    window_title: &str,
+    parent_id: u32,
+    _metadata: &serde_json::Value,
+) -> Result<u32, String> {
+    let now_ms = now_unix_ms() as i64;
+    let conn = conn_guard()?;
+    
+    log::info!("[ClipboardRepository] Inserting extracted text entry for parent_id: {}", parent_id);
+    
+    conn.execute(
+        "INSERT INTO clipboard_history (
+            content, process_name, window_title, char_count, word_count, created_at_unix_ms, entry_type, parent_id
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'extracted_text', ?7)",
+        params![
+            content,
+            process_name,
+            window_title,
+            content.chars().count() as i64,
+            word_count(content) as i64,
+            now_ms,
+            parent_id
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+    
+    Ok(conn.last_insert_rowid() as u32)
 }

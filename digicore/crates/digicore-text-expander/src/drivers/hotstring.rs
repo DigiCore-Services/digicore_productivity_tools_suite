@@ -40,13 +40,17 @@ struct HotstringState {
     input: EnigoInputAdapter,
     clipboard: ArboardClipboardAdapter,
     window: WindowsWindowAdapter,
+    corpus_service: Option<Arc<crate::application::corpus_generator::CorpusService>>,
 }
 
 static HOTSTRING_STATE: Mutex<Option<Arc<Mutex<HotstringState>>>> = Mutex::new(None);
 
 /// Start the hotstring listener in a background thread.
 /// Call with the initial library; use update_library() to refresh.
-pub fn start_listener(library: HashMap<String, Vec<Snippet>>) -> anyhow::Result<()> {
+pub fn start_listener(
+    library: HashMap<String, Vec<Snippet>>,
+    corpus_service: Option<Arc<crate::application::corpus_generator::CorpusService>>,
+) -> anyhow::Result<()> {
     if windows_keyboard::is_listener_running() {
         return Ok(());
     }
@@ -60,6 +64,7 @@ pub fn start_listener(library: HashMap<String, Vec<Snippet>>) -> anyhow::Result<
         input,
         clipboard,
         window: WindowsWindowAdapter::new(),
+        corpus_service,
     }));
 
     *HOTSTRING_STATE.lock().unwrap() = Some(state.clone());
@@ -241,6 +246,17 @@ pub fn update_library(library: HashMap<String, Vec<Snippet>>) {
     }
 }
 
+/// Update the Corpus service config to apply live hotkey mapping updates.
+pub fn update_corpus_service(service: Option<Arc<crate::application::corpus_generator::CorpusService>>) {
+    if let Ok(guard) = HOTSTRING_STATE.lock() {
+        if let Some(ref state) = *guard {
+            if let Ok(mut s) = state.lock() {
+                s.corpus_service = service;
+            }
+        }
+    }
+}
+
 /// Ghost config for sync from host (e.g. Tauri AppState).
 #[derive(Clone)]
 pub struct GhostConfig {
@@ -327,7 +343,7 @@ fn debug_log(msg: &str) {
     if std::env::var("DIGICORE_DEBUG").as_deref() != Ok("1") {
         return;
     }
-    let path = std::env::temp_dir().join("digicore_debug.log");
+    let path = std::path::PathBuf::from(r"C:\Users\pinea\Scripts\AHK_AutoHotKey\digicore\digicore_debug.log");
     if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
         let _ = writeln!(f, "{}", msg);
     }
@@ -335,12 +351,18 @@ fn debug_log(msg: &str) {
 
 /// Returns true if key should be consumed (not passed to app).
 fn on_key(state: Arc<Mutex<HotstringState>>, vk_code: u16, ch: Option<char>) -> bool {
+    // Top level trace for corpus hotkey debugging
+    debug_log(&format!("Raw hook received vk_code={:?}", vk_code));
+
     // F44: Debounced suggestions - tick to recompute when timer elapsed
     let _ = ghost_suggestor::tick_debounce();
 
     let mut guard = match state.lock() {
         Ok(g) => g,
-        Err(_) => return false,
+        Err(e) => {
+            debug_log(&format!("Failed to lock HotstringState: {}", e));
+            return false;
+        }
     };
 
     if let Ok(ctx) = guard.window.get_active() {
@@ -381,6 +403,48 @@ fn on_key(state: Arc<Mutex<HotstringState>>, vk_code: u16, ch: Option<char>) -> 
     if is_expansion_paused() {
         return false;
     }
+
+    if let Some(ref service) = guard.corpus_service {
+        let is_ctrl = windows_keyboard::is_ctrl_pressed();
+        let is_alt = windows_keyboard::is_alt_pressed();
+        let is_shift = windows_keyboard::is_shift_pressed();
+
+        // Check if Ctrl+Alt+Shift+S is pressed
+        let mut mods = service.config.shortcut_modifiers;
+        // Legacy upgrade: 0x11 | 0x12 | 0x10 = 0x13 (19)
+        if mods == 0x13 {
+            mods = 1 | 2 | 4;
+        }
+
+        let target_ctrl = (mods & 1) != 0;
+        let target_alt = (mods & 2) != 0;
+        let target_shift = (mods & 4) != 0;
+
+        let cur_state = format!("ctrl={} alt={} shift={} vk={}", is_ctrl, is_alt, is_shift, vk_code);
+        let tgt_state = format!("ctrl={} alt={} shift={} vk={}", target_ctrl, target_alt, target_shift, service.config.shortcut_key);
+        debug_log(&format!("Corpus Hook Check -> CURRENT: {} | TARGET: {}", cur_state, tgt_state));
+
+        if is_ctrl == target_ctrl && is_alt == target_alt && is_shift == target_shift {
+            if vk_code == service.config.shortcut_key {
+                debug_log("Corpus Hook MATCH! Spawning capture thread.");
+                
+                let window_title = if let Ok(ctx) = guard.window.get_active() {
+                    ctx.title
+                } else {
+                    "UnknownWindow".to_string()
+                };
+
+                let svc = service.clone();
+                std::thread::spawn(move || {
+                    if let Ok(rt) = tokio::runtime::Runtime::new() {
+                        let _ = rt.block_on(svc.try_capture(window_title));
+                    }
+                });
+                return true; // Consume hotkey
+            }
+        }
+    }
+
 
     // Backspace: remove from buffer
     if vk_code == VK_BACK {

@@ -1,2 +1,0 @@
-| •DB Browser for SQLite.... |  |  | 94352 | Running | pinea | 7,596 | K |
-|---|---|---|---|---|---|---|---|

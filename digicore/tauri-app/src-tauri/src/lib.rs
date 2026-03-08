@@ -66,6 +66,58 @@ pub struct AppStateDto {
     pub clip_history_max_depth: u32,
     pub script_library_run_disabled: bool,
     pub script_library_run_allowlist: String,
+
+    pub corpus_enabled: bool,
+    pub corpus_output_dir: String,
+    pub corpus_snapshot_dir: String,
+    pub corpus_shortcut_modifiers: u32,
+    pub corpus_shortcut_key: u32,
+
+    pub extraction_row_overlap_tolerance: f32,
+    pub extraction_cluster_threshold_factor: f32,
+    pub extraction_zone_proximity: f32,
+    pub extraction_cross_zone_gap_factor: f32,
+    pub extraction_same_zone_gap_factor: f32,
+    pub extraction_significant_gap_gate: f32,
+    pub extraction_char_width_factor: f32,
+    pub extraction_bridged_threshold: f32,
+    pub extraction_word_spacing_factor: f32,
+
+    pub extraction_footer_triggers: String,
+    pub extraction_table_min_contiguous_rows: u32,
+    pub extraction_table_min_avg_segments: f32,
+
+    pub extraction_adaptive_plaintext_cluster_factor: f32,
+    pub extraction_adaptive_plaintext_gap_gate: f32,
+    pub extraction_adaptive_table_cluster_factor: f32,
+    pub extraction_adaptive_table_gap_gate: f32,
+    pub extraction_adaptive_column_cluster_factor: f32,
+    pub extraction_adaptive_column_gap_gate: f32,
+
+    pub extraction_refinement_entropy_threshold: f32,
+    pub extraction_refinement_cluster_threshold_modifier: f32,
+    pub extraction_refinement_cross_zone_gap_modifier: f32,
+
+    pub extraction_classifier_gutter_weight: f32,
+    pub extraction_classifier_density_weight: f32,
+    pub extraction_classifier_multicolumn_density_max: f32,
+    pub extraction_classifier_table_density_min: f32,
+    pub extraction_classifier_table_entropy_min: f32,
+
+    pub extraction_columns_min_contiguous_rows: u32,
+    pub extraction_columns_gutter_gap_factor: f32,
+    pub extraction_columns_gutter_void_tolerance: f32,
+    pub extraction_columns_edge_margin_tolerance: f32,
+
+    pub extraction_headers_max_width_ratio: f32,
+    pub extraction_headers_centered_tolerance: f32,
+    pub extraction_headers_h1_size_multiplier: f32,
+    pub extraction_headers_h2_size_multiplier: f32,
+    pub extraction_headers_h3_size_multiplier: f32,
+
+    pub extraction_scoring_jitter_penalty_weight: f32,
+    pub extraction_scoring_size_penalty_weight: f32,
+    pub extraction_scoring_low_confidence_threshold: f32,
 }
 
 fn parse_comma_list(s: &str) -> Vec<String> {
@@ -119,6 +171,58 @@ fn app_state_to_dto(state: &AppState) -> AppStateDto {
         clip_history_max_depth: state.clip_history_max_depth as u32,
         script_library_run_disabled: state.script_library_run_disabled,
         script_library_run_allowlist: state.script_library_run_allowlist.clone(),
+
+        corpus_enabled: state.corpus_enabled,
+        corpus_output_dir: state.corpus_output_dir.clone(),
+        corpus_snapshot_dir: state.corpus_snapshot_dir.clone(),
+        corpus_shortcut_modifiers: state.corpus_shortcut_modifiers as u32,
+        corpus_shortcut_key: state.corpus_shortcut_key as u32,
+
+        extraction_row_overlap_tolerance: state.extraction_row_overlap_tolerance,
+        extraction_cluster_threshold_factor: state.extraction_cluster_threshold_factor,
+        extraction_zone_proximity: state.extraction_zone_proximity,
+        extraction_cross_zone_gap_factor: state.extraction_cross_zone_gap_factor,
+        extraction_same_zone_gap_factor: state.extraction_same_zone_gap_factor,
+        extraction_significant_gap_gate: state.extraction_significant_gap_gate,
+        extraction_char_width_factor: state.extraction_char_width_factor,
+        extraction_bridged_threshold: state.extraction_bridged_threshold,
+        extraction_word_spacing_factor: state.extraction_word_spacing_factor,
+
+        extraction_footer_triggers: state.extraction_footer_triggers.clone(),
+        extraction_table_min_contiguous_rows: state.extraction_table_min_contiguous_rows as u32,
+        extraction_table_min_avg_segments: state.extraction_table_min_avg_segments,
+
+        extraction_adaptive_plaintext_cluster_factor: state.extraction_adaptive_plaintext_cluster_factor,
+        extraction_adaptive_plaintext_gap_gate: state.extraction_adaptive_plaintext_gap_gate,
+        extraction_adaptive_table_cluster_factor: state.extraction_adaptive_table_cluster_factor,
+        extraction_adaptive_table_gap_gate: state.extraction_adaptive_table_gap_gate,
+        extraction_adaptive_column_cluster_factor: state.extraction_adaptive_column_cluster_factor,
+        extraction_adaptive_column_gap_gate: state.extraction_adaptive_column_gap_gate,
+
+        extraction_refinement_entropy_threshold: state.extraction_refinement_entropy_threshold,
+        extraction_refinement_cluster_threshold_modifier: state.extraction_refinement_cluster_threshold_modifier,
+        extraction_refinement_cross_zone_gap_modifier: state.extraction_refinement_cross_zone_gap_modifier,
+
+        extraction_classifier_gutter_weight: state.extraction_classifier_gutter_weight,
+        extraction_classifier_density_weight: state.extraction_classifier_density_weight,
+        extraction_classifier_multicolumn_density_max: state.extraction_classifier_multicolumn_density_max,
+        extraction_classifier_table_density_min: state.extraction_classifier_table_density_min,
+        extraction_classifier_table_entropy_min: state.extraction_classifier_table_entropy_min,
+
+        extraction_columns_min_contiguous_rows: state.extraction_columns_min_contiguous_rows as u32,
+        extraction_columns_gutter_gap_factor: state.extraction_columns_gutter_gap_factor,
+        extraction_columns_gutter_void_tolerance: state.extraction_columns_gutter_void_tolerance,
+        extraction_columns_edge_margin_tolerance: state.extraction_columns_edge_margin_tolerance,
+
+        extraction_headers_max_width_ratio: state.extraction_headers_max_width_ratio,
+        extraction_headers_centered_tolerance: state.extraction_headers_centered_tolerance,
+        extraction_headers_h1_size_multiplier: state.extraction_headers_h1_size_multiplier,
+        extraction_headers_h2_size_multiplier: state.extraction_headers_h2_size_multiplier,
+        extraction_headers_h3_size_multiplier: state.extraction_headers_h3_size_multiplier,
+
+        extraction_scoring_jitter_penalty_weight: state.extraction_scoring_jitter_penalty_weight,
+        extraction_scoring_size_penalty_weight: state.extraction_scoring_size_penalty_weight,
+        extraction_scoring_low_confidence_threshold: state.extraction_scoring_low_confidence_threshold,
     }
 }
 
@@ -310,6 +414,68 @@ fn init_app_state_from_storage() -> AppState {
     state.discovery_max_len = discovery_max_len;
     state.discovery_excluded_apps = discovery_excluded_apps;
     state.discovery_excluded_window_titles = discovery_excluded_window_titles;
+
+    state.corpus_enabled = storage.get(storage_keys::CORPUS_ENABLED).map(|v| v == "true").unwrap_or(state.corpus_enabled);
+    if let Some(v) = storage.get(storage_keys::CORPUS_OUTPUT_DIR) { state.corpus_output_dir = v; }
+    if let Some(v) = storage.get(storage_keys::CORPUS_SNAPSHOT_DIR) { state.corpus_snapshot_dir = v; }
+    if let Some(v) = storage.get(storage_keys::CORPUS_SHORTCUT_MODIFIERS).and_then(|s| s.parse().ok()) { state.corpus_shortcut_modifiers = v; }
+    if let Some(v) = storage.get(storage_keys::CORPUS_SHORTCUT_KEY).and_then(|s| s.parse().ok()) { state.corpus_shortcut_key = v; }
+
+    // Legacy hotkey upgrade path (from Phase 57 bugfix)
+    // Old default was modifiers=0x13 (19) and key=0x53 ('S'). Auto-upgrade to 7 and 'C' (0x43)
+    if state.corpus_shortcut_modifiers == 19 {
+        state.corpus_shortcut_modifiers = 7; // 1=Ctrl | 2=Alt | 4=Shift
+        if state.corpus_shortcut_key == 0x53 {
+            state.corpus_shortcut_key = 0x43; // 'C'
+        }
+    }
+
+    if let Some(v) = storage.get(storage_keys::EXTRACTION_ROW_OVERLAP_TOLERANCE).and_then(|s| s.parse().ok()) { state.extraction_row_overlap_tolerance = v; }
+    if let Some(v) = storage.get(storage_keys::EXTRACTION_CLUSTER_THRESHOLD_FACTOR).and_then(|s| s.parse().ok()) { state.extraction_cluster_threshold_factor = v; }
+    if let Some(v) = storage.get(storage_keys::EXTRACTION_ZONE_PROXIMITY).and_then(|s| s.parse().ok()) { state.extraction_zone_proximity = v; }
+    if let Some(v) = storage.get(storage_keys::EXTRACTION_CROSS_ZONE_GAP_FACTOR).and_then(|s| s.parse().ok()) { state.extraction_cross_zone_gap_factor = v; }
+    if let Some(v) = storage.get(storage_keys::EXTRACTION_SAME_ZONE_GAP_FACTOR).and_then(|s| s.parse().ok()) { state.extraction_same_zone_gap_factor = v; }
+    if let Some(v) = storage.get(storage_keys::EXTRACTION_SIGNIFICANT_GAP_GATE).and_then(|s| s.parse().ok()) { state.extraction_significant_gap_gate = v; }
+    if let Some(v) = storage.get(storage_keys::EXTRACTION_CHAR_WIDTH_FACTOR).and_then(|s| s.parse().ok()) { state.extraction_char_width_factor = v; }
+    if let Some(v) = storage.get(storage_keys::EXTRACTION_BRIDGED_THRESHOLD).and_then(|s| s.parse().ok()) { state.extraction_bridged_threshold = v; }
+    if let Some(v) = storage.get(storage_keys::EXTRACTION_WORD_SPACING_FACTOR).and_then(|s| s.parse().ok()) { state.extraction_word_spacing_factor = v; }
+
+    if let Some(v) = storage.get(storage_keys::EXTRACTION_FOOTER_TRIGGERS) { state.extraction_footer_triggers = v; }
+    if let Some(v) = storage.get(storage_keys::EXTRACTION_TABLE_MIN_CONTIGUOUS_ROWS).and_then(|s| s.parse().ok()) { state.extraction_table_min_contiguous_rows = v; }
+    if let Some(v) = storage.get(storage_keys::EXTRACTION_TABLE_MIN_AVG_SEGMENTS).and_then(|s| s.parse().ok()) { state.extraction_table_min_avg_segments = v; }
+
+    if let Some(v) = storage.get(storage_keys::EXTRACTION_ADAPTIVE_PLAINTEXT_CLUSTER_FACTOR).and_then(|s| s.parse().ok()) { state.extraction_adaptive_plaintext_cluster_factor = v; }
+    if let Some(v) = storage.get(storage_keys::EXTRACTION_ADAPTIVE_PLAINTEXT_GAP_GATE).and_then(|s| s.parse().ok()) { state.extraction_adaptive_plaintext_gap_gate = v; }
+    if let Some(v) = storage.get(storage_keys::EXTRACTION_ADAPTIVE_TABLE_CLUSTER_FACTOR).and_then(|s| s.parse().ok()) { state.extraction_adaptive_table_cluster_factor = v; }
+    if let Some(v) = storage.get(storage_keys::EXTRACTION_ADAPTIVE_TABLE_GAP_GATE).and_then(|s| s.parse().ok()) { state.extraction_adaptive_table_gap_gate = v; }
+    if let Some(v) = storage.get(storage_keys::EXTRACTION_ADAPTIVE_COLUMN_CLUSTER_FACTOR).and_then(|s| s.parse().ok()) { state.extraction_adaptive_column_cluster_factor = v; }
+    if let Some(v) = storage.get(storage_keys::EXTRACTION_ADAPTIVE_COLUMN_GAP_GATE).and_then(|s| s.parse().ok()) { state.extraction_adaptive_column_gap_gate = v; }
+
+    if let Some(v) = storage.get(storage_keys::EXTRACTION_REFINEMENT_ENTROPY_THRESHOLD).and_then(|s| s.parse().ok()) { state.extraction_refinement_entropy_threshold = v; }
+    if let Some(v) = storage.get(storage_keys::EXTRACTION_REFINEMENT_CLUSTER_THRESHOLD_MODIFIER).and_then(|s| s.parse().ok()) { state.extraction_refinement_cluster_threshold_modifier = v; }
+    if let Some(v) = storage.get(storage_keys::EXTRACTION_REFINEMENT_CROSS_ZONE_GAP_MODIFIER).and_then(|s| s.parse().ok()) { state.extraction_refinement_cross_zone_gap_modifier = v; }
+
+    if let Some(v) = storage.get(storage_keys::EXTRACTION_CLASSIFIER_GUTTER_WEIGHT).and_then(|s| s.parse().ok()) { state.extraction_classifier_gutter_weight = v; }
+    if let Some(v) = storage.get(storage_keys::EXTRACTION_CLASSIFIER_DENSITY_WEIGHT).and_then(|s| s.parse().ok()) { state.extraction_classifier_density_weight = v; }
+    if let Some(v) = storage.get(storage_keys::EXTRACTION_CLASSIFIER_MULTICOLUMN_DENSITY_MAX).and_then(|s| s.parse().ok()) { state.extraction_classifier_multicolumn_density_max = v; }
+    if let Some(v) = storage.get(storage_keys::EXTRACTION_CLASSIFIER_TABLE_DENSITY_MIN).and_then(|s| s.parse().ok()) { state.extraction_classifier_table_density_min = v; }
+    if let Some(v) = storage.get(storage_keys::EXTRACTION_CLASSIFIER_TABLE_ENTROPY_MIN).and_then(|s| s.parse().ok()) { state.extraction_classifier_table_entropy_min = v; }
+
+    if let Some(v) = storage.get(storage_keys::EXTRACTION_COLUMNS_MIN_CONTIGUOUS_ROWS).and_then(|s| s.parse().ok()) { state.extraction_columns_min_contiguous_rows = v; }
+    if let Some(v) = storage.get(storage_keys::EXTRACTION_COLUMNS_GUTTER_GAP_FACTOR).and_then(|s| s.parse().ok()) { state.extraction_columns_gutter_gap_factor = v; }
+    if let Some(v) = storage.get(storage_keys::EXTRACTION_COLUMNS_GUTTER_VOID_TOLERANCE).and_then(|s| s.parse().ok()) { state.extraction_columns_gutter_void_tolerance = v; }
+    if let Some(v) = storage.get(storage_keys::EXTRACTION_COLUMNS_EDGE_MARGIN_TOLERANCE).and_then(|s| s.parse().ok()) { state.extraction_columns_edge_margin_tolerance = v; }
+
+    if let Some(v) = storage.get(storage_keys::EXTRACTION_HEADERS_MAX_WIDTH_RATIO).and_then(|s| s.parse().ok()) { state.extraction_headers_max_width_ratio = v; }
+    if let Some(v) = storage.get(storage_keys::EXTRACTION_HEADERS_CENTERED_TOLERANCE).and_then(|s| s.parse().ok()) { state.extraction_headers_centered_tolerance = v; }
+    if let Some(v) = storage.get(storage_keys::EXTRACTION_HEADERS_H1_SIZE_MULTIPLIER).and_then(|s| s.parse().ok()) { state.extraction_headers_h1_size_multiplier = v; }
+    if let Some(v) = storage.get(storage_keys::EXTRACTION_HEADERS_H2_SIZE_MULTIPLIER).and_then(|s| s.parse().ok()) { state.extraction_headers_h2_size_multiplier = v; }
+    if let Some(v) = storage.get(storage_keys::EXTRACTION_HEADERS_H3_SIZE_MULTIPLIER).and_then(|s| s.parse().ok()) { state.extraction_headers_h3_size_multiplier = v; }
+
+    if let Some(v) = storage.get(storage_keys::EXTRACTION_SCORING_JITTER_PENALTY_WEIGHT).and_then(|s| s.parse().ok()) { state.extraction_scoring_jitter_penalty_weight = v; }
+    if let Some(v) = storage.get(storage_keys::EXTRACTION_SCORING_SIZE_PENALTY_WEIGHT).and_then(|s| s.parse().ok()) { state.extraction_scoring_size_penalty_weight = v; }
+    if let Some(v) = storage.get(storage_keys::EXTRACTION_SCORING_LOW_CONFIDENCE_THRESHOLD).and_then(|s| s.parse().ok()) { state.extraction_scoring_low_confidence_threshold = v; }
+    
     state
 }
 
@@ -372,7 +538,21 @@ pub fn run() {
             },
         )));
     }
-    let _ = start_listener(app_state.library.clone());
+    use digicore_text_expander::adapters::corpus::{FileSystemCorpusStorageAdapter, OcrBaselineAdapter};
+    use digicore_text_expander::application::corpus_generator::CorpusService;
+    use digicore_core::domain::value_objects::CorpusConfig;
+    let corpus_config = CorpusConfig {
+        enabled: app_state.corpus_enabled,
+        output_dir: app_state.corpus_output_dir.clone(),
+        snapshot_dir: app_state.corpus_snapshot_dir.clone(),
+        shortcut_modifiers: app_state.corpus_shortcut_modifiers,
+        shortcut_key: app_state.corpus_shortcut_key,
+    };
+    let corpus_storage = std::sync::Arc::new(FileSystemCorpusStorageAdapter::new(corpus_config.output_dir.clone()));
+    let corpus_baseline = std::sync::Arc::new(OcrBaselineAdapter::new(corpus_config.snapshot_dir.clone()));
+    let corpus_service = std::sync::Arc::new(CorpusService::new(corpus_config, corpus_storage, corpus_baseline));
+
+    let _ = start_listener(app_state.library.clone(), Some(corpus_service));
     // Initial sync to persist seeded clipboard entry from startup
     crate::api::sync_runtime_clipboard_entries_to_sqlite();
     set_expansion_paused(app_state.expansion_paused);
@@ -819,6 +999,7 @@ pub struct UiPrefsDto {
 
 /// Config update DTO. All fields optional; only provided fields are updated.
 #[taurpc::ipc_type]
+#[derive(Default)]
 pub struct ConfigUpdateDto {
     pub expansion_paused: Option<bool>,
     pub template_date_format: Option<String>,
@@ -847,6 +1028,58 @@ pub struct ConfigUpdateDto {
     pub clip_history_max_depth: Option<u32>,
     pub script_library_run_disabled: Option<bool>,
     pub script_library_run_allowlist: Option<String>,
+
+    pub corpus_enabled: Option<bool>,
+    pub corpus_output_dir: Option<String>,
+    pub corpus_snapshot_dir: Option<String>,
+    pub corpus_shortcut_modifiers: Option<u32>,
+    pub corpus_shortcut_key: Option<u32>,
+
+    pub extraction_row_overlap_tolerance: Option<f32>,
+    pub extraction_cluster_threshold_factor: Option<f32>,
+    pub extraction_zone_proximity: Option<f32>,
+    pub extraction_cross_zone_gap_factor: Option<f32>,
+    pub extraction_same_zone_gap_factor: Option<f32>,
+    pub extraction_significant_gap_gate: Option<f32>,
+    pub extraction_char_width_factor: Option<f32>,
+    pub extraction_bridged_threshold: Option<f32>,
+    pub extraction_word_spacing_factor: Option<f32>,
+
+    pub extraction_footer_triggers: Option<String>,
+    pub extraction_table_min_contiguous_rows: Option<u32>,
+    pub extraction_table_min_avg_segments: Option<f32>,
+
+    pub extraction_adaptive_plaintext_cluster_factor: Option<f32>,
+    pub extraction_adaptive_plaintext_gap_gate: Option<f32>,
+    pub extraction_adaptive_table_cluster_factor: Option<f32>,
+    pub extraction_adaptive_table_gap_gate: Option<f32>,
+    pub extraction_adaptive_column_cluster_factor: Option<f32>,
+    pub extraction_adaptive_column_gap_gate: Option<f32>,
+
+    pub extraction_refinement_entropy_threshold: Option<f32>,
+    pub extraction_refinement_cluster_threshold_modifier: Option<f32>,
+    pub extraction_refinement_cross_zone_gap_modifier: Option<f32>,
+
+    pub extraction_classifier_gutter_weight: Option<f32>,
+    pub extraction_classifier_density_weight: Option<f32>,
+    pub extraction_classifier_multicolumn_density_max: Option<f32>,
+    pub extraction_classifier_table_density_min: Option<f32>,
+    pub extraction_classifier_table_entropy_min: Option<f32>,
+
+    pub extraction_columns_min_contiguous_rows: Option<u32>,
+    pub extraction_columns_gutter_gap_factor: Option<f32>,
+    pub extraction_columns_gutter_void_tolerance: Option<f32>,
+    pub extraction_columns_edge_margin_tolerance: Option<f32>,
+
+    pub extraction_headers_max_width_ratio: Option<f32>,
+    pub extraction_headers_centered_tolerance: Option<f32>,
+    pub extraction_headers_h1_size_multiplier: Option<f32>,
+    pub extraction_headers_h2_size_multiplier: Option<f32>,
+    pub extraction_headers_h3_size_multiplier: Option<f32>,
+
+    pub extraction_scoring_jitter_penalty_weight: Option<f32>,
+    pub extraction_scoring_size_penalty_weight: Option<f32>,
+    pub extraction_scoring_low_confidence_threshold: Option<f32>,
 }
 
 #[taurpc::ipc_type]
@@ -862,6 +1095,7 @@ pub struct CopyToClipboardConfigDto {
     pub json_output_enabled: bool,
     pub json_output_dir: String,
     pub image_storage_dir: String,
+    pub ocr_enabled: bool,
 }
 
 #[taurpc::ipc_type]
@@ -1189,4 +1423,5 @@ pub struct ClipEntryDto {
     pub image_width: Option<u32>,
     pub image_height: Option<u32>,
     pub image_bytes: Option<u32>,
+    pub parent_id: Option<u32>,
 }

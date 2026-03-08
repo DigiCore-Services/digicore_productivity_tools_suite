@@ -1,3 +1,0 @@
-| This role is ideal | for a developer who wants consistent part-time work, enjoys learning, and can |
-|---|---|
-| follow technical | guidance while working independently. |

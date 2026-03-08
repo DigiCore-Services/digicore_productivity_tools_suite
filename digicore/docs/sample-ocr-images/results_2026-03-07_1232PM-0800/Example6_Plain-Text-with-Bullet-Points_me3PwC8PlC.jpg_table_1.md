@@ -1,3 +1,0 @@
-| now | detect | and inject leading whitespace | for | nested bullets, indented |
-|---|---|---|---|---|
-| paragraphs, |  | and sub-levels. |  |  |

@@ -1,6 +1,0 @@
-| S, | English(Native) | Stanford GraduateSchool ofBusiness |  |  |  |
-|---|---|---|---|---|---|
-|  | Spanish (Fluent) | • Specialization in Marketing andStrategy |  |  |  |
-|  | Mandarin (Basic) | Bachelor OfScience in Communication 2009 -2013 |  |  |  |
-|  |  | universiw ofCalifornia, |  |  | Berkeley |
-|  |  | • Summa | Cum | Laude |  |

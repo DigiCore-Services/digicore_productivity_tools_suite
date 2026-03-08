@@ -1,3 +1,0 @@
-|  | TechSolutions |  | San Francisco. |
-|---|---|---|---|
-| Marketing Manager |  | executed multichannel |  |

@@ -1,2 +1,0 @@
-| S, | English(Native) | Stanford GraduateSchool ofBusiness |
-|---|---|---|

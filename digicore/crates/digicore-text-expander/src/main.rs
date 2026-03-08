@@ -5,7 +5,13 @@
 //! Phase 0/1: StoragePort, WindowPort, AppState for framework-agnostic UI.
 //! Supports --gui=egui|tauri for dual/multi-GUI foundation.
 
-mod ui;
+pub mod ui {
+    #[cfg(feature = "gui-egui")]
+    pub mod egui;
+
+    #[cfg(feature = "gui-egui")]
+    pub use egui::{clipboard_history_tab, configuration_tab, library_tab, modals, script_library_tab};
+}
 
 use digicore_text_expander::cli::{parse_gui_from_args, GuiBackend};
 use digicore_text_expander::adapters::{EframeStorageAdapter, EguiWindowAdapter, RfdFileDialogAdapter, EguiTimerAdapter};
@@ -126,7 +132,7 @@ impl TextExpanderApp {
         let library_path = storage
             .get(storage_keys::LIBRARY_PATH)
             .unwrap_or_else(|| {
-                crate::ports::data_path_resolver::DataPathResolver::script_library_path()
+                digicore_text_expander::ports::data_path_resolver::DataPathResolver::script_library_path()
                     .to_string_lossy()
                     .to_string()
             });
@@ -986,8 +992,18 @@ impl TextExpanderApp {
         }
         if is_listener_running() {
             update_library(self.library.clone());
-        } else if let Err(e) = start_listener(self.library.clone()) {
-            self.status = format!("Hotstring failed to start: {}", e);
+        } else {
+            use digicore_text_expander::adapters::corpus::{FileSystemCorpusStorageAdapter, OcrBaselineAdapter};
+            use digicore_text_expander::application::corpus_generator::CorpusService;
+            use digicore_core::domain::value_objects::CorpusConfig;
+            let config = CorpusConfig::default();
+            let storage = std::sync::Arc::new(FileSystemCorpusStorageAdapter::new(config.output_dir.clone()));
+            let baseline = std::sync::Arc::new(OcrBaselineAdapter::new(config.snapshot_dir.clone()));
+            let corpus_service = std::sync::Arc::new(CorpusService::new(config, storage, baseline));
+
+            if let Err(e) = start_listener(self.library.clone(), Some(corpus_service)) {
+                self.status = format!("Hotstring failed to start: {}", e);
+            }
         }
     }
 

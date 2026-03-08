@@ -7,7 +7,6 @@ use digicore_text_expander::application::js_syntax_highlighter::highlight_js;
 use digicore_text_expander::application::scripting::{
     get_scripting_config, set_global_library, set_scripting_config,
 };
-use dirs;
 use egui;
 use std::path::Path;
 

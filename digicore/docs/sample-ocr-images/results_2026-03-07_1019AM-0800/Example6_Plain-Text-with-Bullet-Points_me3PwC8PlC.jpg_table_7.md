@@ -1,2 +1,0 @@
-| You can |  | verify |  | the new layout by capturing |  | an | indented list (likethis one! and |
-|---|---|---|---|---|---|---|---|

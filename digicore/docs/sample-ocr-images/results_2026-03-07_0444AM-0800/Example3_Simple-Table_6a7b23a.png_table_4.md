@@ -1,2 +1,0 @@
-| Olatunkbo | Chijiaku | 22 |
-|---|---|---|

@@ -1,3 +1,0 @@
-| 1. | SCHEDULE |
-|---|---|
-|  | SCHEDULE |

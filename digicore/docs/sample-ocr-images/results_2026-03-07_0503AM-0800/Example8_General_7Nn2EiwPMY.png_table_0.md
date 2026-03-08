@@ -1,7 +1,0 @@
-| You | can complete OAuth either manually or with browser automation. |  |  |
-|---|---|---|---|
-| ' | Human | flow: run gws auth login , open the printed URL, approve scopes. |  |
-| ' | Agent-assisted flow: the agent opens the URL, selects account, handles consent prompts, and returns |  |  |
-|  | control | once the localhost callback succeeds. |  |
-| If consent |  | shows "Google hasn't verified this app" (testing mode), click Continue. If scope checkboxes |  |
-| appear, select |  |  | required scopes (or Select all) before continuing. |

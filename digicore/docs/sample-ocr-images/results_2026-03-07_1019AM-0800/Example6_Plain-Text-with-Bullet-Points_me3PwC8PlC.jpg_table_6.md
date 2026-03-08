@@ -1,4 +1,0 @@
-|  | Instant Visual Confirmation: I've |  |  |  | added | a | green "Copied!" indicator that |
-|---|---|---|---|---|---|---|---|
-|  | appears next |  |  | to the Copy button | in both | the | Clipboard History table and |
-|  | Matched |  | Aesthetics: This feedback uses |  |  | a | refined fade-in animation, |

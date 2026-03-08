@@ -1,2 +1,0 @@
-| • | High-Fidelity Reconstruction: It |  |  |  | uses a | dynamic character-width estimation |  |
-|---|---|---|---|---|---|---|---|

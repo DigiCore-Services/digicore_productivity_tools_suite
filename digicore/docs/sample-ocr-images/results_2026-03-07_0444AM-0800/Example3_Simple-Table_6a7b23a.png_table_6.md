@@ -1,2 +1,0 @@
-| Axelia | Athanasios | 22 |
-|---|---|---|

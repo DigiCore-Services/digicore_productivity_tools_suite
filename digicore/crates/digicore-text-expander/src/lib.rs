@@ -17,4 +17,6 @@ pub mod utils;
 pub mod tauri_stub;
 
 #[cfg(feature = "gui-tauri")]
-pub mod ui;
+pub mod ui {
+    pub mod tauri;
+}

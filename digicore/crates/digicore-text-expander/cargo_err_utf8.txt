@@ -1,0 +1,439 @@
+﻿C:\Users\pinea\.cargo\bin\cargo : warning: output 
+filename collision at C:\Users\pinea\Scripts\AHK_AutoH
+otKey\digicore\target\debug\deps\digicore_text_expande
+r_tauri.exe
+At line:1 char:1
++ C:\Users\pinea\.cargo\bin\cargo test --workspace 
+--message-format=sho ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (warn    
+ing: output...ander_tauri.exe:String) [], Rem    
+oteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+  |
+  = note: the bin target 
+`digicore-text-expander-tauri` in package 
+`digicore-text-expander-tauri v0.1.0 (C:\Users\pinea\S
+cripts\AHK_AutoHotKey\digicore\tauri-app\src-tauri)` 
+has the same output filename as the bin target 
+`digicore-text-expander-tauri` in package 
+`digicore-text-expander v0.1.0 (C:\Users\pinea\Scripts
+\AHK_AutoHotKey\digicore\crates\digicore-text-expander
+)`
+  = note: this may become a hard error in the future; 
+see <https://github.com/rust-lang/cargo/issues/6313>
+  = help: consider changing their names to be unique 
+or compiling them separately
+warning: output filename collision at C:\Users\pinea\S
+cripts\AHK_AutoHotKey\digicore\target\debug\digicore-t
+ext-expander-tauri.exe
+  |
+  = note: the bin target 
+`digicore-text-expander-tauri` in package 
+`digicore-text-expander-tauri v0.1.0 (C:\Users\pinea\S
+cripts\AHK_AutoHotKey\digicore\tauri-app\src-tauri)` 
+has the same output filename as the bin target 
+`digicore-text-expander-tauri` in package 
+`digicore-text-expander v0.1.0 (C:\Users\pinea\Scripts
+\AHK_AutoHotKey\digicore\crates\digicore-text-expander
+)`
+  = note: this may become a hard error in the future; 
+see <https://github.com/rust-lang/cargo/issues/6313>
+  = help: consider changing their names to be unique 
+or compiling them separately
+warning: output filename collision at C:\Users\pinea\S
+cripts\AHK_AutoHotKey\digicore\target\debug\deps\digic
+ore_text_expander_tauri.pdb
+  |
+  = note: the bin target 
+`digicore-text-expander-tauri` in package 
+`digicore-text-expander-tauri v0.1.0 (C:\Users\pinea\S
+cripts\AHK_AutoHotKey\digicore\tauri-app\src-tauri)` 
+has the same output filename as the bin target 
+`digicore-text-expander-tauri` in package 
+`digicore-text-expander v0.1.0 (C:\Users\pinea\Scripts
+\AHK_AutoHotKey\digicore\crates\digicore-text-expander
+)`
+  = note: this may become a hard error in the future; 
+see <https://github.com/rust-lang/cargo/issues/6313>
+  = help: consider changing their names to be unique 
+or compiling them separately
+warning: output filename collision at C:\Users\pinea\S
+cripts\AHK_AutoHotKey\digicore\target\debug\digicore_t
+ext_expander_tauri.pdb
+  |
+  = note: the bin target 
+`digicore-text-expander-tauri` in package 
+`digicore-text-expander-tauri v0.1.0 (C:\Users\pinea\S
+cripts\AHK_AutoHotKey\digicore\tauri-app\src-tauri)` 
+has the same output filename as the bin target 
+`digicore-text-expander-tauri` in package 
+`digicore-text-expander v0.1.0 (C:\Users\pinea\Scripts
+\AHK_AutoHotKey\digicore\crates\digicore-text-expander
+)`
+  = note: this may become a hard error in the future; 
+see <https://github.com/rust-lang/cargo/issues/6313>
+  = help: consider changing their names to be unique 
+or compiling them separately
+   Compiling digicore-text-expander v0.1.0 (C:\Users\p
+inea\Scripts\AHK_AutoHotKey\digicore\crates\digicore-t
+ext-expander)
+crates\digicore-text-expander\src\application\corpus_g
+enerator.rs:53:21: warning: variable does not need to 
+be mutable
+crates\digicore-text-expander\src\adapters\extraction\
+windows_ocr.rs:219:13: warning: unused variable: 
+`avg_h`: help: if this is intentional, prefix it with 
+an underscore: `_avg_h`
+crates\digicore-text-expander\src\adapters\extraction\
+windows_ocr.rs:760:14: warning: unused variable: `i`: 
+help: if this is intentional, prefix it with an 
+underscore: `_i`
+crates\digicore-text-expander\src\adapters\extraction\
+windows_ocr.rs:580:41: warning: value assigned to 
+`current_table_idx` is never read
+crates\digicore-text-expander\src\adapters\extraction\
+windows_ocr.rs:596:48: warning: value assigned to 
+`body` is never read
+crates\digicore-text-expander\src\adapters\extraction\
+windows_ocr.rs:671:44: warning: value assigned to 
+`body` is never read
+crates\digicore-text-expander\src\adapters\extraction\
+windows_ocr.rs:727:32: warning: value assigned to 
+`body` is never read
+crates\digicore-text-expander\src\adapters\extraction\
+windows_ocr.rs:9:6: warning: enum 
+`ReconstructedElement` is never used
+crates\digicore-text-expander\src\adapters\extraction\
+windows_ocr.rs:98:5: warning: field `flags` is never 
+read
+crates\digicore-text-expander\src\adapters\extraction\
+windows_ocr.rs:877:8: warning: method 
+`refine_extracted_text` is never used
+   Compiling digicore-text-expander-tauri v0.1.0 (C:\U
+sers\pinea\Scripts\AHK_AutoHotKey\digicore\tauri-app\s
+rc-tauri)
+warning: `digicore-text-expander` (lib) generated 10 
+warnings (run `cargo fix --lib -p 
+digicore-text-expander` to apply 3 suggestions)
+crates\digicore-text-expander\src\ui\egui\clipboard_hi
+story_tab.rs:13:1: warning: type `TextExpanderApp` is 
+more private than the item 
+`clipboard_history_tab::render`: function 
+`clipboard_history_tab::render` is reachable at 
+visibility `pub`
+crates\digicore-text-expander\src\ui\egui\configuratio
+n_tab.rs:15:1: warning: type `TextExpanderApp` is 
+more private than the item 
+`configuration_tab::render`: function 
+`configuration_tab::render` is reachable at 
+visibility `pub`
+crates\digicore-text-expander\src\ui\egui\library_tab.
+rs:14:1: warning: type `TextExpanderApp` is more 
+private than the item `library_tab::render`: function 
+`library_tab::render` is reachable at visibility `pub`
+crates\digicore-text-expander\src\ui\egui\modals.rs:64
+:1: warning: type `TextExpanderApp` is more private 
+than the item `snippet_editor_modal`: function 
+`snippet_editor_modal` is reachable at visibility 
+`pub`
+crates\digicore-text-expander\src\ui\egui\modals.rs:21
+6:1: warning: type `TextExpanderApp` is more private 
+than the item `clip_view_content_modal`: function 
+`clip_view_content_modal` is reachable at visibility 
+`pub`
+crates\digicore-text-expander\src\ui\egui\modals.rs:33
+4:1: warning: type `TextExpanderApp` is more private 
+than the item `clip_delete_confirm_dialog`: function 
+`clip_delete_confirm_dialog` is reachable at 
+visibility `pub`
+crates\digicore-text-expander\src\ui\egui\modals.rs:38
+3:1: warning: type `TextExpanderApp` is more private 
+than the item `clip_clear_confirm_dialog`: function 
+`clip_clear_confirm_dialog` is reachable at 
+visibility `pub`
+crates\digicore-text-expander\src\ui\egui\modals.rs:41
+7:1: warning: type `TextExpanderApp` is more private 
+than the item `snippet_test_var_modal`: function 
+`snippet_test_var_modal` is reachable at visibility 
+`pub`
+crates\digicore-text-expander\src\ui\egui\modals.rs:55
+5:1: warning: type `TextExpanderApp` is more private 
+than the item `snippet_test_result_modal`: function 
+`snippet_test_result_modal` is reachable at 
+visibility `pub`
+crates\digicore-text-expander\src\ui\egui\modals.rs:59
+3:1: warning: type `TextExpanderApp` is more private 
+than the item `delete_confirm_dialog`: function 
+`delete_confirm_dialog` is reachable at visibility 
+`pub`
+crates\digicore-text-expander\src\ui\egui\script_libra
+ry_tab.rs:69:1: warning: type `TextExpanderApp` is 
+more private than the item 
+`script_library_tab::render`: function 
+`script_library_tab::render` is reachable at 
+visibility `pub`
+warning: `digicore-text-expander` (bin 
+"digicore-text-expander" test) generated 11 warnings
+warning: `digicore-text-expander` (lib test) 
+generated 10 warnings (10 duplicates)
+warning: `digicore-text-expander` (bin 
+"digicore-text-expander") generated 11 warnings (11 
+duplicates)
+    Finished `test` profile [unoptimized + debuginfo] 
+target(s) in 21.24s
+     Running unittests src\lib.rs (C:\Users\pinea\Scri
+pts\AHK_AutoHotKey\digicore\target\debug\deps\digicore
+_core-5470d6158fbad5ba.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src\bin\cli.rs (C:\Users\pinea\
+Scripts\AHK_AutoHotKey\digicore\target\debug\deps\digi
+core_cli-84b741fec6daf04f.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\crypto_tests.rs (C:\Users\pinea\Scr
+ipts\AHK_AutoHotKey\digicore\target\debug\deps\crypto_
+tests-1405ccb86c7252c3.exe)
+
+running 3 tests
+test test_encrypt_decrypt_roundtrip ... ok
+test test_decrypt_wrong_password_fails ... ok
+test test_encrypt_different_nonce_per_call ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.80s
+
+     Running tests\json_library_tests.rs (C:\Users\pin
+ea\Scripts\AHK_AutoHotKey\digicore\target\debug\deps\j
+son_library_tests-5963eda02aea7342.exe)
+
+running 16 tests
+test test_merge_empty_incoming_preserves_existing ... ok
+test test_merge_adds_new_category ... ok
+test test_load_nonexistent_file ... ok
+test test_merge_keeps_newer ... ok
+test test_merge_keeps_older_when_incoming_older ... ok
+test test_merge_adds_new_snippet_same_category ... ok
+test test_load_empty_categories ... ok
+test test_load_full_snippet_editor_format ... ok
+test test_load_invalid_json ... ok
+test test_load_valid_json ... ok
+test test_load_with_utf8_bom ... ok
+test test_save_no_backup_when_file_nonexistent ... ok
+test test_save_load_snippet_with_app_lock_comma_separated ... ok
+test test_save_atomic_no_tmp_leftover ... ok
+test test_load_save_roundtrip ... ok
+test test_save_creates_backup_when_file_exists ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests\last_modified_tests.rs (C:\Users\pi
+nea\Scripts\AHK_AutoHotKey\digicore\target\debug\deps\
+last_modified_tests-dca8b22d37d866d5.exe)
+
+running 10 tests
+test test_display ... ok
+test test_is_newer_than_same ... ok
+test test_is_newer_than ... ok
+test test_parse_empty ... ok
+test test_parse_valid_17_digit ... ok
+test test_parse_with_whitespace ... ok
+test test_parse_invalid_too_long ... ok
+test test_parse_invalid_too_short ... ok
+test test_parse_invalid_non_digit ... ok
+test test_now_produces_17_chars ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\platform_adapters_tests.rs (C:\User
+s\pinea\Scripts\AHK_AutoHotKey\digicore\target\debug\d
+eps\platform_adapters_tests-db38d1414bf11807.exe)
+
+running 8 tests
+test test_mock_clipboard_empty ... ok
+test test_mock_clipboard_get_set ... ok
+test test_mock_clipboard_with_content ... ok
+test test_mock_input_key_sequence ... ok
+test test_mock_input_type_text ... ok
+test test_mock_window_default_empty ... ok
+test test_mock_window_get_active ... ok
+test test_mock_window_set_context ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\snippet_tests.rs (C:\Users\pinea\Sc
+ripts\AHK_AutoHotKey\digicore\target\debug\deps\snippe
+t_tests-2875a409a5adf987.exe)
+
+running 11 tests
+test test_is_pinned_empty ... ok
+test test_is_pinned_false ... ok
+test test_is_pinned_true_mixed_case ... ok
+test test_snippet_clone ... ok
+test test_is_pinned_true ... ok
+test test_snippet_new_with_strings ... ok
+test test_is_pinned_false_explicit ... ok
+test test_is_pinned_true_uppercase ... ok
+test test_is_pinned_invalid_value ... ok
+test test_snippet_full_fields_roundtrip ... ok
+test test_snippet_new ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src\lib.rs (C:\Users\pinea\Scri
+pts\AHK_AutoHotKey\digicore\target\debug\deps\digicore
+_text_expander-d50639a7c1701b71.exe)
+
+running 125 tests
+test adapters::file_dialog::rfd_file_dialog::tests::test_rfd_adapter_constructs ... ok
+test adapters::extraction::plain_file::tests::test_can_handle ... ok
+test adapters::extraction::plain_file::tests::test_invalid_mime_type ... ok
+test application::clipboard_history::tests::test_config_default ... ok
+test adapters::extraction::plain_file::tests::test_extract_from_buffer ... ok
+test adapters::extraction::plain_file::tests::test_extract_unicode ... ok
+test adapters::extraction::plain_file::tests::test_extract_empty_buffer ... ok
+test adapters::extraction::plain_file::tests::test_extract_missing_file ... ok
+test application::clipboard_history::tests::test_add_entry_with_metadata ... ok
+test application::clipboard_history::tests::test_delete_entry_at ... ok
+test application::clipboard_history::tests::test_add_entry_when_disabled ... ok
+test application::clipboard_history::tests::test_start_stop ... ok
+test application::clipboard_history::tests::test_add_entry_dedup ... ok
+test application::clipboard_history::tests::test_take_promote_pending_none ... ok
+test application::clipboard_history::tests::test_add_entry_max_depth ... ok
+test application::clipboard_history::tests::test_request_take_promote ... ok
+test adapters::extraction::windows_ocr::tests::test_can_handle ... ok
+test application::clipboard_history::tests::test_delete_entry_at_out_of_bounds ... ok
+test application::discovery::tests::test_config_default ... ok
+test application::clipboard_history::tests::test_suppress_for_duration_no_panic ... ok
+test application::clipboard_history::tests::test_clear_all ... ok
+test application::clipboard_history::tests::test_update_config_disabled ... ok
+test adapters::storage::json_file_storage::tests::test_json_storage_missing_file_empty ... ok
+test application::discovery::tests::test_harvest_full_phrase_on_enter ... ok
+test application::clipboard_history::tests::test_get_entries_when_stopped ... ok
+test adapters::extraction::plain_file::tests::test_extract_from_file ... ok
+test application::clipboard_history::tests::test_update_config_max_depth_trims ... ok
+test application::discovery::tests::test_harvest_suggests_on_repeat ... ok
+test application::discovery::tests::test_start_stop ... ok
+test adapters::storage::json_file_storage::tests::test_persist_if_safe_skips_when_parse_failed ... ok
+test adapters::storage::json_file_storage::tests::test_json_storage_ui_prefs ... ok
+test adapters::storage::json_file_storage::tests::test_json_storage_get_set_persist ... ok
+test adapters::storage::json_file_storage::tests::test_appearance_rules_create_update_delete_cycle ... ok
+test application::ghost_follower::tests::test_config_default ... ok
+test application::scripting::url_allowlist::tests::test_url_host ... ok
+test application::ghost_follower::tests::test_search_filter ... ok
+test application::ghost_suggestor::tests::test_config_default ... ok
+test application::ghost_suggestor::tests::test_start_stop ... ok
+test application::scripting::config::tests::test_apply_env_overrides_dev ... ok
+test application::scripting::config::tests::test_apply_env_overrides_test ... ok
+test application::scripting::placeholder_parser::tests::test_find_balanced_tag_http ... ok
+test application::scripting::placeholder_parser::tests::test_find_balanced_tag_nested ... ok
+test application::scripting::dsl_evaluator::tests::test_dsl_round ... ok
+test application::scripting::dsl_evaluator::tests::test_dsl_simple ... ok
+test application::scripting::dsl_evaluator::tests::test_dsl_float ... ok
+test application::scripting::placeholder_parser::tests::test_find_balanced_tag_simple ... ok
+test application::scripting::placeholder_parser::tests::test_parse_placeholder_at_script ... ok
+test application::scripting::placeholder_parser::tests::test_parse_placeholder_at_simple ... ok
+test application::scripting::run_executor::tests::test_is_run_allowed_empty_allowlist ... ok
+test application::scripting::run_executor::tests::test_is_run_allowed_exec_name ... ok
+test application::scripting::run_executor::tests::test_is_run_allowed_path_prefix ... ok
+test application::scripting::tests::test_find_balanced_tag_http ... ok
+test application::scripting::tests::test_find_balanced_tag_nested ... ok
+test application::scripting::tests::test_find_balanced_tag_simple ... ok
+test application::scripting::url_allowlist::tests::test_is_url_allowed_denied ... ok
+test application::scripting::url_allowlist::tests::test_is_url_allowed_empty_allowlist ... ok
+test application::scripting::url_allowlist::tests::test_is_url_allowed_match ... ok
+test application::scripting::url_allowlist::tests::test_is_url_allowed_subdomain ... ok
+test application::ghost_suggestor::tests::test_has_suggestions_after_buffer ... ok
+test application::ghost_follower::tests::test_start_stop ... ok
+test application::template_processor::tests::test_clip_placeholder ... ok
+test application::scripting::weather_lookup::tests::parses_keyed_and_positional_query ... ok
+test application::scripting::weather_lookup::tests::resolves_weather_and_uses_cache ... ok
+test application::template_processor::tests::test_am_pm_placeholder ... ok
+test application::template_processor::tests::test_http_placeholder ... ignored
+test application::template_processor::tests::test_clipboard_placeholder ... ok
+test application::template_processor::tests::test_env_placeholder ... ok
+test application::template_processor::tests::test_collect_interactive_vars_checkbox_datepicker_filepicker ... ok
+test application::template_processor::tests::test_date_placeholder ... ok
+test application::template_processor::tests::test_mixed_content ... ok
+test application::template_processor::tests::test_process_with_user_vars ... ok
+test application::template_processor::tests::test_collect_interactive_vars ... ok
+test application::template_processor::tests::test_process_for_preview_key_wait_substitution ... ok
+test application::variable_input::tests::test_set_take_pending_with_target_hwnd ... ok
+test application::template_processor::tests::test_process_with_user_vars_checkbox_datepicker_filepicker ... ok
+test cli::tests::test_parse_gui_tauri_case_insensitive ... ok
+test application::template_processor::tests::test_time_placeholder ... ok
+test application::template_processor::tests::test_time_with_format ... ok
+test application::template_processor::tests::test_timezone_placeholder ... ok
+test application::template_processor::tests::test_tz_placeholder ... ok
+test application::template_processor::tests::test_unknown_placeholder_preserved ... ok
+test application::template_processor::tests::test_uuid_placeholder ... ok
+test application::variable_input::tests::test_has_interactive_vars_checkbox_datepicker_filepicker ... ok
+test application::variable_input::tests::test_set_pending_replaces_old_and_notifies ... ok
+test cli::tests::test_parse_gui_egui ... ok
+test drivers::hotstring::tests::test_find_snippet_for_process_app_lock_allowed ... ok
+test cli::tests::test_parse_gui_no_arg ... ok
+test drivers::hotstring::tests::test_find_snippet_for_process_buffer_shorter_than_trigger ... ok
+test cli::tests::test_parse_gui_tauri ... ok
+test cli::tests::test_parse_gui_unknown_falls_back_to_egui ... ok
+test application::template_processor::tests::test_random_placeholder ... ok
+test cli::tests::test_parse_gui_first_wins ... ok
+test drivers::hotstring::tests::test_find_snippet_for_process_app_lock_denied ... ok
+test drivers::hotstring::tests::test_find_snippet_for_process_app_lock_multi_allowed ... ok
+test drivers::hotstring::tests::test_find_snippet_for_process_case_insensitive ... ok
+test drivers::hotstring::tests::test_find_snippet_for_process_match_buffer_suffix ... ok
+test drivers::hotstring::tests::test_find_snippet_for_process_match_no_app_lock ... ok
+test drivers::hotstring::tests::test_find_snippet_for_process_no_match ... ok
+test drivers::hotstring::tests::test_vk_to_char_fallback_digits ... ok
+test drivers::hotstring::tests::test_vk_to_char_fallback_letters ... ok
+test drivers::hotstring::tests::test_vk_to_char_fallback_special ... ok
+test drivers::hotstring::tests::test_vk_to_char_fallback_unknown_returns_none ... ok
+test platform::windows_window::tests::test_excluded_window_classes ... ok
+test platform::windows_window::tests::test_get_foreground_hwnd_does_not_panic ... ok
+test platform::windows_window::tests::test_restore_foreground_window_zero_noop ... ok
+test utils::tests::test_parse_file_filter_all_files ... ok
+test utils::tests::test_parse_file_filter_json ... ok
+test utils::tests::test_parse_file_filter_multi ... ok
+test utils::tests::test_truncate_for_display_edge ... ok
+test services::extraction_service::tests::test_dispatcher_unsupported_type ... ok
+test services::extraction_service::tests::test_dispatcher_routing_to_plain_file ... ok
+test utils::tests::test_truncate_for_display_long ... ok
+test utils::tests::test_truncate_for_display_short ... ok
+test utils::tests::test_with_file_filters_all_files ... ok
+test utils::tests::test_with_file_filters_json ... ok
+test application::template_processor::tests::test_js_placeholder ... ok
+test application::template_processor::tests::test_js_clipboard_placeholder_resolved ... ok
+test application::template_processor::tests::test_js_clipboard_when_clipboard_contains_template ... ok
+test application::template_processor::tests::test_js_recursion_limit ... ok
+test application::template_processor::tests::test_js_with_mock_engine ... ok
+test application::template_processor::tests::test_run_placeholder_blocked ... ok
+test application::template_processor::tests::test_run_placeholder_disabled ... ok
+test application::template_processor::tests::test_weather_placeholder_with_user_vars ... FAILED
+test adapters::file_dialog::rfd_file_dialog::tests::test_save_file_empty_filters_returns_none_without_user ... ok
+test adapters::file_dialog::rfd_file_dialog::tests::test_pick_file_empty_filters_returns_none_without_user ... ok
+
+failures:
+
+---- application::template_processor::tests::test_weather_placeholder_with_user_vars stdout ----
+
+thread 'application::template_processor::tests::test_weather_placeholder_with_user_vars' (55808) panicked at crates\digicore-text-expander\src\application\template_processor.rs:707:9:
+assertion `left == right` failed
+  left: "Weather now: [MockHttpFetcher: no expectation]"
+ right: "Weather now: 20.5"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    application::template_processor::tests::test_weather_placeholder_with_user_vars
+
+test result: FAILED. 123 passed; 1 failed; 1 ignored; 0 measured; 0 filtered out; finished in 3.58s
+
+error: test failed, to rerun pass `-p 
+digicore-text-expander --lib`

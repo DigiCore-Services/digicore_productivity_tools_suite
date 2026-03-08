@@ -6,6 +6,10 @@ pub mod storage;
 pub mod window;
 pub mod file_dialog;
 pub mod timer;
+pub mod extraction;
+pub mod corpus;
+pub mod export;
+
 
 #[cfg(feature = "gui-egui")]
 pub use storage::EframeStorageAdapter;

@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { ArrowUpToLine, Copy, Pencil, Pin, PinOff, Trash2 } from "lucide-react";
@@ -32,6 +33,7 @@ export function ViewFull({
   canPin = true,
   canPromote = true,
 }: ViewFullProps) {
+  const [copied, setCopied] = useState(false);
   const handleEdit = () => {
     if (onEdit && editMeta) {
       onEdit(editMeta.category, editMeta.snippetIdx);
@@ -106,10 +108,21 @@ export function ViewFull({
                 </Button>
               )}
               {onCopy && (
-                <Button size="sm" variant="secondary" onClick={onCopy} title="Copy full content">
-                  <Copy className="w-3 h-3 mr-1" aria-hidden />
-                  Copy
-                </Button>
+                <div className="flex items-center gap-2">
+                  <Button size="sm" variant="secondary" onClick={() => {
+                    onCopy();
+                    setCopied(true);
+                    setTimeout(() => setCopied(false), 2000);
+                  }} title="Copy full content">
+                    <Copy className="w-3 h-3 mr-1" aria-hidden />
+                    Copy
+                  </Button>
+                  {copied && (
+                    <span className="text-emerald-500 text-sm font-medium animate-in fade-in duration-300">
+                      Copied!
+                    </span>
+                  )}
+                </div>
               )}
               {onDelete && (
                 <Button

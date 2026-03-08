@@ -1,2 +1,0 @@
-|  | SCHEDULE | B: PLEDGED CONTRIBUTIONS |
-|---|---|---|

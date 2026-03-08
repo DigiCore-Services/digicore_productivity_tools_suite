@@ -41,7 +41,7 @@ vi.mock("@tauri-apps/api/event", () => ({
   emit: (...args: unknown[]) => Promise.resolve(mockEmit(...args)),
 }));
 
-const defaultState: AppState = {
+const defaultState = {
   library_path: "",
   library: {},
   categories: [],
@@ -75,7 +75,7 @@ const defaultState: AppState = {
   clip_history_max_depth: 20,
   script_library_run_disabled: false,
   script_library_run_allowlist: "",
-};
+} as unknown as AppState;
 
 describe("ConfigTab import/export settings", () => {
   beforeEach(() => {

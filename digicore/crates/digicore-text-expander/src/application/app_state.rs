@@ -110,11 +110,64 @@ pub struct AppState {
     pub ghost_follower_search: String,
     pub ghost_follower_hover_preview: bool,
     pub ghost_follower_collapse_delay_secs: u64,
-    /// Opacity 10-100 (percent). 100 = fully opaque.
     pub ghost_follower_opacity: u32,
     /// Saved window position (x, y) when user drags. None = use edge/monitor.
     pub ghost_follower_position: Option<(i32, i32)>,
     pub clip_history_max_depth: usize,
+
+    // Corpus Generation (F55)
+    pub corpus_enabled: bool,
+    pub corpus_output_dir: String,
+    pub corpus_snapshot_dir: String,
+    pub corpus_shortcut_modifiers: u16,
+    pub corpus_shortcut_key: u16,
+
+    // Extraction Config (F55)
+    pub extraction_row_overlap_tolerance: f32,
+    pub extraction_cluster_threshold_factor: f32,
+    pub extraction_zone_proximity: f32,
+    pub extraction_cross_zone_gap_factor: f32,
+    pub extraction_same_zone_gap_factor: f32,
+    pub extraction_significant_gap_gate: f32,
+    pub extraction_char_width_factor: f32,
+    pub extraction_bridged_threshold: f32,
+    pub extraction_word_spacing_factor: f32,
+
+    pub extraction_footer_triggers: String,
+    pub extraction_table_min_contiguous_rows: usize,
+    pub extraction_table_min_avg_segments: f32,
+
+    pub extraction_adaptive_plaintext_cluster_factor: f32,
+    pub extraction_adaptive_plaintext_gap_gate: f32,
+    pub extraction_adaptive_table_cluster_factor: f32,
+    pub extraction_adaptive_table_gap_gate: f32,
+    pub extraction_adaptive_column_cluster_factor: f32,
+    pub extraction_adaptive_column_gap_gate: f32,
+
+    pub extraction_refinement_entropy_threshold: f32,
+    pub extraction_refinement_cluster_threshold_modifier: f32,
+    pub extraction_refinement_cross_zone_gap_modifier: f32,
+
+    pub extraction_classifier_gutter_weight: f32,
+    pub extraction_classifier_density_weight: f32,
+    pub extraction_classifier_multicolumn_density_max: f32,
+    pub extraction_classifier_table_density_min: f32,
+    pub extraction_classifier_table_entropy_min: f32,
+
+    pub extraction_columns_min_contiguous_rows: usize,
+    pub extraction_columns_gutter_gap_factor: f32,
+    pub extraction_columns_gutter_void_tolerance: f32,
+    pub extraction_columns_edge_margin_tolerance: f32,
+
+    pub extraction_headers_max_width_ratio: f32,
+    pub extraction_headers_centered_tolerance: f32,
+    pub extraction_headers_h1_size_multiplier: f32,
+    pub extraction_headers_h2_size_multiplier: f32,
+    pub extraction_headers_h3_size_multiplier: f32,
+
+    pub extraction_scoring_jitter_penalty_weight: f32,
+    pub extraction_scoring_size_penalty_weight: f32,
+    pub extraction_scoring_low_confidence_threshold: f32,
 
     // Templates (F16-F20)
     pub template_date_format: String,
@@ -201,6 +254,61 @@ impl Default for AppState {
             ghost_follower_opacity: 100,
             ghost_follower_position: None,
             clip_history_max_depth: 20,
+
+            // Corpus
+            corpus_enabled: true,
+            corpus_output_dir: "docs/sample-ocr-images".to_string(),
+            corpus_snapshot_dir: "crates/digicore-text-expander/tests/snapshots".to_string(),
+            corpus_shortcut_modifiers: 1 | 2 | 4, // 1=Ctrl, 2=Alt, 4=Shift
+            corpus_shortcut_key: 0x43, // 'C'
+
+            // Extraction Config Defaults
+            extraction_row_overlap_tolerance: 0.6,
+            extraction_cluster_threshold_factor: 0.35,
+            extraction_zone_proximity: 15.0,
+            extraction_cross_zone_gap_factor: 0.25,
+            extraction_same_zone_gap_factor: 0.8,
+            extraction_significant_gap_gate: 0.8,
+            extraction_char_width_factor: 0.45,
+            extraction_bridged_threshold: 0.4,
+            extraction_word_spacing_factor: 0.2,
+
+            extraction_footer_triggers: "total,sum,subtotal,balance".to_string(),
+            extraction_table_min_contiguous_rows: 4,
+            extraction_table_min_avg_segments: 1.5,
+
+            extraction_adaptive_plaintext_cluster_factor: 0.6,
+            extraction_adaptive_plaintext_gap_gate: 0.5,
+            extraction_adaptive_table_cluster_factor: 0.35,
+            extraction_adaptive_table_gap_gate: 1.2,
+            extraction_adaptive_column_cluster_factor: 0.45,
+            extraction_adaptive_column_gap_gate: 0.8,
+
+            extraction_refinement_entropy_threshold: 50.0,
+            extraction_refinement_cluster_threshold_modifier: 0.8,
+            extraction_refinement_cross_zone_gap_modifier: 1.2,
+
+            extraction_classifier_gutter_weight: 5.0,
+            extraction_classifier_density_weight: 20.0,
+            extraction_classifier_multicolumn_density_max: 0.4,
+            extraction_classifier_table_density_min: 0.5,
+            extraction_classifier_table_entropy_min: 15.0,
+
+            extraction_columns_min_contiguous_rows: 3,
+            extraction_columns_gutter_gap_factor: 5.0,
+            extraction_columns_gutter_void_tolerance: 0.7,
+            extraction_columns_edge_margin_tolerance: 30.0,
+
+            extraction_headers_max_width_ratio: 0.75,
+            extraction_headers_centered_tolerance: 0.12,
+            extraction_headers_h1_size_multiplier: 1.6,
+            extraction_headers_h2_size_multiplier: 1.3,
+            extraction_headers_h3_size_multiplier: 1.2,
+
+            extraction_scoring_jitter_penalty_weight: 0.4,
+            extraction_scoring_size_penalty_weight: 0.1,
+            extraction_scoring_low_confidence_threshold: 0.6,
+
             template_date_format: "%Y-%m-%d".to_string(),
             template_time_format: "%H:%M".to_string(),
             snippet_editor_mode: None,
