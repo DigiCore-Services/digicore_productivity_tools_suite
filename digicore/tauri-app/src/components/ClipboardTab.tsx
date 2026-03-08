@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getTaurpc } from "@/lib/taurpc";
 import { showNativeContextMenu } from "@/lib/nativeContextMenu";
-import { ArrowUpToLine, Check, Copy, Eye, Search, Trash2 } from "lucide-react";
+import { ArrowUpToLine, Check, Copy, Eye, Image as ImageIcon, Search, Trash2 } from "lucide-react";
 import { save } from "@tauri-apps/plugin-dialog";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import type { NativeContextMenuAction } from "@/lib/nativeContextMenu";
@@ -41,6 +41,7 @@ export function ClipboardTab({
     "or"
   );
   const [thumbLoadFailed, setThumbLoadFailed] = useState<Record<number, boolean>>({});
+  const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
   const prevThumbByIdRef = useRef<Record<number, string>>({});
   const normalizeContentForMatch = useCallback((value: string) => {
     return (value || "").replace(/\r\n/g, "\n").trim();
@@ -123,8 +124,7 @@ export function ClipboardTab({
       const statusParts: string[] = [];
       if (query) {
         statusParts.push(
-          `Search loaded (${searchOperator.toUpperCase()}): ${data.length} match${
-            data.length === 1 ? "" : "es"
+          `Search loaded (${searchOperator.toUpperCase()}): ${data.length} match${data.length === 1 ? "" : "es"
           }.`
         );
       }
@@ -163,6 +163,10 @@ export function ClipboardTab({
         await getTaurpc().copy_to_clipboard(entry.content);
         setStatus("Copied to clipboard!");
       }
+      setCopiedIdx(idx);
+      setTimeout(() => {
+        setCopiedIdx((prev) => (prev === idx ? null : prev));
+      }, 2000);
     } catch (e) {
       setStatus("Error: " + String(e));
     }
@@ -184,6 +188,15 @@ export function ClipboardTab({
       normalizeContentForMatch(entry.content || "")
     );
     onOpenViewFull(entry.content, { index: idx, canPromote: !snippetCreated });
+  };
+
+  const handleViewParentImage = async (parentId: number) => {
+    try {
+      await getTaurpc().open_clipboard_image_by_id(parentId);
+      setStatus("Opened source image.");
+    } catch (e) {
+      setStatus("Error: " + String(e));
+    }
   };
 
   const handleSaveImageAs = async (idx: number) => {
@@ -282,7 +295,7 @@ export function ClipboardTab({
                   #
                 </th>
                 <th className="border border-[var(--dc-border)] p-1.5 text-left">
-                  Snippet Created
+                  Actions
                 </th>
                 <th className="border border-[var(--dc-border)] p-1.5 text-left">
                   Content Preview
@@ -299,20 +312,16 @@ export function ClipboardTab({
                 <th className="border border-[var(--dc-border)] p-1.5 text-left">
                   Created (UTC)
                 </th>
-                <th className="border border-[var(--dc-border)] p-1.5 text-left">
-                  Actions
-                </th>
               </tr>
             </thead>
             <tbody>
               {entries.map((e, i) => {
                 const preview =
                   e.entry_type === "image"
-                    ? `Image ${e.image_width || "?"}x${e.image_height || "?"}${
-                        e.mime_type ? ` (${e.mime_type})` : ""
-                      }`
+                    ? `Image ${e.image_width || "?"}x${e.image_height || "?"}${e.mime_type ? ` (${e.mime_type})` : ""
+                    }`
                     : (e.content || "").slice(0, 40) +
-                      (e.content?.length && e.content.length > 40 ? "..." : "");
+                    (e.content?.length && e.content.length > 40 ? "..." : "");
                 const app = (e.process_name || "(unknown)").slice(0, 20);
                 const title = (e.window_title || "(unknown)").slice(0, 30);
                 const isImage = e.entry_type === "image";
@@ -338,25 +347,33 @@ export function ClipboardTab({
                         },
                         isImage
                           ? {
-                              id: "save-image-as",
-                              icon: "💾",
-                              text: "Save Image As",
-                              onClick: () => void handleSaveImageAs(i),
-                            }
+                            id: "save-image-as",
+                            icon: "💾",
+                            text: "Save Image As",
+                            onClick: () => void handleSaveImageAs(i),
+                          }
                           : snippetCreated
-                          ? {
+                            ? {
                               id: "promoted",
                               icon: "✓",
                               text: "Promoted",
                               enabled: false,
-                              onClick: () => {},
+                              onClick: () => { },
                             }
-                          : {
+                            : {
                               id: "promote",
                               icon: "⬆",
                               text: "Promote to Snippet",
                               onClick: () => handlePromote(i),
                             },
+                        entry.parent_id
+                          ? {
+                            id: "view-source-image",
+                            icon: "🖼",
+                            text: "View Source Image",
+                            onClick: () => void handleViewParentImage(entry.parent_id!),
+                          }
+                          : null,
                         {
                           id: "copy",
                           icon: "⧉",
@@ -369,26 +386,82 @@ export function ClipboardTab({
                           text: "Delete",
                           onClick: () => handleDeleteClick(i),
                         },
-                      ];
+                      ].filter(Boolean) as NativeContextMenuAction[];
                       showNativeContextMenu(e.clientX, e.clientY, actions);
                     }}
                   >
                     <td className="border border-[var(--dc-border)] p-1.5">
                       {i + 1}
                     </td>
-                    <td className="border border-[var(--dc-border)] p-1.5 text-center">
-                      {isImage ? (
-                        <span className="w-4 h-4 inline-block" aria-hidden />
-                      ) : snippetCreated ? (
-                        <span title="Snippet already created">
-                          <Check
-                            className="w-4 h-4 mx-auto text-emerald-500"
-                            aria-hidden
-                          />
-                        </span>
-                      ) : (
-                        <span className="w-4 h-4 inline-block" aria-hidden />
-                      )}
+                    <td className="border border-[var(--dc-border)] p-1.5">
+                      <div className="flex flex-wrap gap-1">
+                        <button
+                          onClick={() => void handleCopy(i)}
+                          className="inline-flex items-center px-2 py-0.5 text-xs bg-[var(--dc-bg-alt)] hover:bg-[var(--dc-bg-tertiary)] border border-[var(--dc-border)] rounded transition-colors"
+                          title={isImage ? "Copy Image" : "Copy to Clipboard"}
+                        >
+                          <Copy className="w-3 h-3 mr-1" aria-hidden />
+                          {isImage ? "Copy" : "Copy"}
+                        </button>
+                        {copiedIdx === i && (
+                          <span className="text-emerald-500 text-[10px] font-medium flex items-center animate-in fade-in duration-300">
+                            Copied!
+                          </span>
+                        )}
+                        <button
+                          onClick={() => void handleView(i)}
+                          className="inline-flex items-center px-2 py-0.5 text-xs bg-[var(--dc-bg-alt)] hover:bg-[var(--dc-bg-tertiary)] border border-[var(--dc-border)] rounded transition-colors"
+                          title={isImage ? "Open Image" : "View Full Content"}
+                        >
+                          <Eye className="w-3 h-3 mr-1" aria-hidden />
+                          {isImage ? "Open" : "View"}
+                        </button>
+                        {e.parent_id && (
+                          <button
+                            onClick={() => void handleViewParentImage(e.parent_id!)}
+                            className="inline-flex items-center px-2 py-0.5 text-xs bg-[var(--dc-bg-alt)] hover:bg-[var(--dc-bg-tertiary)] border border-[var(--dc-border)] rounded transition-colors"
+                            title="Open Source Image"
+                          >
+                            <ImageIcon className="w-3 h-3 mr-1" aria-hidden />
+                            Image
+                          </button>
+                        )}
+                        {isImage && (
+                          <button
+                            onClick={() => void handleSaveImageAs(i)}
+                            className="inline-flex items-center px-2 py-0.5 text-xs bg-[var(--dc-bg-alt)] hover:bg-[var(--dc-bg-tertiary)] border border-[var(--dc-border)] rounded transition-colors"
+                            title="Save Image As"
+                          >
+                            Save As
+                          </button>
+                        )}
+                        <button
+                          onClick={() => handleDeleteClick(i)}
+                          className="inline-flex items-center px-2 py-0.5 text-xs bg-[var(--dc-bg-alt)] hover:bg-red-500/10 text-[var(--dc-error)] border border-[var(--dc-border)] rounded transition-colors"
+                          title="Delete Entry"
+                        >
+                          <Trash2 className="w-3 h-3 mr-1" aria-hidden />
+                          Delete
+                        </button>
+                        {!isImage && (
+                          <button
+                            onClick={() => handlePromote(i)}
+                            className={`inline-flex items-center px-2 py-0.5 text-xs border border-[var(--dc-border)] rounded transition-colors ${snippetCreated
+                              ? "bg-emerald-500/10 text-emerald-500 cursor-default font-medium"
+                              : "bg-[var(--dc-bg-alt)] hover:bg-[var(--dc-bg-tertiary)]"
+                              }`}
+                            disabled={snippetCreated}
+                            title={snippetCreated ? "Snippet already created" : "Promote to Snippet"}
+                          >
+                            {snippetCreated ? (
+                              <Check className="w-3 h-3 mr-1" aria-hidden />
+                            ) : (
+                              <ArrowUpToLine className="w-3 h-3 mr-1" aria-hidden />
+                            )}
+                            {snippetCreated ? "Promoted" : "Promote"}
+                          </button>
+                        )}
+                      </div>
                     </td>
                     <td className="border border-[var(--dc-border)] p-1.5">
                       {canRenderThumb ? (
@@ -409,7 +482,24 @@ export function ClipboardTab({
                           />
                         </button>
                       ) : (
-                        preview
+                        <div className="flex items-center gap-2">
+                          {e.parent_id && (
+                            <button
+                              type="button"
+                              onClick={(ev) => {
+                                ev.stopPropagation();
+                                handleViewParentImage(e.parent_id!);
+                              }}
+                              className="text-[var(--dc-accent)] hover:text-[var(--dc-accent-hover)] transition-colors p-0.5"
+                              title="View Source Image"
+                            >
+                              <ImageIcon className="w-4 h-4" />
+                            </button>
+                          )}
+                          <span className="truncate">
+                            {preview}
+                          </span>
+                        </div>
                       )}
                     </td>
                     <td className="border border-[var(--dc-border)] p-1.5">
@@ -424,49 +514,6 @@ export function ClipboardTab({
                     <td className="border border-[var(--dc-border)] p-1.5 whitespace-nowrap">
                       {formatUtcTimestamp(e.created_at)}
                     </td>
-                    <td className="border border-[var(--dc-border)] p-1.5">
-                      <button
-                        onClick={() => void handleCopy(i)}
-                        className="inline-flex items-center px-2.5 py-1 text-sm mr-1"
-                      >
-                        <Copy className="w-3.5 h-3.5 mr-1" aria-hidden />
-                        {isImage ? "Copy Image" : "Copy"}
-                      </button>
-                      <button
-                        onClick={() => void handleView(i)}
-                        className="inline-flex items-center px-2.5 py-1 text-sm mr-1"
-                      >
-                        <Eye className="w-3.5 h-3.5 mr-1" aria-hidden />
-                        {isImage ? "Open Image" : "View"}
-                      </button>
-                      {isImage && (
-                        <button
-                          onClick={() => void handleSaveImageAs(i)}
-                          className="inline-flex items-center px-2.5 py-1 text-sm mr-1"
-                        >
-                          Save As
-                        </button>
-                      )}
-                      <button
-                        onClick={() => handleDeleteClick(i)}
-                        className="inline-flex items-center px-2.5 py-1 text-sm mr-1 text-[var(--dc-error)]"
-                      >
-                        <Trash2 className="w-3.5 h-3.5 mr-1" aria-hidden />
-                        Delete
-                      </button>
-                      {!isImage && (
-                        <button
-                          onClick={() => handlePromote(i)}
-                          className={`inline-flex items-center px-2.5 py-1 text-sm ${
-                            snippetCreated ? "opacity-50 cursor-not-allowed" : ""
-                          }`}
-                          disabled={snippetCreated}
-                        >
-                          <ArrowUpToLine className="w-3.5 h-3.5 mr-1" aria-hidden />
-                          {snippetCreated ? "Promoted" : "Promote"}
-                        </button>
-                      )}
-                    </td>
                   </tr>
                 );
               })}
@@ -474,6 +521,6 @@ export function ClipboardTab({
           </table>
         )}
       </div>
-    </div>
+    </div >
   );
 }
