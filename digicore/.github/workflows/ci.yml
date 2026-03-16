@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: digicore/tauri-app/package-lock.json
+      - run: cargo test -p digicore-text-expander -- --test-threads=1
+        working-directory: digicore
+      - run: cargo test -p digicore-text-expander-tauri --lib appearance_integration_save_restart_reenforce_is_deterministic -- --nocapture
+        working-directory: digicore
+      - run: cargo test -p digicore-text-expander-tauri --lib appearance_stress_many_rules_remains_stable -- --nocapture
+        working-directory: digicore
+      - run: npm ci
+        working-directory: digicore/tauri-app
+      - run: npm run test -- AppearanceTab ConfigTab
+        working-directory: digicore/tauri-app
