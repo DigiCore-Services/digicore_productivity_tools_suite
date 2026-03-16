@@ -8,6 +8,7 @@
 
 use crate::application::clipboard_history;
 use crate::application::discovery;
+use crate::application::expansion_diagnostics;
 use crate::application::expansion_engine::is_expansion_paused;
 use crate::application::ghost_follower;
 use crate::application::ghost_suggestor;
@@ -39,13 +40,17 @@ struct HotstringState {
     input: EnigoInputAdapter,
     clipboard: ArboardClipboardAdapter,
     window: WindowsWindowAdapter,
+    corpus_service: Option<Arc<crate::application::corpus_generator::CorpusService>>,
 }
 
 static HOTSTRING_STATE: Mutex<Option<Arc<Mutex<HotstringState>>>> = Mutex::new(None);
 
 /// Start the hotstring listener in a background thread.
 /// Call with the initial library; use update_library() to refresh.
-pub fn start_listener(library: HashMap<String, Vec<Snippet>>) -> anyhow::Result<()> {
+pub fn start_listener(
+    library: HashMap<String, Vec<Snippet>>,
+    corpus_service: Option<Arc<crate::application::corpus_generator::CorpusService>>,
+) -> anyhow::Result<()> {
     if windows_keyboard::is_listener_running() {
         return Ok(());
     }
@@ -59,6 +64,7 @@ pub fn start_listener(library: HashMap<String, Vec<Snippet>>) -> anyhow::Result<
         input,
         clipboard,
         window: WindowsWindowAdapter::new(),
+        corpus_service,
     }));
 
     *HOTSTRING_STATE.lock().unwrap() = Some(state.clone());
@@ -90,17 +96,102 @@ pub fn request_expansion(content: String) {
         variable_input::set_pending_from_ghost(content);
         return;
     }
-    do_request_expansion(content);
+    do_request_expansion(content, None);
+}
+
+/// Request expansion with optional target window for restore-before-paste.
+pub fn request_expansion_with_target(content: String, target_hwnd: Option<isize>) {
+    if variable_input::has_interactive_vars(&content) {
+        variable_input::set_pending_from_ghost_with_target(content, target_hwnd);
+        return;
+    }
+    do_request_expansion(content, target_hwnd);
+}
+
+/// Request expansion from Ghost Follower double-click. Restores focus to the target
+/// window (Sublime, Outlook, etc.) before pasting so content inserts at cursor.
+pub fn request_expansion_from_ghost_follower(content: String) {
+    let mut target_hwnd = ghost_follower::take_target_hwnd();
+    #[cfg(target_os = "windows")]
+    if let Some(hwnd) = target_hwnd {
+        if !crate::platform::windows_window::is_valid_external_hwnd(hwnd) {
+            log::debug!(
+                "[QuickSearchInsert] rejecting stored target as non-external: {}",
+                crate::platform::windows_window::describe_hwnd(hwnd)
+            );
+            target_hwnd = None;
+        }
+    }
+    let mut target_source = "stored";
+    #[cfg(target_os = "windows")]
+    if target_hwnd.is_none() {
+        // Fallback for tray/overlay timing races: recover latest external foreground window.
+        target_hwnd = crate::platform::windows_window::capture_recent_external_foreground_hwnd(500);
+        target_source = "fallback-capture";
+        if target_hwnd.is_none() {
+            target_hwnd = crate::platform::windows_window::capture_recent_external_foreground_hwnd(1500);
+            target_source = "fallback-capture-extended";
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let target_desc = target_hwnd
+            .map(crate::platform::windows_window::describe_hwnd)
+            .unwrap_or_else(|| "<none>".to_string());
+        let fg = crate::platform::windows_window::describe_foreground_window();
+        let msg = format!(
+            "[QuickSearchInsert] request_expansion_from_ghost_follower source={} target={} foreground={}",
+            target_source, target_desc, fg
+        );
+        log::debug!("{msg}");
+        if target_hwnd.is_none() {
+            expansion_diagnostics::push(
+                "warn",
+                "[QuickSearchInsert] No target window captured; attempting paste in current foreground.".to_string(),
+            );
+        }
+    }
+    if variable_input::has_interactive_vars(&content) {
+        variable_input::set_pending_from_ghost_with_target(content, target_hwnd);
+        return;
+    }
+    do_request_expansion(content, target_hwnd);
 }
 
 /// Perform expansion (no interactive vars). Used after VariableInputModal OK.
-fn do_request_expansion(content: String) {
+/// target_hwnd: when Some, restore focus to this window before paste (for insert-at-cursor).
+fn do_request_expansion(content: String, target_hwnd: Option<isize>) {
+    #[cfg(target_os = "windows")]
+    {
+        let target_desc = target_hwnd
+            .map(crate::platform::windows_window::describe_hwnd)
+            .unwrap_or_else(|| "<none>".to_string());
+        let fg = crate::platform::windows_window::describe_foreground_window();
+        let msg = format!(
+            "[QuickSearchInsert] do_request_expansion start target={} foreground={}",
+            target_desc, fg
+        );
+        log::debug!("{msg}");
+    }
     crate::application::clipboard_history::suppress_for_duration(std::time::Duration::from_secs(2));
     if let Ok(guard) = HOTSTRING_STATE.lock() {
         if let Some(ref state) = *guard {
             let state = state.clone();
             std::thread::spawn(move || {
                 if let Ok(g) = state.lock() {
+                    #[cfg(target_os = "windows")]
+                    if let Some(hwnd) = target_hwnd {
+                        let before = crate::platform::windows_window::describe_foreground_window();
+                        crate::platform::windows_window::restore_foreground_window(hwnd);
+                        let after = crate::platform::windows_window::describe_foreground_window();
+                        let msg = format!(
+                            "[QuickSearchInsert] restore_foreground_window target={} before={} after={}",
+                            crate::platform::windows_window::describe_hwnd(hwnd),
+                            before,
+                            after
+                        );
+                        log::debug!("{msg}");
+                    }
                     let current_clip = g.clipboard.get_text().ok();
                     let clip_history: Vec<String> = clipboard_history::get_entries()
                         .iter()
@@ -111,15 +202,28 @@ fn do_request_expansion(content: String) {
                         current_clip.as_deref(),
                         &clip_history,
                     );
+                    crate::application::expansion_stats::record_expansion(
+                        Some("ghost_follower"),
+                        content.len(),
+                        0,
+                    );
                     let saved = g.clipboard.get_text().ok();
                     if g.clipboard.set_text(&content).is_ok() {
                         if g.input.send_ctrl_v().is_ok() {
                             let _ = saved.as_ref().map(|s| g.clipboard.set_text(s));
                         } else {
+                            expansion_diagnostics::push(
+                                "warn",
+                                "[QuickSearchInsert] send_ctrl_v failed; fallback type_text".to_string(),
+                            );
                             let _ = g.input.type_text(&content);
                             let _ = saved.as_ref().map(|s| g.clipboard.set_text(s));
                         }
                     } else {
+                        expansion_diagnostics::push(
+                            "warn",
+                            "[QuickSearchInsert] clipboard set_text failed; fallback type_text".to_string(),
+                        );
                         let _ = g.input.type_text(&content);
                     }
                 }
@@ -142,11 +246,104 @@ pub fn update_library(library: HashMap<String, Vec<Snippet>>) {
     }
 }
 
+/// Update the Corpus service config to apply live hotkey mapping updates.
+pub fn update_corpus_service(service: Option<Arc<crate::application::corpus_generator::CorpusService>>) {
+    if let Ok(guard) = HOTSTRING_STATE.lock() {
+        if let Some(ref state) = *guard {
+            if let Ok(mut s) = state.lock() {
+                s.corpus_service = service;
+            }
+        }
+    }
+}
+
+/// Ghost config for sync from host (e.g. Tauri AppState).
+#[derive(Clone)]
+pub struct GhostConfig {
+    pub suggestor_enabled: bool,
+    pub suggestor_debounce_ms: u64,
+    pub suggestor_display_secs: u64,
+    pub suggestor_snooze_duration_mins: u64,
+    pub suggestor_offset_x: i32,
+    pub suggestor_offset_y: i32,
+    pub follower_enabled: bool,
+    pub follower_edge_right: bool,
+    pub follower_monitor_anchor: usize,
+    pub follower_search: String,
+    pub follower_hover_preview: bool,
+    pub follower_collapse_delay_secs: u64,
+}
+
+impl Default for GhostConfig {
+    fn default() -> Self {
+        Self {
+            suggestor_enabled: true,
+            suggestor_debounce_ms: 50,
+            suggestor_display_secs: 10,
+            suggestor_snooze_duration_mins: 5,
+            suggestor_offset_x: 0,
+            suggestor_offset_y: 20,
+            follower_enabled: true,
+            follower_edge_right: true,
+            follower_monitor_anchor: 0,
+            follower_search: String::new(),
+            follower_hover_preview: true,
+            follower_collapse_delay_secs: 5,
+        }
+    }
+}
+
+/// Sync Discovery config from host state. Starts/stops Discovery.
+/// Suggestion callback is set by Tauri setup (notification toast flow).
+pub fn sync_discovery_config(enabled: bool, config: discovery::DiscoveryConfig) {
+    log::info!(
+        "[Hotstring] sync_discovery_config: enabled={} threshold={} lookback={}",
+        enabled,
+        config.threshold,
+        config.lookback_minutes
+    );
+    if enabled {
+        discovery::start(config);
+        log::info!("[Hotstring] sync_discovery_config: Discovery started");
+    } else {
+        discovery::stop();
+        log::info!("[Hotstring] sync_discovery_config: Discovery stopped");
+    }
+}
+
+/// Sync Ghost Suggestor and Ghost Follower config from host state.
+pub fn sync_ghost_config(config: GhostConfig) {
+    ghost_suggestor::update_config(ghost_suggestor::GhostSuggestorConfig {
+        enabled: config.suggestor_enabled,
+        debounce_ms: config.suggestor_debounce_ms,
+        display_duration_secs: config.suggestor_display_secs,
+        snooze_duration_mins: config.suggestor_snooze_duration_mins,
+        offset_x: config.suggestor_offset_x,
+        offset_y: config.suggestor_offset_y,
+    });
+    ghost_follower::update_config(ghost_follower::GhostFollowerConfig {
+        enabled: config.follower_enabled,
+        edge: if config.follower_edge_right {
+            ghost_follower::FollowerEdge::Right
+        } else {
+            ghost_follower::FollowerEdge::Left
+        },
+        monitor_anchor: match config.follower_monitor_anchor {
+            1 => ghost_follower::MonitorAnchor::Secondary,
+            2 => ghost_follower::MonitorAnchor::Current,
+            _ => ghost_follower::MonitorAnchor::Primary,
+        },
+        search_filter: config.follower_search,
+        hover_preview: config.follower_hover_preview,
+        collapse_delay_secs: config.follower_collapse_delay_secs,
+    });
+}
+
 fn debug_log(msg: &str) {
     if std::env::var("DIGICORE_DEBUG").as_deref() != Ok("1") {
         return;
     }
-    let path = std::env::temp_dir().join("digicore_debug.log");
+    let path = std::path::PathBuf::from(r"C:\Users\pinea\Scripts\AHK_AutoHotKey\digicore\digicore_debug.log");
     if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
         let _ = writeln!(f, "{}", msg);
     }
@@ -154,16 +351,29 @@ fn debug_log(msg: &str) {
 
 /// Returns true if key should be consumed (not passed to app).
 fn on_key(state: Arc<Mutex<HotstringState>>, vk_code: u16, ch: Option<char>) -> bool {
+    // Top level trace for corpus hotkey debugging
+    debug_log(&format!("Raw hook received vk_code={:?}", vk_code));
+
     // F44: Debounced suggestions - tick to recompute when timer elapsed
     let _ = ghost_suggestor::tick_debounce();
 
     let mut guard = match state.lock() {
         Ok(g) => g,
-        Err(_) => return false,
+        Err(e) => {
+            debug_log(&format!("Failed to lock HotstringState: {}", e));
+            return false;
+        }
     };
 
     if let Ok(ctx) = guard.window.get_active() {
         discovery::set_window_context(&ctx.process_name, &ctx.title);
+    }
+    if vk_code == VK_RETURN || vk_code == VK_TAB {
+        log::info!(
+            "[Hotstring] on_key: Enter/Tab vk={} calling discovery::on_key (buffer len={})",
+            vk_code,
+            guard.buffer.len()
+        );
     }
     discovery::on_key(vk_code, ch);
 
@@ -194,6 +404,48 @@ fn on_key(state: Arc<Mutex<HotstringState>>, vk_code: u16, ch: Option<char>) -> 
         return false;
     }
 
+    if let Some(ref service) = guard.corpus_service {
+        let is_ctrl = windows_keyboard::is_ctrl_pressed();
+        let is_alt = windows_keyboard::is_alt_pressed();
+        let is_shift = windows_keyboard::is_shift_pressed();
+
+        // Check if Ctrl+Alt+Shift+S is pressed
+        let mut mods = service.config.shortcut_modifiers;
+        // Legacy upgrade: 0x11 | 0x12 | 0x10 = 0x13 (19)
+        if mods == 0x13 {
+            mods = 1 | 2 | 4;
+        }
+
+        let target_ctrl = (mods & 1) != 0;
+        let target_alt = (mods & 2) != 0;
+        let target_shift = (mods & 4) != 0;
+
+        let cur_state = format!("ctrl={} alt={} shift={} vk={}", is_ctrl, is_alt, is_shift, vk_code);
+        let tgt_state = format!("ctrl={} alt={} shift={} vk={}", target_ctrl, target_alt, target_shift, service.config.shortcut_key);
+        debug_log(&format!("Corpus Hook Check -> CURRENT: {} | TARGET: {}", cur_state, tgt_state));
+
+        if is_ctrl == target_ctrl && is_alt == target_alt && is_shift == target_shift {
+            if vk_code == service.config.shortcut_key {
+                debug_log("Corpus Hook MATCH! Spawning capture thread.");
+                
+                let window_title = if let Ok(ctx) = guard.window.get_active() {
+                    ctx.title
+                } else {
+                    "UnknownWindow".to_string()
+                };
+
+                let svc = service.clone();
+                std::thread::spawn(move || {
+                    if let Ok(rt) = tokio::runtime::Runtime::new() {
+                        let _ = rt.block_on(svc.try_capture(window_title));
+                    }
+                });
+                return true; // Consume hotkey
+            }
+        }
+    }
+
+
     // Backspace: remove from buffer
     if vk_code == VK_BACK {
         guard.buffer.pop();
@@ -216,7 +468,12 @@ fn on_key(state: Arc<Mutex<HotstringState>>, vk_code: u16, ch: Option<char>) -> 
         debug_log(&format!("key: vk={} ch={:?} buffer={:?}", vk_code, ch, guard.buffer));
 
         // Check for trigger match
+        let process_name = guard.window.get_active().map(|c| c.process_name.clone()).unwrap_or_default();
         if let Some((snippet, _)) = find_snippet(&guard.library, &guard.buffer, &guard.window) {
+            expansion_diagnostics::push(
+                "info",
+                format!("Expanded: trigger '{}' in process '{}'", snippet.trigger, process_name),
+            );
             debug_log(&format!("MATCH: trigger={} expanding", snippet.trigger));
             let trigger_len = snippet.trigger.len();
             let content = snippet.content.clone();
@@ -228,6 +485,7 @@ fn on_key(state: Arc<Mutex<HotstringState>>, vk_code: u16, ch: Option<char>) -> 
                 #[cfg(not(target_os = "windows"))]
                 let target_hwnd: Option<isize> = None;
 
+                let trigger = snippet.trigger.clone();
                 let (tx, rx) = std::sync::mpsc::channel();
                 variable_input::set_pending_from_hotstring(content, trigger_len, target_hwnd, tx);
                 drop(guard);
@@ -238,7 +496,7 @@ fn on_key(state: Arc<Mutex<HotstringState>>, vk_code: u16, ch: Option<char>) -> 
                         if let Some(hwnd) = target_hwnd {
                             crate::platform::windows_window::restore_foreground_window(hwnd);
                         }
-                        do_expand(state_clone, trigger_len, &expansion);
+                        do_expand(state_clone, trigger_len, &expansion, Some(&trigger));
                     }
                 });
                 return false;
@@ -254,13 +512,23 @@ fn on_key(state: Arc<Mutex<HotstringState>>, vk_code: u16, ch: Option<char>) -> 
                 current_clip.as_deref(),
                 &clip_history,
             );
+            let trigger = snippet.trigger.clone();
             drop(guard);
 
             let state_clone = state.clone();
             std::thread::spawn(move || {
                 crate::application::clipboard_history::suppress_for_duration(std::time::Duration::from_secs(2));
-                do_expand(state_clone, trigger_len, &expansion);
+                do_expand(state_clone, trigger_len, &expansion, Some(&trigger));
             });
+        } else {
+            expansion_diagnostics::push(
+                "debug",
+                format!(
+                    "No match for buffer suffix in process '{}' (buffer len={})",
+                    process_name,
+                    guard.buffer.len()
+                ),
+            );
         }
     } else {
         // Non-printable (space, enter, etc.) - clear buffer on word boundary
@@ -274,7 +542,17 @@ fn on_key(state: Arc<Mutex<HotstringState>>, vk_code: u16, ch: Option<char>) -> 
     false
 }
 
-fn do_expand(state: Arc<Mutex<HotstringState>>, trigger_len: usize, expansion: &str) {
+fn do_expand(
+    state: Arc<Mutex<HotstringState>>,
+    trigger_len: usize,
+    expansion: &str,
+    trigger: Option<&str>,
+) {
+    crate::application::expansion_stats::record_expansion(
+        trigger,
+        expansion.len(),
+        trigger_len,
+    );
     crate::application::clipboard_history::suppress_for_duration(std::time::Duration::from_secs(2));
     if let Ok(mut g) = state.lock() {
         g.buffer.clear();
@@ -313,7 +591,7 @@ fn expand_suggestion(state: Arc<Mutex<HotstringState>>, trigger_len: usize, cont
                 if let Some(hwnd) = target_hwnd {
                     crate::platform::windows_window::restore_foreground_window(hwnd);
                 }
-                do_expand(state, trigger_len, &expansion);
+                do_expand(state, trigger_len, &expansion, None);
             }
         });
         return;
@@ -328,7 +606,7 @@ fn expand_suggestion(state: Arc<Mutex<HotstringState>>, trigger_len: usize, cont
         .map(|e| e.content.clone())
         .collect();
     let expansion = template_processor::process(&content, current_clip.as_deref(), &clip_history);
-    std::thread::spawn(move || do_expand(state, trigger_len, &expansion));
+    std::thread::spawn(move || do_expand(state, trigger_len, &expansion, None));
 }
 
 fn find_snippet<'a>(
@@ -360,6 +638,15 @@ pub(crate) fn find_snippet_for_process<'a>(
                             .iter()
                             .any(|a| process.contains(&a.to_lowercase()))
                     {
+                        expansion_diagnostics::push(
+                            "warn",
+                            format!(
+                                "AppLock: trigger '{}' requires app in [{}], current process '{}'",
+                                snip.trigger,
+                                snip.app_lock,
+                                process_name
+                            ),
+                        );
                         continue;
                     }
                 }

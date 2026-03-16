@@ -1,20 +1,35 @@
-# AHK production scripts - excluded from this repo
-AHK_-_PROD-MAIN_STARTUP-SCRIPTZ/
+# Build artifacts
+**/target/
+**/dist/
+**/gen/
+**/node_modules/
+**/tauri-app/node_modules/
 
-# Rust
-/target/
-**/*.rs.bk
-
-# IDE
+# Caches and internal data
+**/.fastembed_cache/
+**/__pycache__/
 .idea/
 .vscode/
-*.swp
-*.swo
 
-# Environment and secrets
-.env
-.env.local
-.env.*.local
-
-# Logs
+# Logs and temporary files
 *.log
+*.txt
+*.bak
+*.tmp
+build_error.txt
+cargo_check.txt
+cargo_errors.txt
+compile_errors.txt
+test_output.txt
+
+# Duplicate/Review files
+*duplicates_review.json
+*merged_snippets_debug.json
+
+# Personal scripts and environment
+**/AHK_-_PROD-MAIN_STARTUP-SCRIPTZ/
+.env
+.env.*
+
+# Ignore other .gitignore files to keep root central
+**/.gitignore

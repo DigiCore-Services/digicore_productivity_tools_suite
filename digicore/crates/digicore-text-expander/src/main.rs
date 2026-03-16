@@ -2,9 +2,22 @@
 //!
 //! Cross-platform text expansion with egui management console.
 //! UI modules follow SRP (one tab per module); orchestration in App.
+//! Phase 0/1: StoragePort, WindowPort, AppState for framework-agnostic UI.
+//! Supports --gui=egui|tauri for dual/multi-GUI foundation.
 
-mod ui;
+pub mod ui {
+    #[cfg(feature = "gui-egui")]
+    pub mod egui;
 
+    #[cfg(feature = "gui-egui")]
+    pub use egui::{clipboard_history_tab, configuration_tab, library_tab, modals, script_library_tab};
+}
+
+use digicore_text_expander::cli::{parse_gui_from_args, GuiBackend};
+use digicore_text_expander::adapters::{EframeStorageAdapter, EguiWindowAdapter, RfdFileDialogAdapter, EguiTimerAdapter};
+// Re-export for ui modules; use for main
+pub use digicore_text_expander::application::app_state::{AppState, ClipViewContent, SnippetEditorMode, SnippetTestVarState, Tab};
+use digicore_text_expander::ports::{storage_keys, FileDialogPort, TimerPort, ViewportCommand, WindowLevel, WindowPort, StoragePort};
 use digicore_core::domain::ports::WindowContextPort;
 use digicore_core::domain::{LastModified, Snippet};
 use digicore_text_expander::application::discovery;
@@ -23,8 +36,16 @@ use digicore_text_expander::services::sync_service::{pull_sync, push_sync, SyncR
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::mpsc;
+use std::sync::Arc;
 
 fn main() -> eframe::Result<()> {
+    match parse_gui_from_args() {
+        GuiBackend::Egui => run_egui(),
+        GuiBackend::Tauri => run_tauri(),
+    }
+}
+
+fn run_egui() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([900.0, 600.0])
@@ -40,6 +61,12 @@ fn main() -> eframe::Result<()> {
         options,
         Box::new(|cc| Ok(Box::new(TextExpanderApp::new(cc)))),
     )
+}
+
+/// Tauri GUI entry point. Tauri app runs via tauri-app/.
+fn run_tauri() -> eframe::Result<()> {
+    eprintln!("Tauri GUI: use tauri-app. Run: cd digicore/tauri-app && npm run tauri dev");
+    std::process::exit(1);
 }
 
 /// True if the foreground window belongs to our app (avoids Ghost Suggestor on hover over our UI).
@@ -62,147 +89,32 @@ fn is_foreground_our_app() -> bool {
     false
 }
 
-/// Active tab index.
-#[derive(Clone, Copy, PartialEq)]
-enum Tab {
-    Library = 0,
-    Configuration = 1,
-    ClipboardHistory = 2,
-    ScriptLibrary = 3,
-}
-
-/// View Full Content modal source - determines which action buttons to show.
-#[derive(Clone)]
-enum ClipViewContent {
-    /// From Clipboard History - show "Promote to Snippet" and "Close"
-    ClipboardHistory { content: String },
-    /// From Snippet Library - show "Edit Snippet" and "Close" (already a snippet)
-    SnippetLibrary {
-        category: String,
-        snippet_idx: usize,
-        trigger: String,
-        content: String,
-        options: String,
-        snippet_category: String,
-        profile: String,
-        app_lock: String,
-        pinned: bool,
-    },
-}
-
-/// Main application state.
+/// Main application - thin UI binding over AppState (Phase 0/1).
+/// Holds framework-specific storage and file dialog adapters.
 struct TextExpanderApp {
-    library_path: String,
-    library: HashMap<String, Vec<Snippet>>,
-    categories: Vec<String>,
-    selected_category: Option<usize>,
-    status: String,
-    active_tab: Tab,
-
-    // Sync config (Configuration tab)
-    sync_url: String,
-    sync_password: String,
-    sync_status: SyncResult,
-    sync_rx: Option<mpsc::Receiver<(SyncResult, bool)>>, // (result, was_pull)
-
-    // Startup sync (F37): perform once on first load if sync configured
-    startup_sync_done: bool,
-
-    // F7: Global pause for expansion
-    expansion_paused: bool,
-
-    // Auto-load library once on startup (when path exists)
-    initial_load_attempted: bool,
-
-    // Ensure window shown on first frame (override persistence-restored minimized state)
-    window_visibility_ensured: bool,
-
-    // Ensure Ghost Follower viewport visible on first show (override persistence-restored minimized/background state)
-    ghost_follower_visibility_ensured: bool,
-
-    // Discovery (F60-F69)
-    discovery_enabled: bool,
-    discovery_threshold: u32,
-    discovery_lookback: u32,
-    discovery_min_len: usize,
-    discovery_max_len: usize,
-    discovery_excluded_apps: String,
-    discovery_excluded_window_titles: String,
-
-    // Ghost Suggestor (F43-F47)
-    ghost_suggestor_enabled: bool,
-    ghost_suggestor_debounce_ms: u64,
-    ghost_suggestor_display_secs: u64,
-    ghost_suggestor_offset_x: i32,
-    ghost_suggestor_offset_y: i32,
-
-    // Ghost Follower (F48-F59)
-    ghost_follower_enabled: bool,
-    ghost_follower_edge_right: bool,
-    ghost_follower_monitor_anchor: usize, // 0=Primary, 1=Secondary, 2=Current
-    ghost_follower_search: String,
-    ghost_follower_hover_preview: bool,
-    ghost_follower_collapse_delay_secs: u64,
-    clip_history_max_depth: usize,
-
-    // Templates (F16-F20): configurable date/time formats
-    template_date_format: String,
-    template_time_format: String,
-
-    // Snippet Editor (Add/Edit/Promote) - Library tab
-    snippet_editor_mode: Option<SnippetEditorMode>,
-    snippet_editor_trigger: String,
-    snippet_editor_content: String,
-    snippet_editor_options: String,
-    snippet_editor_category: String,
-    snippet_editor_profile: String,
-    snippet_editor_app_lock: String,
-    snippet_editor_pinned: bool,
-    snippet_editor_save_clicked: bool,
-    snippet_editor_modal_open: bool,
-    snippet_editor_template_selected: usize,
-
-    // Delete confirmation: (category, snippet_idx)
-    snippet_delete_confirm: Option<(String, usize)>,
-    snippet_delete_dialog_open: bool,
-
-    // Snippet Library search (AND multi-word filter)
-    library_search: String,
-
-    // View Full Content modal - source determines which buttons to show
-    clip_view_content: Option<ClipViewContent>,
-    clip_delete_confirm: Option<usize>,
-    clip_delete_dialog_open: bool,
-    clip_clear_confirm_open: bool,
-
-    // Script Library tab (F86): Phase 7 {run:} security + Global JavaScript Library
-    script_library_run_disabled: bool,
-    script_library_run_allowlist: String,
-    script_library_js_content: String,
-    script_library_loaded: bool,
-    // Plan 6.8.4: Python/Lua library sections (when py.enabled / lua.enabled)
-    script_library_py_content: String,
-    script_library_lua_content: String,
-
-    // Preview Expansion (Option A): test snippet output in Snippet Editor
-    snippet_test_result: Option<String>,
-    snippet_test_var_pending: Option<SnippetTestVarState>,
-    snippet_test_result_modal_open: bool,
-    snippet_test_var_modal_open: bool,
+    /// Framework-agnostic application state.
+    state: AppState,
+    /// Framework-specific persistence. EframeStorageAdapter for egui.
+    storage: EframeStorageAdapter,
+    /// File dialog for Load/Save/Browse. Arc allows sharing without borrowing app.
+    file_dialog: Arc<RfdFileDialogAdapter>,
 }
 
-/// State for in-window variable input when Preview Expansion has interactive vars.
-#[derive(Clone)]
-pub struct SnippetTestVarState {
-    pub content: String,
-    pub vars: Vec<template_processor::InteractiveVar>,
-    pub values: std::collections::HashMap<String, String>,
-    pub choice_indices: std::collections::HashMap<String, usize>,
-    pub checkbox_checked: std::collections::HashMap<String, bool>,
+impl std::ops::Deref for TextExpanderApp {
+    type Target = AppState;
+    fn deref(&self) -> &AppState {
+        &self.state
+    }
+}
+
+impl std::ops::DerefMut for TextExpanderApp {
+    fn deref_mut(&mut self) -> &mut AppState {
+        &mut self.state
+    }
 }
 
 /// Built-in snippet templates (Phase 8; AHK parity).
-const SNIPPET_TEMPLATES: &[(&str, &str)] = &[
+pub const SNIPPET_TEMPLATES: &[(&str, &str)] = &[
     ("(none)", ""),
     ("Email signature", "Best regards,\n{env:USERNAME}\n{env:USEREMAIL}"),
     ("Code block", "```\n\n```"),
@@ -214,47 +126,32 @@ const SNIPPET_TEMPLATES: &[(&str, &str)] = &[
     ("Placeholder", "[TODO: describe]"),
 ];
 
-/// Add new snippet or edit existing.
-#[derive(Clone)]
-enum SnippetEditorMode {
-    Add { category: String },
-    Edit { category: String, snippet_idx: usize },
-    /// Promote from clipboard - uses Edit Snippet modal with "Promote to Snippet" title.
-    Promote { category: String },
-}
-
 impl TextExpanderApp {
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        let storage = cc.storage;
+        let storage = EframeStorageAdapter::load_from(cc.storage);
         let library_path = storage
-            .and_then(|s| s.get_string("library_path"))
+            .get(storage_keys::LIBRARY_PATH)
             .unwrap_or_else(|| {
-                dirs::config_dir()
-                    .map(|p| p.join("DigiCore").join("text_expansion_library.json"))
-                    .and_then(|p| p.to_str().map(String::from))
-                    .unwrap_or_else(|| "text_expansion_library.json".to_string())
+                digicore_text_expander::ports::data_path_resolver::DataPathResolver::script_library_path()
+                    .to_string_lossy()
+                    .to_string()
             });
-        let sync_url = storage
-            .and_then(|s| s.get_string("sync_url"))
-            .unwrap_or_default();
+        let sync_url = storage.get(storage_keys::SYNC_URL).unwrap_or_default();
         let template_date_format = storage
-            .and_then(|s| s.get_string("template_date_format"))
+            .get(storage_keys::TEMPLATE_DATE_FORMAT)
             .unwrap_or_else(|| "%Y-%m-%d".to_string());
         let template_time_format = storage
-            .and_then(|s| s.get_string("template_time_format"))
+            .get(storage_keys::TEMPLATE_TIME_FORMAT)
             .unwrap_or_else(|| "%H:%M".to_string());
         let (run_disabled, run_allowlist) = storage
-            .and_then(|s| {
-                let d = s.get_string("script_library_run_disabled").map(|v| v == "true");
-                let a = s.get_string("script_library_run_allowlist").unwrap_or_default();
-                d.map(|d| (d, a))
-            })
+            .get(storage_keys::SCRIPT_LIBRARY_RUN_DISABLED)
+            .map(|v| (v == "true", storage.get(storage_keys::SCRIPT_LIBRARY_RUN_ALLOWLIST).unwrap_or_default()))
             .unwrap_or_else(|| {
                 let cfg = load_scripting_config();
                 (cfg.run.disabled, cfg.run.allowlist)
             });
         let ghost_suggestor_display_secs = storage
-            .and_then(|s| s.get_string("ghost_suggestor_display_secs"))
+            .get(storage_keys::GHOST_SUGGESTOR_DISPLAY_SECS)
             .and_then(|s| s.parse().ok())
             .unwrap_or(10u64);
         {
@@ -264,90 +161,44 @@ impl TextExpanderApp {
             set_scripting_config(cfg);
         }
 
+        let mut state = AppState::new();
+        state.library_path = library_path.clone();
+        state.sync_url = sync_url;
+        state.template_date_format = template_date_format;
+        state.template_time_format = template_time_format;
+        state.ghost_suggestor_display_secs = ghost_suggestor_display_secs;
+        state.script_library_run_disabled = run_disabled;
+        state.script_library_run_allowlist = run_allowlist;
+
         Self {
-            library_path: library_path.clone(),
-            library: HashMap::new(),
-            categories: Vec::new(),
-            selected_category: None,
-            status: "Ready".to_string(),
-            active_tab: Tab::Library,
-            sync_url,
-            sync_password: String::new(),
-            sync_status: SyncResult::Idle,
-            sync_rx: None,
-            startup_sync_done: false,
-            expansion_paused: false,
-            initial_load_attempted: false,
-            window_visibility_ensured: false,
-            ghost_follower_visibility_ensured: false,
-            discovery_enabled: false,
-            discovery_threshold: 2,
-            discovery_lookback: 60,
-            discovery_min_len: 3,
-            discovery_max_len: 50,
-            discovery_excluded_apps: String::new(),
-            discovery_excluded_window_titles: String::new(),
-            ghost_suggestor_enabled: true,
-            ghost_suggestor_debounce_ms: 50,
-            ghost_suggestor_display_secs,
-            ghost_suggestor_offset_x: 0,
-            ghost_suggestor_offset_y: 20,
-            ghost_follower_enabled: true,
-            ghost_follower_edge_right: true,
-            ghost_follower_monitor_anchor: 0,
-            ghost_follower_search: String::new(),
-            ghost_follower_hover_preview: true,
-            ghost_follower_collapse_delay_secs: 5,
-            clip_history_max_depth: 20,
-            template_date_format,
-            template_time_format,
-            snippet_editor_mode: None,
-            snippet_editor_trigger: String::new(),
-            snippet_editor_content: String::new(),
-            snippet_editor_options: "*:".to_string(),
-            snippet_editor_category: String::new(),
-            snippet_editor_profile: "Work".to_string(),
-            snippet_editor_app_lock: String::new(),
-            snippet_editor_pinned: false,
-            snippet_editor_save_clicked: false,
-            snippet_editor_modal_open: false,
-            snippet_editor_template_selected: 0,
-            snippet_delete_confirm: None,
-            snippet_delete_dialog_open: false,
-            library_search: String::new(),
-            clip_view_content: None,
-            clip_delete_confirm: None,
-            clip_delete_dialog_open: false,
-            clip_clear_confirm_open: false,
-            script_library_run_disabled: run_disabled,
-            script_library_run_allowlist: run_allowlist,
-            script_library_js_content: String::new(),
-            script_library_loaded: false,
-            script_library_py_content: String::new(),
-            script_library_lua_content: String::new(),
-            snippet_test_result: None,
-            snippet_test_var_pending: None,
-            snippet_test_result_modal_open: false,
-            snippet_test_var_modal_open: false,
+            state,
+            storage,
+            file_dialog: Arc::new(RfdFileDialogAdapter::new()),
         }
+    }
+
+    fn file_dialog(&self) -> Arc<dyn FileDialogPort> {
+        self.file_dialog.clone()
     }
 }
 
 impl eframe::App for TextExpanderApp {
-    fn save(&mut self, storage: &mut dyn eframe::Storage) {
-        storage.set_string("library_path", self.library_path.clone());
-        storage.set_string("sync_url", self.sync_url.clone());
-        storage.set_string("template_date_format", self.template_date_format.clone());
-        storage.set_string("template_time_format", self.template_time_format.clone());
-        storage.set_string(
-            "script_library_run_disabled",
-            self.script_library_run_disabled.to_string(),
-        );
-        storage.set_string("script_library_run_allowlist", self.script_library_run_allowlist.clone());
-        storage.set_string(
-            "ghost_suggestor_display_secs",
-            self.ghost_suggestor_display_secs.to_string(),
-        );
+    fn save(&mut self, eframe_storage: &mut dyn eframe::Storage) {
+        let library_path = self.library_path.clone();
+        let sync_url = self.sync_url.clone();
+        let template_date_format = self.template_date_format.clone();
+        let template_time_format = self.template_time_format.clone();
+        let script_library_run_disabled = self.script_library_run_disabled.to_string();
+        let script_library_run_allowlist = self.script_library_run_allowlist.clone();
+        let ghost_suggestor_display_secs = self.ghost_suggestor_display_secs.to_string();
+        self.storage.set(storage_keys::LIBRARY_PATH, &library_path);
+        self.storage.set(storage_keys::SYNC_URL, &sync_url);
+        self.storage.set(storage_keys::TEMPLATE_DATE_FORMAT, &template_date_format);
+        self.storage.set(storage_keys::TEMPLATE_TIME_FORMAT, &template_time_format);
+        self.storage.set(storage_keys::SCRIPT_LIBRARY_RUN_DISABLED, &script_library_run_disabled);
+        self.storage.set(storage_keys::SCRIPT_LIBRARY_RUN_ALLOWLIST, &script_library_run_allowlist);
+        self.storage.set(storage_keys::GHOST_SUGGESTOR_DISPLAY_SECS, &ghost_suggestor_display_secs);
+        self.storage.save_to_eframe(eframe_storage);
         // SE-23: Persist run config to scripting.json for template processor
         let mut cfg = get_scripting_config();
         cfg.run.disabled = self.script_library_run_disabled;
@@ -500,15 +351,7 @@ impl eframe::App for TextExpanderApp {
                 }
             };
             builder = builder.with_position(egui::pos2(pos_x, pos_y));
-            let pinned_with_idx: Vec<(Snippet, String, usize)> = pinned
-                .iter()
-                .filter_map(|(snip, cat)| {
-                    self.library
-                        .get(cat)
-                        .and_then(|v| v.iter().position(|s| s.trigger == snip.trigger))
-                        .map(|idx| (snip.clone(), cat.clone(), idx))
-                })
-                .collect();
+            let pinned_with_idx: Vec<(Snippet, String, usize)> = pinned;
             let clips_with_idx: Vec<(usize, clipboard_history::ClipEntry)> = clips
                 .iter()
                 .enumerate()
@@ -519,17 +362,17 @@ impl eframe::App for TextExpanderApp {
             let app_ptr = self as *mut TextExpanderApp;
             ctx.show_viewport_immediate(viewport_id, builder, move |ctx, _class| {
                 if ensure_visible {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(
-                        egui::WindowLevel::AlwaysOnTop,
-                    ));
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                    let window = EguiWindowAdapter::new(ctx);
+                    window.send_viewport_command("ghost_follower_ribbon", ViewportCommand::WindowLevel(WindowLevel::AlwaysOnTop));
+                    window.send_viewport_command("ghost_follower_ribbon", ViewportCommand::Visible(true));
+                    window.send_viewport_command("ghost_follower_ribbon", ViewportCommand::Minimized(false));
                 }
                 if !collapsed && ctx.input(|i| i.pointer.hover_pos().is_some()) {
                     ghost_follower::touch();
                 }
                 if collapsed && !ctx.input(|i| i.pointer.any_down() || i.pointer.hover_pos().is_some()) {
-                    ctx.request_repaint_after(std::time::Duration::from_millis(200));
+                    let timer = EguiTimerAdapter::new(ctx);
+                    timer.schedule_repaint_after(std::time::Duration::from_millis(200));
                 }
                 egui::CentralPanel::default().show(ctx, |ui| {
                     if collapsed {
@@ -771,11 +614,9 @@ impl eframe::App for TextExpanderApp {
         let show_ghost = ghost_suggestor::is_enabled()
             && ghost_suggestor::has_suggestions()
             && !is_foreground_our_app();
+        let window = EguiWindowAdapter::new(ctx);
         if !show_ghost {
-            ctx.send_viewport_cmd_to(
-                egui::ViewportId::from_hash_of("ghost_suggestor_overlay"),
-                egui::ViewportCommand::Close,
-            );
+            window.close_viewport("ghost_suggestor_overlay");
         }
         if show_ghost {
             if ghost_suggestor::should_auto_hide() {
@@ -803,12 +644,11 @@ impl eframe::App for TextExpanderApp {
                 }
                 let suggestions_clone = suggestions.clone();
                 ctx.show_viewport_immediate(viewport_id, builder, move |ctx, _class| {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(
-                        egui::WindowLevel::AlwaysOnTop,
-                    ));
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                    let window = EguiWindowAdapter::new(ctx);
+                    window.send_viewport_command("ghost_suggestor_overlay", ViewportCommand::WindowLevel(WindowLevel::AlwaysOnTop));
+                    window.send_viewport_command("ghost_suggestor_overlay", ViewportCommand::Visible(true));
+                    window.send_viewport_command("ghost_suggestor_overlay", ViewportCommand::Minimized(false));
+                    window.send_viewport_command("ghost_suggestor_overlay", ViewportCommand::Focus);
                     egui::CentralPanel::default().show(ctx, |ui| {
                         ui.heading("Suggestions (Tab to accept, Ctrl+Tab to cycle)");
                         ui.separator();
@@ -893,7 +733,7 @@ impl eframe::App for TextExpanderApp {
 
         // Preview Expansion modals (variable input, then result)
         if self.snippet_test_var_pending.is_some() && self.snippet_test_var_modal_open {
-            ui::modals::snippet_test_var_modal(self, ctx);
+            ui::modals::snippet_test_var_modal(self, ctx, self.file_dialog());
         }
         if self.snippet_test_result.is_some() && self.snippet_test_result_modal_open {
             ui::modals::snippet_test_result_modal(self, ctx);
@@ -917,7 +757,7 @@ impl eframe::App for TextExpanderApp {
 
         // F11: VariableInputModal for {var:}, {choice:} - always-on-top viewport
         if variable_input::has_viewport_modal() {
-            ui::modals::variable_input_viewport(ctx);
+            ui::modals::variable_input_viewport(ctx, self.file_dialog());
         }
 
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
@@ -968,7 +808,8 @@ impl eframe::App for TextExpanderApp {
                         self.selected_category = None;
                     }
                     ui.separator();
-                    for (i, cat) in self.categories.iter().enumerate() {
+                    let categories: Vec<_> = self.categories.iter().cloned().collect();
+                    for (i, cat) in categories.iter().enumerate() {
                         let selected = self.selected_category == Some(i);
                         if ui.selectable_label(selected, cat).clicked() {
                             self.selected_category = Some(i);
@@ -1044,15 +885,18 @@ impl TextExpanderApp {
             SnippetEditorMode::Edit { category: cat, snippet_idx } => {
                 let mut to_move: Option<(Snippet, String, String, usize)> = None;
                 let cat_owned = cat.clone();
+                let options = self.snippet_editor_options.trim().to_string();
+                let app_lock = self.snippet_editor_app_lock.trim().to_string();
+                let pinned = if self.snippet_editor_pinned { "true" } else { "false" }.to_string();
                 if let Some(snippets) = self.library.get_mut(&cat_owned) {
                     if let Some(snip) = snippets.get_mut(*snippet_idx) {
                         snip.trigger = trigger;
                         snip.content = content;
-                        snip.options = self.snippet_editor_options.trim().to_string();
+                        snip.options = options;
                         snip.category = category.clone();
                         snip.profile = profile;
-                        snip.app_lock = self.snippet_editor_app_lock.trim().to_string();
-                        snip.pinned = if self.snippet_editor_pinned { "true" } else { "false" }.to_string();
+                        snip.app_lock = app_lock;
+                        snip.pinned = pinned;
                         snip.last_modified = last_modified.clone();
                         if snip.category != cat_owned {
                             to_move = Some((snip.clone(), category.clone(), cat_owned, *snippet_idx));
@@ -1148,8 +992,18 @@ impl TextExpanderApp {
         }
         if is_listener_running() {
             update_library(self.library.clone());
-        } else if let Err(e) = start_listener(self.library.clone()) {
-            self.status = format!("Hotstring failed to start: {}", e);
+        } else {
+            use digicore_text_expander::adapters::corpus::{FileSystemCorpusStorageAdapter, OcrBaselineAdapter};
+            use digicore_text_expander::application::corpus_generator::CorpusService;
+            use digicore_core::domain::value_objects::CorpusConfig;
+            let config = CorpusConfig::default();
+            let storage = std::sync::Arc::new(FileSystemCorpusStorageAdapter::new(config.output_dir.clone()));
+            let baseline = std::sync::Arc::new(OcrBaselineAdapter::new(config.snapshot_dir.clone(), None));
+            let corpus_service = std::sync::Arc::new(CorpusService::new(config, storage, baseline));
+
+            if let Err(e) = start_listener(self.library.clone(), Some(corpus_service)) {
+                self.status = format!("Hotstring failed to start: {}", e);
+            }
         }
     }
 
@@ -1158,6 +1012,7 @@ impl TextExpanderApp {
             enabled: self.ghost_suggestor_enabled,
             debounce_ms: self.ghost_suggestor_debounce_ms,
             display_duration_secs: self.ghost_suggestor_display_secs,
+            snooze_duration_mins: 5,
             offset_x: self.ghost_suggestor_offset_x,
             offset_y: self.ghost_suggestor_offset_y,
         });

@@ -6,6 +6,19 @@ All notable changes to the DigiCore project.
 
 ### Added
 
+- **Tauri enhancements (2026-03-03):**
+  - Build script: `scripts/build.ps1` now uses `npm run tauri build` for full Tauri build (frontend + Rust + bundle)
+  - Native window decorations: `decorations: true`; custom TitleBar removed to avoid dual header
+  - SQLite: tauri-plugin-sql with categories/snippets schema; sync from JSON on Load/Save/startup
+  - Web Workers: Fuzzy search (Fuse.js) in worker; CommandPalette off main thread
+  - Rich notifications: Actionable toasts with "View Library" action
+  - Accessibility: ARIA labels, tab roles, prefers-reduced-motion, prefers-contrast
+  - [TAURI_USER_GUIDE.md](docs/digicore-text-expander/TAURI_USER_GUIDE.md) – Build, dev, SQLite sync, troubleshooting
+  - **FileDialogPort:** tauri-plugin-dialog; Browse button in Library tab for native file picker (JSON library path)
+  - **Phase 3 plugins:** tauri-plugin-prevent-default, positioner, persisted-scope, http
+  - **SQLite partial loading:** loadSnippetsPage() in sqliteLoad.ts for large libraries
+  - **Tests:** libraryUtils, sqliteSync, LibraryTab (Browse, formatLastModified, getCellValue)
+
 - **Ghost Suggestor enhancements (AHK parity+):**
   - Configurable display duration (sec, 0=no auto-hide) in Configuration tab
   - Create Snippet, Ignore, Cancel buttons on overlay

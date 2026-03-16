@@ -1,46 +1,102 @@
-# DigiCore Services
+# DigiCore Text Expander
 
-Cross-platform application ecosystem (Text Expander, Copy-to-Clipboard, Appearance) built with Rust, following Hexagonal architecture and SOLID principles.
+Cross-platform text expansion application built with Rust and Tauri. Migrated from AutoHotkey (AHK); AHK is legacy, Rust is the target.
 
-**Migration baseline:** This project refactors and migrates from AutoHotkey (AHK). AHK is the legacy source; Rust is the target. AHK will not be used going forward.
+**Stack:** Rust (digicore-core, digicore-text-expander) + Tauri 2 + React + Vite + TypeScript + Tailwind CSS.
 
-## Phase 0/1 Status
+---
 
-- [x] Workspace root
-- [x] digicore-core crate (domain, ports, JsonLibraryAdapter)
-- [x] CLI proof-of-concept
-- [x] digicore-text-expander: Scripting Engine ({js:}, {http:}), template processor, VariableInputModal
-- [x] egui GUI (Library, Configuration, Clipboard History, Script Library tabs)
-- [x] Clipboard History tab with right-click context menu (Copy, View Full Content, Delete, Promote to Snippet, Clear All)
-- [x] Modals: Promote to Snippet, Snippet Editor, Delete/Clear confirmations, View Full Content
+## Quick Start
 
-## Prerequisites
+### Prerequisites
 
-- [Rust](https://rustup.rs/) (install via `rustup` to get `cargo`)
+- [Rust](https://rustup.rs/) (cargo)
+- [Node.js](https://nodejs.org/) (npm)
+- Windows 10/11 (primary target)
 
-## Build
+### Build & Run
 
-```bash
-cargo build
+```powershell
+# From digicore directory
+cd digicore
+.\scripts\build.ps1 -Target Tauri          # Build (debug)
+.\scripts\build.ps1 -Target Tauri -Release  # Build (release)
+
+# Run in dev mode
+cd tauri-app
+npm run tauri dev
 ```
 
-## Run GUI (Text Expander)
+### Installer Output
 
-```bash
+After `npm run tauri build`, installers are in:
+
+- `digicore\target\release\bundle\msi\` – MSI installer
+- `digicore\target\release\bundle\nsis\` – NSIS setup (.exe)
+
+---
+
+## MSI vs NSIS Installers
+
+Tauri produces two Windows installer formats. Choose based on your needs:
+
+| Aspect | MSI | NSIS |
+|--------|-----|------|
+| **Format** | `.msi` (Windows Installer) | `.exe` (Nullsoft Scriptable Install System) |
+| **Build** | Windows only (requires WiX Toolset) | Cross-compile from Linux/macOS |
+| **Uninstall** | Via Settings → Apps → Installed apps | Via Add/Remove Programs (uninstall.exe) |
+| **Upgrades** | Native Windows Installer upgrade flow | Detects existing install, offers uninstall-first |
+| **Enterprise** | Often preferred (GPO, silent install) | Common for consumer apps |
+| **Size** | Typically similar | Typically similar |
+
+**Recommendation:** Use **MSI** for enterprise or when building on Windows. Use **NSIS** when cross-compiling from Linux/macOS.
+
+**Uninstall & Reinstall:** Both support standard Windows uninstall. Uninstall via Settings → Apps, then run the new installer. User data (`%APPDATA%\DigiCore`) persists across uninstall/reinstall.
+
+---
+
+## Key Features
+
+- **Text Expansion** – Trigger-based expansion with snippets, categories, profiles
+- **Discovery** – Detects repeated phrases; suggests Snooze, Ignore, or Promote to Snippet via in-app banner + toast
+- **Ghost Follower** – Pinned snippets sidebar (edge-anchored)
+- **Clipboard History** – Configurable depth, context menu (Copy, Promote, Delete)
+- **Scripting** – `{js:}`, `{http:}`, `{date}`, `{time}`, `{clipboard}`, `{var:}`, `{choice:}`, etc.
+- **Tray** – Runs in background; right-click tray icon for View Console, View Ghost Follower, Exit
+
+---
+
+## Project Structure
+
+```
+digicore/
+├── crates/
+│   ├── digicore-core/       # Domain, ports, adapters
+│   └── digicore-text-expander/  # Expansion engine, discovery, hotstring, Ghost Suggestor
+├── tauri-app/               # Tauri + React frontend
+│   ├── src/                 # React components, App.tsx
+│   └── src-tauri/           # Rust backend, lib.rs, api.rs
+├── docs/
+└── scripts/
+```
+
+---
+
+## Development
+
+```powershell
+# Tauri dev (hot reload)
+cd tauri-app
+npm run tauri dev
+
+# With logging
+$env:RUST_LOG="info"; npm run tauri dev
+
+# egui GUI (alternative)
 cargo run -p digicore-text-expander
 ```
 
-## Run CLI (proof-of-concept)
-
-```bash
-cargo run -p digicore-core --bin cli -- ..\AHK_-_PROD-MAIN_STARTUP-SCRIPTZ\ACTIVE-Prod-LIVE-Apps\Text-Expansion\text_expansion_library.json
-```
-
-Or from the workspace root:
-
-```powershell
-cargo run -p digicore-core --bin cli -- "C:\Users\pinea\Scripts\AHK_AutoHotKey\AHK_-_PROD-MAIN_STARTUP-SCRIPTZ\ACTIVE-Prod-LIVE-Apps\Text-Expansion\text_expansion_library.json"
-```
+---
 
 ## Testing
 
@@ -48,34 +104,27 @@ cargo run -p digicore-core --bin cli -- "C:\Users\pinea\Scripts\AHK_AutoHotKey\A
 cargo test --workspace
 ```
 
-**Test coverage (as of 2026-02-28):**
-
-| Crate | Unit Tests | Integration Tests | Status |
-|-------|------------|-------------------|--------|
-| digicore-core | 0 | 48 | Pass |
-| digicore-text-expander | 90 | 30 | Pass |
-
-**Recent test additions:** Clipboard history (`add_entry_with_metadata`, `update_config_max_depth_trims`, `update_config_disabled`, `suppress_for_duration_no_panic`, `delete_entry_at`, `clear_all`), `truncate_for_display` utils, doc-tests for utils. See [Implementation Plan](docs/digicore-text-expander/IMPLEMENTATION_PLAN.md).
-
-## Scripting Engine
-
-The Text Expander uses a port-based Scripting Engine (`ScriptEnginePort`, `HttpFetcherPort`) for `{js:...}` (Boa) and `{http:url|path}` (reqwest). Placeholders: `{date}`, `{time}`, `{clipboard}`, `{clip:N}`, `{env:VAR}`, `{var:}`, `{choice:}`, `{checkbox:}`, `{date_picker:}`, `{file_picker:}`.
-
-**Config:** `%APPDATA%/DigiCore/config/scripting.json` (HttpConfig, JsConfig, RunConfig). JS timeout, HTTP timeout, run allowlist configurable.
-
-**Recent (Section 11):** Script config externalization, ScriptEnginePort/HttpFetcherPort DI, ScriptContext builder, JS execution timeout, MockScriptEngine, run persistence. See [Dynamic Templates Plan](../AHK_-_PROD-MAIN_STARTUP-SCRIPTZ/features_new_and_updated/TE_Pro_DYNAMIC_TEMPLATES_IMPLEMENTATION_PLAN_2026-02-28.md) Section 11.8 for next remaining steps.
-
-## Clipboard History
-
-Real-time clipboard monitoring (F38-F42 parity). Configurable depth (5-100). Right-click context menu: Copy to Clipboard, View Full Content, Delete Item, Promote to Snippet, Clear All History. See [Clipboard History Guide](docs/digicore-text-expander/CLIPBOARD_HISTORY.md).
+---
 
 ## Documentation
 
-- [Scripting User Guide](docs/digicore-text-expander/SCRIPTING_USER_GUIDE.md) - JavaScript, DSL, HTTP, Run, Script Library
-- [Clipboard History](docs/digicore-text-expander/CLIPBOARD_HISTORY.md) - Clipboard History tab and context menu
-- [Implementation Plan](docs/digicore-text-expander/IMPLEMENTATION_PLAN.md) - Implementation status, testing details
-- [Changelog](CHANGELOG.md) - Recent changes and test status
+- [Tauri User Guide](docs/digicore-text-expander/TAURI_USER_GUIDE.md) – Build, dev, SQLite, features
+- [Scripting User Guide](docs/digicore-text-expander/SCRIPTING_USER_GUIDE.md) – JavaScript, HTTP, placeholders
+- [Clipboard History](docs/digicore-text-expander/CLIPBOARD_HISTORY.md) – Clipboard tab, context menu
+- [Implementation Plan](docs/digicore-text-expander/IMPLEMENTATION_PLAN.md) – Status, testing
+- [Tauri Implementation Status](docs/digicore-text-expander/TAURI_IMPLEMENTATION_STATUS.md) – Tauri features
+- [Changelog](CHANGELOG.md) – Recent changes
 
-## Structure
+---
 
-See `../AHK_-_PROD-MAIN_STARTUP-SCRIPTZ/features_new_and_updated/TE_Pro_REFACTOR_AND_MIGRATION_ANALYSIS_2026-02-28.md` Section 11 for full directory layout.
+## Configuration & Data
+
+- **Config:** `%APPDATA%\DigiCore\config\`
+- **Library:** Path configurable in app (default: `%APPDATA%\DigiCore\`)
+- **SQLite:** `digicore.db` (snippets sync)
+
+---
+
+## Version
+
+See `tauri.conf.json` and `package.json` for version. Bump version before releases for correct upgrade/uninstall behavior.

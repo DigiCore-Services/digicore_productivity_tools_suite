@@ -1,8 +1,9 @@
 # UI Framework Decoupling - Phase 0/1 Implementation Plan
 
-**Version:** 1.0  
+**Version:** 1.2  
 **Created:** 2026-02-28  
-**Status:** Implementation Plan  
+**Last Updated:** 2026-02-28  
+**Status:** Phase 0/1 Implemented; Migrated from Azul to Tauri (dual-binary: egui + Tauri)  
 **Product:** DigiCore Text Expander  
 **Architecture:** Hexagonal, Configuration-first, SOLID, SRP
 
@@ -10,12 +11,12 @@
 
 ## 1. Executive Summary
 
-This document defines **Phase 0/1** of the UI framework decoupling effort. The goal is to introduce framework-agnostic ports and adapters so that the GUI frontend can be swapped between egui, Tauri, Iced, Azul, etc. with minimal rewrite of core logic. Multiple GUI binaries can coexist via feature flags for side-by-side comparison and easy migration.
+This document defines **Phase 0/1** of the UI framework decoupling effort. The goal is to introduce framework-agnostic ports and adapters so that the GUI frontend can be swapped between egui, Tauri, Iced, etc. with minimal rewrite of core logic. Multiple GUI binaries can coexist via feature flags for side-by-side comparison and easy migration.
 
 **Key Outcomes:**
 - Core application logic and domain remain **framework-agnostic**
 - New UI frameworks require only **new adapters**, not core changes
-- **Feature flags** enable dual/tertiary binaries (e.g., `--gui=egui`, `--gui=azul`)
+- **Feature flags** enable dual/tertiary binaries (e.g., `--gui=egui`, `--gui=tauri`)
 - Hexagonal architecture preserved; Configuration-first and SOLID/SRP principles enforced
 
 ---
@@ -29,11 +30,11 @@ This document defines **Phase 0/1** of the UI framework decoupling effort. The g
 | `main.rs` | `eframe::run_native`, `eframe::App`, `eframe::Storage`, `eframe::CreationContext` | Entry, app lifecycle, persistence |
 | `main.rs` | `egui::Context`, `egui::ViewportBuilder`, `egui::ViewportCommand`, `egui::ViewportId` | Viewports (Ghost Follower, Ghost Suggestor, Variable Input) |
 | `main.rs` | `egui::TopBottomPanel`, `egui::SidePanel`, `egui::CentralPanel`, `egui::menu::bar` | Layout, menu bar |
-| `ui/library_tab.rs` | `egui::Ui`, `egui::ScrollArea`, `egui::TextEdit`, `egui::ComboBox`, `egui::Button`, `egui::Sense` | Library tab rendering |
-| `ui/configuration_tab.rs` | `egui::Ui`, `egui::TextEdit`, `egui::DragValue`, `egui::Button` | Configuration tab |
-| `ui/clipboard_history_tab.rs` | `egui::Ui`, `egui::ScrollArea`, `egui::Sense` | Clipboard history tab |
-| `ui/script_library_tab.rs` | `egui::Ui`, `egui::TextEdit`, `egui::ScrollArea`, `egui::TextStyle` | Script library tab |
-| `ui/modals.rs` | `egui::Window`, `egui::TextEdit`, `egui::ComboBox`, `egui::Checkbox`, `egui::ViewportBuilder` | Modals, variable input viewport |
+| `ui/egui/library_tab.rs` | `egui::Ui`, `egui::ScrollArea`, `egui::TextEdit`, `egui::ComboBox`, `egui::Button`, `egui::Sense` | Library tab rendering |
+| `ui/egui/configuration_tab.rs` | `egui::Ui`, `egui::TextEdit`, `egui::DragValue`, `egui::Button` | Configuration tab |
+| `ui/egui/clipboard_history_tab.rs` | `egui::Ui`, `egui::ScrollArea`, `egui::Sense` | Clipboard history tab |
+| `ui/egui/script_library_tab.rs` | `egui::Ui`, `egui::TextEdit`, `egui::ScrollArea`, `egui::TextStyle` | Script library tab |
+| `ui/egui/modals.rs` | `egui::Window`, `egui::TextEdit`, `egui::ComboBox`, `egui::Checkbox`, `egui::ViewportBuilder` | Modals, variable input viewport |
 | `application/variable_input.rs` | `egui::CentralPanel`, `egui::TextEdit`, `egui::ComboBox`, `egui::Checkbox` | Variable input UI |
 | `application/js_syntax_highlighter.rs` | `egui::text::{LayoutJob, TextFormat}`, `egui::Color32`, `egui::FontId` | Syntax highlighting |
 
@@ -75,7 +76,7 @@ This document defines **Phase 0/1** of the UI framework decoupling effort. The g
 
 ### 3.1 StoragePort
 
-**Purpose:** Key-value persistence for user preferences (library_path, sync_url, template formats, etc.). Framework-agnostic; eframe uses its built-in storage; Azul/Tauri use JSON file.
+**Purpose:** Key-value persistence for user preferences (library_path, sync_url, template formats, etc.). Framework-agnostic; eframe uses its built-in storage; Tauri uses JSON file.
 
 **Location:** `digicore-core/src/domain/ports/storage.rs` (or `digicore-text-expander/src/ports` if app-specific)
 
@@ -89,7 +90,7 @@ pub trait StoragePort: Send + Sync {
 
 **Adapters:**
 - `EframeStorageAdapter` – wraps `eframe::Storage` (current behavior)
-- `JsonFileStorageAdapter` – JSON file in `%APPDATA%/DigiCore/text_expander_state.json` (for Azul, Iced, etc.)
+- `JsonFileStorageAdapter` – JSON file in `%APPDATA%/DigiCore/text_expander_state.json` (for Tauri, Iced, etc.)
 
 **Storage keys (enum or constants):** `library_path`, `sync_url`, `template_date_format`, `template_time_format`, `script_library_run_disabled`, `script_library_run_allowlist`, `ghost_suggestor_display_secs`
 
@@ -138,18 +139,17 @@ pub enum WindowLevel {
 }
 ```
 
-**Note:** egui's immediate-mode `show_viewport_immediate` is callback-based. Azul/Iced use different models. The port should abstract the *intent* (show window, close, position) rather than the exact API. Adapters translate to framework-specific calls.
+**Note:** egui's immediate-mode `show_viewport_immediate` is callback-based. Tauri/Iced use different models. The port should abstract the *intent* (show window, close, position) rather than the exact API. Adapters translate to framework-specific calls.
 
 **Adapters:**
 - `EguiWindowAdapter` – uses `ctx.show_viewport_immediate`, `ViewportBuilder`, `ViewportCommand`
-- `AzulWindowAdapter` – (future) Azul windows
-- `TauriWindowAdapter` – (future) Tauri secondary windows
+- `TauriWindowAdapter` – Tauri WebviewWindow for secondary windows (Ghost Follower, Ghost Suggestor, Variable Input)
 
 ---
 
 ### 3.3 UIPort (Framework-Agnostic UI Primitives)
 
-**Purpose:** Abstract common UI operations so that tab/modal logic can be expressed in framework-agnostic terms. This is the most challenging port because egui is immediate-mode while Azul/Iced are retained/reactive.
+**Purpose:** Abstract common UI operations so that tab/modal logic can be expressed in framework-agnostic terms. This is the most challenging port because egui is immediate-mode while Tauri/Iced are retained/reactive.
 
 **Strategy:** Two approaches:
 
@@ -164,7 +164,7 @@ Tabs receive `&mut AppState` and a **framework-specific** `Ui`/`Context`. The *l
 **Option B – Full UIPort (Future Phase):**  
 Define traits like `UiContext`, `Button`, `TextEdit`, `ComboBox` that each framework implements. Higher effort; may not fit immediate-mode well.
 
-**Recommendation:** Use **Option A** for Phase 0/1. Extract AppState, introduce StoragePort and WindowPort. Tabs remain `ui_egui/library_tab.rs` etc. When adding Azul, create `ui_azul/library_tab.rs` that uses Azul widgets but reads/writes the same AppState.
+**Recommendation:** Use **Option A** for Phase 0/1. Extract AppState, introduce StoragePort and WindowPort. Tabs remain `ui_egui/library_tab.rs` etc. When adding Tauri, create `ui_tauri/` with web frontend (HTML/CSS/JS) that invokes Tauri commands; backend uses same AppState.
 
 ---
 
@@ -179,7 +179,7 @@ pub trait FileDialogPort: Send + Sync {
 }
 ```
 
-**Adapters:** `RfdFileDialogAdapter` (current), `AzulFileDialogAdapter` (future). Low priority for Phase 0/1; rfd is already framework-agnostic.
+**Adapters:** `RfdFileDialogAdapter` (current), `TauriFileDialogAdapter` (future). Low priority for Phase 0/1; rfd is already framework-agnostic.
 
 ---
 
@@ -193,7 +193,7 @@ pub trait TimerPort: Send + Sync {
 }
 ```
 
-**Adapters:** `EguiTimerAdapter` (wraps `ctx.request_repaint_after`), `AzulTimerAdapter` (Azul's `Timer`). Can be deferred to Phase 2.
+**Adapters:** `EguiTimerAdapter` (wraps `ctx.request_repaint_after`), `TauriTimerAdapter` (channel or Tauri async). Can be deferred to Phase 2.
 
 ---
 
@@ -218,7 +218,7 @@ Move all state that does not depend on egui into a new `AppState` struct in `app
 
 ```rust
 /// Framework-agnostic application state.
-/// Used by all UI adapters (egui, Azul, Iced, Tauri).
+/// Used by all UI adapters (egui, Tauri, Iced).
 pub struct AppState {
     // Library
     pub library_path: String,
@@ -268,9 +268,8 @@ Or, for full decoupling, `TextExpanderApp` is renamed to `EguiApp` and only exis
 [features]
 default = ["gui-egui"]
 gui-egui = ["eframe", "egui"]
-gui-azul = []   # Future
+gui-tauri = []  # Tauri web UI (tauri-app)
 gui-iced = []   # Future
-gui-tauri = []  # Future
 ```
 
 ### 5.2 Binary Layout
@@ -278,10 +277,10 @@ gui-tauri = []  # Future
 | Binary | Feature | Purpose |
 |--------|---------|---------|
 | `digicore-text-expander` | `gui-egui` (default) | Current egui app |
-| `digicore-text-expander-azul` | `gui-azul` | Azul app (future) |
+| `digicore-text-expander-tauri` | `gui-tauri` | Tauri app (tauri-app/) |
 | `digicore-text-expander-iced` | `gui-iced` | Iced app (future) |
 
-Or single binary with `--gui=egui|azul|iced`:
+Or single binary with `--gui=egui|tauri|iced`:
 
 ```rust
 fn main() {
@@ -292,7 +291,7 @@ fn main() {
 
     match gui.as_str() {
         "egui" => run_egui(),
-        "azul" => run_azul(),
+        "tauri" => run_tauri(),
         _ => run_egui(),
     }
 }
@@ -328,9 +327,9 @@ digicore-text-expander/
         clipboard_history_tab.rs
         script_library_tab.rs
         modals.rs
-      azul/                    # cfg(feature = "gui-azul") - future
+      tauri/                   # cfg(feature = "gui-tauri") - web frontend in tauri-app/
         mod.rs
-        app.rs
+        app.rs                 # Tauri integration points (backend in src-tauri)
         ...
 ```
 
@@ -348,7 +347,7 @@ digicore-text-expander/
 | 0.4 | Define `WindowPort` trait (simplified: create_viewport, close_viewport, send_command) | M | `window.rs` |
 | 0.5 | Implement `EguiWindowAdapter` that holds `egui::Context` and translates port calls to egui | M | `adapters/window/egui_window.rs` |
 | 0.6 | Extract `AppState` from `TextExpanderApp` into `application/app_state.rs` | L | `app_state.rs`, `TextExpanderApp { state }` |
-| 0.7 | Add Cargo features `gui-egui`, `gui-azul` (stub) | S | Cargo.toml |
+| 0.7 | Add Cargo features `gui-egui`, `gui-tauri` (stub) | S | Cargo.toml |
 
 ### Phase 1: Wire and Validate
 
@@ -357,7 +356,7 @@ digicore-text-expander/
 | 1.1 | Inject `StoragePort` and `WindowPort` into `TextExpanderApp` (or `EguiApp`) via constructor | S | DI in main |
 | 1.2 | Refactor viewport logic (Ghost Follower, Ghost Suggestor, Variable Input) to use `WindowPort` where possible | M | main.rs, modals.rs |
 | 1.3 | Move `variable_input::render_viewport_modal` behind `#[cfg(feature = "gui-egui")]`; keep state in `variable_input` | S | variable_input.rs |
-| 1.4 | Add `JsonFileStorageAdapter` for non-eframe runtimes (used when `gui-azul` etc.) | M | `adapters/storage/json_file_storage.rs` |
+| 1.4 | Add `JsonFileStorageAdapter` for non-eframe runtimes (used when `gui-tauri` etc.) | M | `adapters/storage/json_file_storage.rs` |
 | 1.5 | Document port contracts and adapter responsibilities | S | This doc, inline docs |
 | 1.6 | Run full test suite; manual smoke test | S | CI green |
 
@@ -367,9 +366,9 @@ digicore-text-expander/
 |------|------|
 | 2.1 | Introduce `FileDialogPort` if needed |
 | 2.2 | Introduce `TimerPort` for debounce/repaint |
-| 2.3 | Implement Azul adapter when framework stabilizes |
-| 2.4 | Create `ui/azul/` with Azul-specific tabs/modals |
-| 2.5 | Add `--gui=egui|azul` CLI flag for dual-binary testing |
+| 2.3 | Implement Tauri adapters (TauriStorageAdapter, TauriWindowAdapter, TauriTimerAdapter) |
+| 2.4 | Create `ui/tauri/` with integration points; web frontend in tauri-app/ |
+| 2.5 | Add `--gui=egui|tauri` CLI flag for dual-binary testing |
 
 ---
 
@@ -405,7 +404,7 @@ digicore-text-expander/
             +--------------+
 ```
 
-- **Domain** has no knowledge of egui, eframe, Azul, etc.
+- **Domain** has no knowledge of egui, eframe, Tauri, etc.
 - **Ports** define interfaces; **Adapters** implement them for specific frameworks.
 - **UI layer** (egui tabs, modals) depends on Ports and AppState, not on framework internals beyond the adapter boundary.
 
@@ -437,7 +436,7 @@ digicore-text-expander/
 | Risk | Mitigation |
 |------|------------|
 | Over-abstraction of UI (UIPort too complex) | Use Option A: minimal UIPort; keep tab rendering framework-specific |
-| WindowPort doesn't fit Azul/Iced model | Design port around *intent* (show, close, position); adapters handle framework quirks |
+| WindowPort doesn't fit Tauri/Iced model | Design port around *intent* (show, close, position); adapters handle framework quirks |
 | AppState extraction breaks existing behavior | Incremental extraction; run tests after each step |
 | Feature flags increase build complexity | Default = egui; other features opt-in; single default binary for users |
 
@@ -445,18 +444,168 @@ digicore-text-expander/
 
 ## 11. Success Criteria
 
-- [ ] All persistence goes through `StoragePort`; no direct `eframe::Storage` in domain/application
-- [ ] `AppState` is fully extracted and framework-agnostic
-- [ ] `WindowPort` abstracts viewport create/close/command; Ghost Follower, Ghost Suggestor, Variable Input use it
-- [ ] Feature `gui-egui` builds and runs identically to current behavior
-- [ ] Feature `gui-azul` (stub) compiles; no runtime yet
-- [ ] All existing tests pass
-- [ ] Documentation updated (this plan, migration proposal)
+- [x] All persistence goes through `StoragePort`; no direct `eframe::Storage` in domain/application
+- [x] `AppState` is fully extracted and framework-agnostic
+- [x] `WindowPort` abstracts viewport close/command; Ghost Follower, Ghost Suggestor use it (show_viewport deferred)
+- [x] Feature `gui-egui` builds and runs identically to current behavior
+- [x] Feature `gui-tauri` (stub) compiles; Tauri app in tauri-app/
+- [x] StoragePort unit tests (JsonFileStorageAdapter)
+- [x] All existing tests pass (ghost_follower test_start_stop: added #[serial] for robustness)
+- [x] Documentation updated (this plan)
 
 ---
 
-## 12. References
+## 12. DECISION REQUIRED: WindowPort show_viewport
 
-- [EGUI_TO_AZUL_MIGRATION_PROPOSAL.md](./EGUI_TO_AZUL_MIGRATION_PROPOSAL.md)
-- [IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md)
+**Status:** Deferred in Phase 0/1.
+
+**Issue:** egui's `show_viewport_immediate` is callback-based and receives `(ctx, class)` each frame. The render closure is `FnMut` and is invoked by the framework. Abstracting this into a generic `WindowPort::show_viewport(descriptor, render: FnMut() -> Result)` is non-trivial because:
+- The render callback needs framework context (egui::Context) to draw
+- Tauri/Iced use different models (web/MVU)
+
+**Options:**
+- **A)** Keep show_viewport framework-specific; only abstract close and send_command (current Phase 0 approach)
+- **B)** Define `WindowPort::show_viewport` with a context parameter: `fn show_viewport<Ctx>(&self, ctx: &Ctx, descriptor, render)` - adapter receives framework context each frame
+- **C)** Use a "viewport builder" pattern: adapter returns a handle; caller invokes render with the handle each frame
+
+**Recommendation:** Option A for Phase 0/1. Revisit when implementing Tauri adapter.
+
+---
+
+## 13. Post Phase 0/1 Next Steps
+
+**Status:** In progress.
+
+### Completed
+
+| Item | Status |
+|------|--------|
+| ghost_follower test_start_stop | Added `#[serial]` to `tests/ghost_follower_tests.rs` for robustness (shared static state) |
+| TauriStorageAdapter | Implemented via `JsonFileStorageAdapter` type alias; `adapters/storage/tauri_storage.rs` |
+| TauriWindowAdapter | Stub in `adapters/window/tauri_window.rs`; no-op close_viewport/send_viewport_command |
+| ui/tauri/ | Placeholder in `ui/tauri/mod.rs`; web frontend in tauri-app/ |
+| --gui=egui\|tauri CLI | `cli::parse_gui_from_args()`, `GuiBackend` enum; main dispatches to egui or tauri |
+| CLI unit tests | `tests/cli_tests.rs` for parse_gui_from_args |
+| FileDialogPort | RfdFileDialogAdapter, utils::parse_file_filter, with_file_filters |
+| TimerPort | EguiTimerAdapter for Ghost Follower debounce |
+| gui-egui optional | eframe/egui optional; main.rs requires gui-egui; main_tauri.rs for gui-tauri |
+| main_tauri binary | `src/main_tauri.rs`; runs Tauri app when gui-tauri enabled |
+| ui/egui restructure | Tabs and modals moved to `ui/egui/`; re-exported via `ui::` for main |
+| tauri_stub | `tauri_stub::run_tauri_app()` in lib; main_tauri invokes tauri-app |
+| ui/tauri/app.rs | Integration points documentation for Tauri (web frontend in tauri-app/) |
+
+### Completed (Tauri Migration)
+
+| Item | Description |
+|------|-------------|
+| TauriWindowAdapter | Shared viewport state (close/command requests); framework-agnostic |
+| TauriTimerAdapter | Channel-based repaint scheduling; TauriTimerContext for app integration |
+| ui/tauri | Minimal stub; web UI in tauri-app/src |
+| tauri-app/ | Full Tauri project structure (src-tauri, src, tauri.conf.json) |
+| TauriAppConfig | AppState, TauriStorageAdapter, RfdFileDialogAdapter, viewport/timer adapters |
+
+### Completed (Tauri Frontend - 2026-03-02)
+
+| Item | Description |
+|------|-------------|
+| Tauri commands | load_library, save_library, get_app_state, save_settings, get_ui_prefs, save_ui_prefs |
+| Library tab | Load, Save, search, full columns (Profile, Category, Trigger, Content Preview, AppLock, Options, Last Modified), sortable, draggable column reorder, persist last tab + column order, row shading |
+| Storage keys | UI_LAST_TAB, UI_COLUMN_ORDER |
+
+### Completed (Tauri Snippet CRUD - 2026-03-02)
+
+| Item | Description |
+|------|-------------|
+| Tauri Snippet Editor modal | Add/Edit; trigger, profile, options, category, content, appLock, pinned |
+| Tauri Add/Edit/Delete | add_snippet, update_snippet, delete_snippet commands; Actions column |
+| AppState add_snippet, update_snippet, delete_snippet | Framework-agnostic methods |
+
+### Pending
+
+| Item | Description |
+|------|-------------|
+| Tauri Configuration tab | Templates, Sync, Discovery, Ghost Suggestor, Ghost Follower, Clipboard config |
+| Tauri Clipboard History tab | List, context menu, Promote, View Full, Delete, Clear All |
+| Tauri Script Library tab | {run:} security, allowlist, global JS editor |
+| Tauri secondary windows | Ghost Follower, Ghost Suggestor, Variable Input as WebviewWindow |
+
+### Directory Structure (current)
+
+```
+digicore/
+  crates/
+    digicore-text-expander/src/
+      cli.rs                # parse_gui_from_args, GuiBackend
+      tauri_stub.rs         # run_tauri_app() stub (gui-tauri)
+      ports/
+      adapters/
+        storage/
+          tauri_storage.rs   # TauriStorageAdapter = JsonFileStorageAdapter
+        window/
+          tauri_window.rs    # TauriWindowAdapter
+        timer/
+          tauri_timer.rs     # TauriTimerAdapter
+      ui/
+        egui/               # gui-egui: tabs and modals
+        tauri/              # gui-tauri: integration points (web UI in tauri-app/)
+          mod.rs
+          app.rs
+  tauri-app/                # Tauri application
+    src/                    # Web frontend (HTML, CSS, JS)
+    src-tauri/              # Rust backend (Tauri commands)
+```
+
+### Run Commands
+
+| Command | Result |
+|---------|--------|
+| `cargo run -p digicore-text-expander` | Runs egui (default) |
+| `cargo run -p digicore-text-expander -- --gui=egui` | Runs egui |
+| `cargo run -p digicore-text-expander -- --gui=tauri` | Egui binary: prints "Tauri GUI: use tauri-app. Run: cd tauri-app && npm run tauri dev" and exits 1 |
+| `cd digicore/tauri-app && npm run tauri dev` | Runs Tauri app (web UI) |
+| `cargo run -p digicore-text-expander --bin digicore-text-expander-tauri --no-default-features --features gui-tauri` | Runs Tauri binary (invokes tauri-app or shows instructions) |
+
+---
+
+## 14. References
+
+- [TAURI_USER_GUIDE.md](./TAURI_USER_GUIDE.md) - **Build, dev, SQLite sync, troubleshooting**
+- [TAURI_IMPLEMENTATION_STATUS.md](./TAURI_IMPLEMENTATION_STATUS.md) - Tauri feature status
+- [IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md) - **Parity matrix, Tauri roadmap, key decisions**
+- [TAURI_MIGRATION_PLAN.md](./TAURI_MIGRATION_PLAN.md)
+- [EGUI_TO_TAURI_MIGRATION_NOTES.md](./EGUI_TO_TAURI_MIGRATION_NOTES.md)
 - [DigiCore Hexagonal Architecture](../../crates/digicore-core/)
+
+---
+
+## Appendix A: Tauri Migration Summary
+
+**Last Updated:** 2026-03-02  
+**Purpose:** Brief summary of the migration from Azul to Tauri.
+
+### Decision
+
+Azul was replaced with Tauri due to:
+- **Stability:** Tauri is production-ready; Azul is alpha with Windows build issues.
+- **Maturity:** Tauri has a large ecosystem; Azul has crates.io objc2/codegen blockers.
+- **Multi-OS:** Tauri supports Windows, Linux, macOS out of the box.
+- **Mobile:** Tauri has a mobile roadmap for future tablet/phone support.
+
+### Migration Status
+
+| Component | Status |
+|-----------|--------|
+| gui-azul -> gui-tauri | Feature flag renamed |
+| AzulStorageAdapter -> TauriStorageAdapter | JsonFileStorageAdapter type alias |
+| AzulWindowAdapter -> TauriWindowAdapter | Shared viewport state |
+| AzulTimerAdapter -> TauriTimerAdapter | Channel-based |
+| ui/azul -> ui/tauri | Minimal stub; web UI in tauri-app/ |
+| tauri-app/ | Created with src-tauri, tauri.conf.json |
+| main_azul -> main_tauri | Binary renamed |
+
+### Run Commands
+
+- **egui:** `cargo run -p digicore-text-expander`
+- **Tauri:** `cd digicore/tauri-app && npm run tauri dev`
+
+See [TAURI_MIGRATION_PLAN.md](./TAURI_MIGRATION_PLAN.md) for full details.

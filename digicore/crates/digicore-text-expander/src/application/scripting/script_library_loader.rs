@@ -1,17 +1,14 @@
 //! Script library loader (SE-17): Load global_library.js from config paths.
 //!
-//! Reads library_path or library_paths from JsConfig, resolves against DigiCore config root,
+//! Reads library_path or library_paths from JsConfig, resolves against com.digicore.text-expander config root,
 //! concatenates content, and calls set_global_library.
 
 use super::boa_engine::set_global_library;
 use super::config::get_config;
-use std::path::Path;
 
-/// DigiCore config root (e.g. %APPDATA%/DigiCore).
+/// DigiCore config root (e.g. %APPDATA%/com.digicore.text-expander).
 fn digicore_config_root() -> std::path::PathBuf {
-    dirs::config_dir()
-        .unwrap_or_else(|| Path::new(".").into())
-        .join("DigiCore")
+    crate::ports::data_path_resolver::DataPathResolver::root()
 }
 
 /// Load script libraries from config and apply via set_global_library.

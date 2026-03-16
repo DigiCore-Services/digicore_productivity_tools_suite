@@ -1,0 +1,93 @@
+   Compiling digicore-text-expander v0.1.0 (C:\Users\pinea\Scripts\AHK_AutoHotKey\digicore\crates\digicore-text-expander)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.32s
+     Running tests\ocr_regression_tests.rs (C:\Users\pinea\Scripts\AHK_AutoHotKey\digicore\target\debug\deps\ocr_regression_tests-680a56068f94ad62.exe)
+
+running 2 tests
+test test_edge_cases ... ok
+
+=========== processing: Example10_Plain-Text_c7d7413737.png ===========
+
+thread 'run_ocr_on_all_samples' (3640) panicked at C:\Users\pinea\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\insta-1.46.3\src\env.rs:27:37:
+Error building config from "C:\\Users\\pinea\\Scripts\\AHK_AutoHotKey\\digicore": invalid value for env var 'INSTA_UPDATE'
+stack backtrace:
+   0: std::panicking::panic_handler
+             at /rustc/01f6ddf7588f42ae2d7eb0a2f21d44e8e96674cf/library\std\src\panicking.rs:689
+   1: core::panicking::panic_fmt
+             at /rustc/01f6ddf7588f42ae2d7eb0a2f21d44e8e96674cf/library\core\src\panicking.rs:80
+   2: insta::env::get_tool_config::closure$0::closure$0
+             at C:\Users\pinea\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\insta-1.46.3\src\env.rs:27
+   3: enum2$<core::result::Result<insta::env::ToolConfig,enum2$<insta::env::Error> > >::unwrap_or_else<insta::env::ToolConfig,enum2$<insta::env::Error>,insta::env::get_tool_config::closure$0::closure_env$0>
+             at /rustc/01f6ddf7588f42ae2d7eb0a2f21d44e8e96674cf\library\core\src\result.rs:1622
+   4: insta::env::get_tool_config::closure$0
+             at C:\Users\pinea\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\insta-1.46.3\src\env.rs:27
+   5: enum2$<alloc::collections::btree::map::entry::Entry<std::path::PathBuf,alloc::sync::Arc<insta::env::ToolConfig,alloc::alloc::Global>,alloc::alloc::Global> >::or_insert_with<std::path::PathBuf,alloc::sync::Arc<insta::env::ToolConfig,alloc::alloc::Global>,al
+             at /rustc/01f6ddf7588f42ae2d7eb0a2f21d44e8e96674cf\library\alloc\src\collections\btree\map\entry.rs:187
+   6: insta::env::get_tool_config
+             at C:\Users\pinea\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\insta-1.46.3\src\env.rs:25
+   7: insta::runtime::SnapshotAssertionContext::prepare
+             at C:\Users\pinea\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\insta-1.46.3\src\runtime.rs:325
+   8: insta::runtime::assert_snapshot
+             at C:\Users\pinea\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\insta-1.46.3\src\runtime.rs:855
+   9: ocr_regression_tests::run_ocr_on_all_samples::async_block$0
+             at .\tests\ocr_regression_tests.rs:79
+  10: core::future::future::impl$1::poll<ref_mut$<dyn$<core::future::future::Future<assoc$<Output,tuple$<> > > > > >
+             at /rustc/01f6ddf7588f42ae2d7eb0a2f21d44e8e96674cf\library\core\src\future\future.rs:133
+  11: core::future::future::impl$1::poll<ref_mut$<core::pin::Pin<ref_mut$<dyn$<core::future::future::Future<assoc$<Output,tuple$<> > > > > > > >
+             at /rustc/01f6ddf7588f42ae2d7eb0a2f21d44e8e96674cf\library\core\src\future\future.rs:133
+  12: tokio::runtime::scheduler::current_thread::impl$9::block_on::closure$0::closure$0::closure$0<core::pin::Pin<ref_mut$<core::pin::Pin<ref_mut$<dyn$<core::future::future::Future<assoc$<Output,tuple$<> > > > > > > > >
+             at C:\Users\pinea\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.49.0\src\runtime\scheduler\current_thread\mod.rs:753
+  13: tokio::task::coop::with_budget
+             at C:\Users\pinea\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.49.0\src\task\coop\mod.rs:167
+  14: tokio::task::coop::budget
+             at C:\Users\pinea\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.49.0\src\task\coop\mod.rs:133
+  15: tokio::runtime::scheduler::current_thread::impl$9::block_on::closure$0::closure$0<core::pin::Pin<ref_mut$<core::pin::Pin<ref_mut$<dyn$<core::future::future::Future<assoc$<Output,tuple$<> > > > > > > > >
+             at C:\Users\pinea\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.49.0\src\runtime\scheduler\current_thread\mod.rs:753
+  16: tokio::runtime::scheduler::current_thread::Context::enter<enum2$<core::task::poll::Poll<tuple$<> > >,tokio::runtime::scheduler::current_thread::impl$9::block_on::closure$0::closure_env$0<core::pin::Pin<ref_mut$<core::pin::Pin<ref_mut$<dyn$<core::future::fu
+             at C:\Users\pinea\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.49.0\src\runtime\scheduler\current_thread\mod.rs:442
+  17: tokio::runtime::scheduler::current_thread::impl$9::block_on::closure$0<core::pin::Pin<ref_mut$<core::pin::Pin<ref_mut$<dyn$<core::future::future::Future<assoc$<Output,tuple$<> > > > > > > > >
+             at C:\Users\pinea\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.49.0\src\runtime\scheduler\current_thread\mod.rs:752
+  18: tokio::runtime::scheduler::current_thread::impl$9::enter::closure$0<tokio::runtime::scheduler::current_thread::impl$9::block_on::closure_env$0<core::pin::Pin<ref_mut$<core::pin::Pin<ref_mut$<dyn$<core::future::future::Future<assoc$<Output,tuple$<> > > > > 
+             at C:\Users\pinea\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.49.0\src\runtime\scheduler\current_thread\mod.rs:840
+  19: tokio::runtime::context::scoped::Scoped<enum2$<tokio::runtime::scheduler::Context> >::set<enum2$<tokio::runtime::scheduler::Context>,tokio::runtime::scheduler::current_thread::impl$9::enter::closure_env$0<tokio::runtime::scheduler::current_thread::impl$9::
+             at C:\Users\pinea\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.49.0\src\runtime\context\scoped.rs:40
+  20: tokio::runtime::context::set_scheduler::closure$0<tuple$<alloc::boxed::Box<tokio::runtime::scheduler::current_thread::Core,alloc::alloc::Global>,enum2$<core::option::Option<tuple$<> > > >,tokio::runtime::scheduler::current_thread::impl$9::enter::closure_en
+             at C:\Users\pinea\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.49.0\src\runtime\context.rs:176
+  21: std::thread::local::LocalKey<tokio::runtime::context::Context>::try_with<tokio::runtime::context::Context,tokio::runtime::context::set_scheduler::closure_env$0<tuple$<alloc::boxed::Box<tokio::runtime::scheduler::current_thread::Core,alloc::alloc::Global>,e
+             at /rustc/01f6ddf7588f42ae2d7eb0a2f21d44e8e96674cf\library\std\src\thread\local.rs:513
+  22: std::thread::local::LocalKey<tokio::runtime::context::Context>::with<tokio::runtime::context::Context,tokio::runtime::context::set_scheduler::closure_env$0<tuple$<alloc::boxed::Box<tokio::runtime::scheduler::current_thread::Core,alloc::alloc::Global>,enum2
+             at /rustc/01f6ddf7588f42ae2d7eb0a2f21d44e8e96674cf\library\std\src\thread\local.rs:477
+  23: tokio::runtime::context::set_scheduler<tuple$<alloc::boxed::Box<tokio::runtime::scheduler::current_thread::Core,alloc::alloc::Global>,enum2$<core::option::Option<tuple$<> > > >,tokio::runtime::scheduler::current_thread::impl$9::enter::closure_env$0<tokio::
+             at C:\Users\pinea\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.49.0\src\runtime\context.rs:176
+  24: tokio::runtime::scheduler::current_thread::CoreGuard::enter<tokio::runtime::scheduler::current_thread::impl$9::block_on::closure_env$0<core::pin::Pin<ref_mut$<core::pin::Pin<ref_mut$<dyn$<core::future::future::Future<assoc$<Output,tuple$<> > > > > > > > >,
+             at C:\Users\pinea\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.49.0\src\runtime\scheduler\current_thread\mod.rs:840
+  25: tokio::runtime::scheduler::current_thread::CoreGuard::block_on<core::pin::Pin<ref_mut$<core::pin::Pin<ref_mut$<dyn$<core::future::future::Future<assoc$<Output,tuple$<> > > > > > > > >
+             at C:\Users\pinea\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.49.0\src\runtime\scheduler\current_thread\mod.rs:740
+  26: tokio::runtime::scheduler::current_thread::impl$0::block_on::closure$0<core::pin::Pin<ref_mut$<dyn$<core::future::future::Future<assoc$<Output,tuple$<> > > > > > >
+             at C:\Users\pinea\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.49.0\src\runtime\scheduler\current_thread\mod.rs:200
+  27: tokio::runtime::context::runtime::enter_runtime<tokio::runtime::scheduler::current_thread::impl$0::block_on::closure_env$0<core::pin::Pin<ref_mut$<dyn$<core::future::future::Future<assoc$<Output,tuple$<> > > > > > >,tuple$<> >
+             at C:\Users\pinea\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.49.0\src\runtime\context\runtime.rs:65
+  28: tokio::runtime::scheduler::current_thread::CurrentThread::block_on<core::pin::Pin<ref_mut$<dyn$<core::future::future::Future<assoc$<Output,tuple$<> > > > > > >
+             at C:\Users\pinea\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.49.0\src\runtime\scheduler\current_thread\mod.rs:188
+  29: tokio::runtime::runtime::Runtime::block_on_inner<core::pin::Pin<ref_mut$<dyn$<core::future::future::Future<assoc$<Output,tuple$<> > > > > > >
+             at C:\Users\pinea\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.49.0\src\runtime\runtime.rs:368
+  30: tokio::runtime::runtime::Runtime::block_on<core::pin::Pin<ref_mut$<dyn$<core::future::future::Future<assoc$<Output,tuple$<> > > > > > >
+             at C:\Users\pinea\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tokio-1.49.0\src\runtime\runtime.rs:342
+  31: ocr_regression_tests::run_ocr_on_all_samples
+             at .\tests\ocr_regression_tests.rs:113
+  32: ocr_regression_tests::run_ocr_on_all_samples::closure$0
+             at .\tests\ocr_regression_tests.rs:35
+  33: core::ops::function::FnOnce::call_once<ocr_regression_tests::run_ocr_on_all_samples::closure_env$0,tuple$<> >
+             at /rustc/01f6ddf7588f42ae2d7eb0a2f21d44e8e96674cf\library\core\src\ops\function.rs:250
+  34: core::ops::function::FnOnce::call_once
+             at /rustc/01f6ddf7588f42ae2d7eb0a2f21d44e8e96674cf/library\core\src\ops\function.rs:250
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+test run_ocr_on_all_samples ... FAILED
+
+failures:
+
+failures:
+    run_ocr_on_all_samples
+
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.41s
+
+error: test failed, to rerun pass `--test ocr_regression_tests`

@@ -10,11 +10,13 @@ use super::lua_executor::execute_lua;
 use super::py_executor::execute_py;
 use super::run_executor::execute_run;
 use super::script_context_builder::build_from_template_config;
+use super::weather_lookup::resolve_weather_placeholder;
 use super::get_registry;
+use std::collections::HashMap;
 use std::time::Instant;
 
-/// Registered script-type prefixes: js, http, run, dsl, py, lua (SE-25, SE-26, SE-27).
-pub const SCRIPT_TYPE_PREFIXES: &[&str] = &["js", "http", "run", "dsl", "py", "lua"];
+/// Registered script-type prefixes: js, http, run, dsl, py, lua, weather.
+pub const SCRIPT_TYPE_PREFIXES: &[&str] = &["js", "http", "run", "dsl", "py", "lua", "weather"];
 
 /// Check if content has a balanced tag for the given prefix (e.g. "js" -> "{js:...}").
 pub fn find_tag_for_prefix<'a>(s: &'a str, prefix: &str) -> Option<(&'a str, usize)> {
@@ -107,6 +109,27 @@ pub fn dispatch(
             }
             Some(result)
         }
+        "weather" => {
+            let resolved_inner = resolve_user_vars_in_inner(inner, user_vars);
+            Some(resolve_weather_placeholder(
+                &resolved_inner,
+                registry.http_fetcher.as_ref(),
+            ))
+        }
         _ => None,
     }
+}
+
+fn resolve_user_vars_in_inner(
+    inner: &str,
+    user_vars: Option<&HashMap<String, String>>,
+) -> String {
+    let Some(user_vars) = user_vars else {
+        return inner.to_string();
+    };
+    let mut out = inner.to_string();
+    for (tag, value) in user_vars {
+        out = out.replace(tag, value);
+    }
+    out
 }

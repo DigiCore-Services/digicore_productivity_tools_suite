@@ -41,16 +41,71 @@ struct ClipboardHistoryState {
 static CLIP_STATE: Mutex<Option<Arc<Mutex<ClipboardHistoryState>>>> = Mutex::new(None);
 static CLIP_ENABLED: AtomicBool = AtomicBool::new(false);
 static CLIP_THREAD: Mutex<Option<thread::JoinHandle<()>>> = Mutex::new(None);
+type EntryObserver = Arc<dyn Fn(&ClipEntry) + Send + Sync>;
+static ENTRY_OBSERVER: Mutex<Option<EntryObserver>> = Mutex::new(None);
+
+pub fn set_entry_observer(observer: Option<EntryObserver>) {
+    if let Ok(mut guard) = ENTRY_OBSERVER.lock() {
+        *guard = observer;
+    }
+}
 
 /// Start clipboard history monitoring (F38).
 /// On Windows: uses WM_CLIPBOARDUPDATE listener (AHK parity - captures App/Window Title).
 /// On other platforms: uses poll loop.
+/// Seeds with current clipboard content on startup so existing content is visible.
 pub fn start(config: ClipboardHistoryConfig) {
     CLIP_ENABLED.store(config.enabled, Ordering::SeqCst);
+    #[allow(unused_mut)]
+    let mut entries = Vec::new();
+    #[allow(unused_mut)]
+    let mut last_content = None;
+
+    #[cfg(not(test))]
+    if config.enabled {
+        // Seed from current clipboard. Retry once after short delay (clipboard may not be ready at startup).
+        for attempt in 0..2 {
+            if attempt > 0 {
+                std::thread::sleep(std::time::Duration::from_millis(150));
+            }
+            if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                match clipboard.get_text() {
+                    Ok(text) => {
+                        if !text.is_empty() && !text.chars().all(|c| c.is_whitespace()) {
+                            let len = text.len();
+                            entries.push(ClipEntry {
+                                content: text.clone(),
+                                process_name: String::new(),
+                                window_title: String::new(),
+                                timestamp: Instant::now(),
+                            });
+                            last_content = Some(text);
+                            log::info!(
+                                "[ClipboardHistory] seeded from current clipboard: {} chars (attempt {})",
+                                len,
+                                attempt + 1
+                            );
+                            break;
+                        } else if attempt == 1 {
+                            log::info!("[ClipboardHistory] clipboard empty or whitespace-only after retry");
+                        }
+                    }
+                    Err(e) => {
+                        if attempt == 1 {
+                            log::warn!("[ClipboardHistory] failed to read clipboard for seed: {}", e);
+                        }
+                    }
+                }
+            } else if attempt == 1 {
+                log::warn!("[ClipboardHistory] failed to create Clipboard for seed");
+            }
+        }
+    }
+
     *CLIP_STATE.lock().unwrap() = Some(Arc::new(Mutex::new(ClipboardHistoryState {
         config: config.clone(),
-        entries: Vec::new(),
-        last_content: None,
+        entries,
+        last_content,
     })));
 
     if config.enabled {
@@ -124,7 +179,7 @@ fn add_entry_inner(
     process_name: String,
     window_title: String,
 ) {
-    if state.entries.first().map(|e| e.content.as_str()) == Some(content.as_str()) {
+    if content != "[Image]" && state.entries.first().map(|e| e.content.as_str()) == Some(content.as_str()) {
         return;
     }
     state.entries.insert(
@@ -136,6 +191,13 @@ fn add_entry_inner(
             timestamp: Instant::now(),
         },
     );
+    if let Ok(guard) = ENTRY_OBSERVER.lock() {
+        if let Some(cb) = guard.as_ref() {
+            if let Some(inserted) = state.entries.first() {
+                cb(inserted);
+            }
+        }
+    }
     while state.entries.len() > state.config.max_depth {
         state.entries.pop();
     }
@@ -160,7 +222,7 @@ pub fn add_entry(content: String, process_name: &str, window_title: &str) {
         Ok(s) => s,
         Err(_) => return,
     };
-    if s.last_content.as_ref() == Some(&content) {
+    if content != "[Image]" && s.last_content.as_ref() == Some(&content) {
         return;
     }
     s.last_content = Some(content.clone());

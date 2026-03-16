@@ -70,9 +70,18 @@ struct DiscoveryState {
 
 static DISCOVERY_STATE: Mutex<Option<Arc<Mutex<DiscoveryState>>>> = Mutex::new(None);
 static DISCOVERY_ENABLED: AtomicBool = AtomicBool::new(false);
+static IGNORED_PHRASES: std::sync::LazyLock<Mutex<std::collections::HashSet<String>>> =
+    std::sync::LazyLock::new(|| Mutex::new(std::collections::HashSet::new()));
 
 /// Start discovery with given config. Call before or after hotstring starts.
 pub fn start(config: DiscoveryConfig) {
+    log::info!(
+        "[Discovery] start: threshold={} lookback={} min_len={} max_len={}",
+        config.threshold,
+        config.lookback_minutes,
+        config.min_phrase_len,
+        config.max_phrase_len
+    );
     DISCOVERY_ENABLED.store(true, Ordering::SeqCst);
     *DISCOVERY_STATE.lock().unwrap() = Some(Arc::new(Mutex::new(DiscoveryState {
         config,
@@ -142,6 +151,10 @@ pub fn on_key(vk_code: u16, ch: Option<char>) {
     }
 
     if vk_code == VK_RETURN || vk_code == VK_TAB {
+        log::info!(
+            "[Discovery] on_key: Enter/Tab - harvesting buffer len={}",
+            s.buffer.len()
+        );
         debug_log(&format!("discovery: enter/tab - harvesting phrase buffer={:?}", s.buffer));
         harvest_and_analyze(&mut s);
         s.buffer.clear();
@@ -163,6 +176,12 @@ fn harvest_and_analyze(s: &mut DiscoveryState) {
         s.buffer, phrase, phrase.len(), s.config.min_phrase_len, s.config.max_phrase_len
     ));
     if phrase.len() < s.config.min_phrase_len || phrase.len() > s.config.max_phrase_len {
+        log::info!(
+            "[Discovery] harvest: SKIP phrase len {} (min={} max={})",
+            phrase.len(),
+            s.config.min_phrase_len,
+            s.config.max_phrase_len
+        );
         debug_log(&format!("discovery: skip phrase (len out of range)"));
         return;
     }
@@ -191,14 +210,41 @@ fn harvest_and_analyze(s: &mut DiscoveryState) {
         .filter(|e| e.phrase == phrase)
         .count() as u32;
 
+    log::info!(
+        "[Discovery] harvest: phrase len={} count={} threshold={}",
+        phrase.len(),
+        count,
+        s.config.threshold
+    );
     debug_log(&format!(
         "discovery: phrase={:?} count={} threshold={}",
         phrase, count, s.config.threshold
     ));
 
     if count >= s.config.threshold {
+        if is_ignored(&phrase) {
+            log::info!("[Discovery] harvest: SKIP ignored phrase len={}", phrase.len());
+            debug_log(&format!("discovery: skip phrase (ignored) phrase={:?}", phrase));
+            return;
+        }
+        log::info!("[Discovery] SUGGEST triggered: phrase len={} count={}", phrase.len(), count);
         debug_log(&format!("discovery: SUGGEST phrase={:?} count={}", phrase, count));
         suggest_phrase(&phrase, count);
+    }
+}
+
+fn is_ignored(phrase: &str) -> bool {
+    if let Ok(g) = IGNORED_PHRASES.lock() {
+        g.contains(phrase)
+    } else {
+        false
+    }
+}
+
+/// Add phrase to ignore list (user clicked Ignore). Prevents future suggestions.
+pub fn add_ignored_phrase(phrase: &str) {
+    if let Ok(mut g) = IGNORED_PHRASES.lock() {
+        g.insert(phrase.to_string());
     }
 }
 
@@ -231,27 +277,16 @@ where
 
 fn suggest_phrase(phrase: &str, count: u32) {
     *LAST_SUGGESTION.lock().unwrap() = Some((phrase.to_string(), count));
-    show_toast(phrase, count);
+    log::info!("[Discovery] suggest_phrase: calling callback for phrase len={}", phrase.len());
+    // Commented out: Windows toast (egui-style pop-up). Tauri Ghost Suggestor overlay is used instead.
+    // show_toast(phrase, count);
     if let Ok(cb) = SUGGESTION_CALLBACK.lock() {
         if let Some(ref f) = *cb {
             f(phrase, count);
+            log::info!("[Discovery] suggest_phrase: callback invoked OK");
+        } else {
+            log::warn!("[Discovery] suggest_phrase: NO callback set (Discovery not wired to Ghost Suggestor?)");
         }
-    }
-}
-
-/// Show Windows toast in lower-right corner (AHK-style pop-up).
-fn show_toast(phrase: &str, count: u32) {
-    use winrt_toast_reborn::{Text, Toast, ToastManager};
-    let body = format!("Add \"{}\" as snippet? (typed {}x)", phrase, count);
-    debug_log(&format!("discovery: show_toast phrase={:?}", phrase));
-    let manager = ToastManager::new(ToastManager::POWERSHELL_AUM_ID);
-    let mut toast = Toast::new();
-    toast
-        .text1("DigiCore Discovery")
-        .text2(Text::new(&body));
-    match manager.show(&toast) {
-        Ok(()) => debug_log("discovery: toast shown OK"),
-        Err(e) => debug_log(&format!("discovery: toast FAILED: {:?}", e)),
     }
 }
 

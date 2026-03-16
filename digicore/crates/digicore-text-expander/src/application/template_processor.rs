@@ -645,6 +645,71 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
+    fn test_weather_placeholder_with_user_vars() {
+        use crate::application::scripting::{
+            set_registry, BoaScriptEngine, MockHttpFetcher, ScriptingRegistry,
+        };
+        use std::sync::Arc;
+
+        let geocode_url =
+            "https://geocoding-api.open-meteo.com/v1/search?name=Tokyo&count=8&language=en&format=json";
+        let forecast_url =
+            "https://api.open-meteo.com/v1/forecast?latitude=35.6762&longitude=139.6503&current_weather=true";
+
+        let mock_http = MockHttpFetcher::new();
+        mock_http.expect(
+            geocode_url,
+            None,
+            r#"{
+              "results": [
+                {
+                  "name": "Tokyo",
+                  "country": "Japan",
+                  "country_code": "JP",
+                  "admin1": "Tokyo",
+                  "latitude": 35.6762,
+                  "longitude": 139.6503
+                }
+              ]
+            }"#,
+        );
+        mock_http.expect(
+            forecast_url,
+            None,
+            r#"{
+              "current_weather": {
+                "time": "2026-03-06T01:30",
+                "temperature": 20.5,
+                "windspeed": 3.2,
+                "winddirection": 70,
+                "is_day": 1,
+                "weathercode": 1
+              }
+            }"#,
+        );
+
+        set_registry(ScriptingRegistry {
+            engine: Arc::new(BoaScriptEngine::new()),
+            http_fetcher: Arc::new(mock_http),
+        });
+
+        let mut user_vars = std::collections::HashMap::new();
+        user_vars.insert("{var:City}".to_string(), "Tokyo".to_string());
+        user_vars.insert("{var:Country}".to_string(), "JP".to_string());
+        user_vars.insert("{var:State}".to_string(), "Tokyo".to_string());
+        let out = process_with_user_vars(
+            "Weather now: {weather:city={var:City}|country={var:Country}|state={var:State}|format=temperature}",
+            None,
+            &[],
+            Some(&user_vars),
+        );
+        assert_eq!(out, "Weather now: 20.5");
+
+        set_registry(ScriptingRegistry::default());
+    }
+
+    #[test]
     fn test_collect_interactive_vars_checkbox_datepicker_filepicker() {
         let vars = collect_interactive_vars(
             "Options: {checkbox:Include?|-SkipNoCache} Date: {date_picker:When} File: {file_picker:Path}",

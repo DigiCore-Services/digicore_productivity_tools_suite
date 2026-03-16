@@ -9,31 +9,6 @@ use std::collections::HashMap;
 use std::sync::mpsc::Sender;
 use std::sync::Mutex;
 
-/// Parse file filter string "Name (*.ext1;*.ext2)" -> (name, extensions).
-/// Returns None for "All Files (*.*)" or invalid format.
-fn parse_file_filter(s: &str) -> Option<(String, Vec<String>)> {
-    let s = s.trim();
-    let paren = s.find('(')?;
-    let name = s[..paren].trim().to_string();
-    let rest = s[paren..].trim_start_matches('(').trim_end_matches(')');
-    let exts: Vec<String> = rest
-        .split(';')
-        .filter_map(|p| {
-            let p = p.trim().trim_start_matches('*');
-            if p.is_empty() || p == "." {
-                Some("*".to_string())
-            } else {
-                Some(p.trim_start_matches('.').to_string())
-            }
-        })
-        .collect();
-    if exts.is_empty() {
-        None
-    } else {
-        Some((name, exts))
-    }
-}
-
 /// Result when user dismisses the variable input viewport.
 pub enum ViewportModalResult {
     Ok,
@@ -71,8 +46,34 @@ pub fn has_viewport_modal() -> bool {
     }
 }
 
+/// Get viewport modal state for display (e.g. Tauri frontend). Does not consume.
+pub fn get_viewport_modal_display() -> Option<(
+    String,
+    Vec<template_processor::InteractiveVar>,
+    HashMap<String, String>,
+    HashMap<String, usize>,
+    HashMap<String, bool>,
+)> {
+    if let Ok(g) = VIEWPORT_MODAL.lock() {
+        if let Some(ref s) = *g {
+            return Some((
+                s.content.clone(),
+                s.vars.clone(),
+                s.values.clone(),
+                s.choice_indices.clone(),
+                s.checkbox_checked.clone(),
+            ));
+        }
+    }
+    None
+}
+
 /// Render the variable input UI and return result when OK/Cancel clicked.
-pub fn render_viewport_modal(ctx: &egui::Context) -> Option<ViewportModalResult> {
+#[cfg(feature = "gui-egui")]
+pub fn render_viewport_modal(
+    ctx: &egui::Context,
+    file_dialog: std::sync::Arc<dyn crate::ports::FileDialogPort>,
+) -> Option<ViewportModalResult> {
     use egui;
     use std::cell::RefCell;
     let result = RefCell::new(None);
@@ -139,15 +140,11 @@ pub fn render_viewport_modal(ctx: &egui::Context) -> Option<ViewportModalResult>
                                         .hint_text("Path to file"),
                                 );
                                 if ui.button("Browse...").clicked() {
-                                    let mut dialog = rfd::FileDialog::new();
-                                    if let Some((name, exts)) = parse_file_filter(filter_str) {
-                                        if !exts.is_empty() && exts[0] != "*" {
-                                            dialog = dialog.add_filter(name, &exts);
+                                    crate::utils::with_file_filters(filter_str, |filters| {
+                                        if let Some(path) = file_dialog.pick_file(filters) {
+                                            *val = path.display().to_string();
                                         }
-                                    }
-                                    if let Some(path) = dialog.pick_file() {
-                                        *val = path.display().to_string();
-                                    }
+                                    });
                                 }
                             });
                         }
@@ -211,7 +208,7 @@ pub fn process_viewport_result(result: ViewportModalResult) {
                 if let Some(ref tx) = state.response_tx {
                     let _ = tx.send((Some(processed), hwnd));
                 } else {
-                    crate::drivers::hotstring::request_expansion(processed);
+                    crate::drivers::hotstring::request_expansion_with_target(processed, hwnd);
                 }
             }
             ViewportModalResult::Cancel => {
@@ -238,6 +235,24 @@ static PENDING: Mutex<Option<PendingExpansion>> = Mutex::new(None);
 
 /// Set pending expansion from Ghost Follower (no response channel).
 pub fn set_pending_from_ghost(content: String) {
+    set_pending_from_ghost_with_target(content, None);
+}
+
+/// Set pending expansion from Ghost Follower with target window for insert-at-cursor.
+#[cfg(target_os = "windows")]
+pub fn set_pending_from_ghost_with_target(content: String, target_hwnd: Option<isize>) {
+    if let Ok(mut g) = PENDING.lock() {
+        *g = Some(PendingExpansion {
+            content,
+            trigger_len: None,
+            target_hwnd,
+            response_tx: None,
+        });
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn set_pending_from_ghost_with_target(content: String, _target_hwnd: Option<isize>) {
     if let Ok(mut g) = PENDING.lock() {
         *g = Some(PendingExpansion {
             content,

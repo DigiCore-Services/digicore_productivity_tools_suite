@@ -1,0 +1,8 @@
+| Cash |  | and | Equivalents Chee "usted |  |  |  |  |  |
+|---|---|---|---|---|---|---|---|---|
+| la. | Petty Cash |  |  | 125489.12 |  | 345 | 21000 | 5254012 |
+| lb. | Checking |  |  | 45 | 10. |  | SIO_oo | 45 loco |
+| Ic_ | Savings |  |  |  | 915.00 |  | 1000 | 5 15.00 |
+| Accounts |  |  | Receivable CMCk |  |  |  |  |  |
+|  |  |  |  | sss.uo_oo |  |  | 110.00 | 140 12 |
+| 2b. | Atbwance |  |  | 2527000 |  |  |  | 25 27000 |

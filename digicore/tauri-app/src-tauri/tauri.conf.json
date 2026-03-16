@@ -1,0 +1,79 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "DigiCore Text Expander",
+  "version": "0.1.0",
+  "identifier": "com.digicore.text-expander",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:5173",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "trayIcon": {
+      "id": "default",
+      "iconPath": "icons/icon.ico",
+      "iconAsTemplate": false,
+      "menuOnLeftClick": false
+    },
+    "windows": [
+      {
+        "title": "DigiCore Text Expander",
+        "width": 900,
+        "height": 600,
+        "minWidth": 600,
+        "minHeight": 400,
+        "transparent": false,
+        "decorations": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' asset: https://* http://localhost:* http://127.0.0.1:*;",
+      "assetProtocol": {
+        "enable": true,
+        "scope": [
+          "**"
+        ]
+      }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "createUpdaterArtifacts": true,
+    "icon": [
+      "icons/icon.ico"
+    ],
+    "windows": {
+      "certificateThumbprint": null,
+      "digestAlgorithm": "sha256",
+      "timestampUrl": ""
+    },
+    "longDescription": "DigiCore Text Expander - Cross-platform text expansion",
+    "shortDescription": "Text Expander",
+    "resources": [],
+    "category": "Utility"
+  },
+  "plugins": {
+    "sql": {
+      "preload": [
+        "sqlite:digicore.db"
+      ]
+    },
+    "shell": {
+      "open": true
+    },
+    "updater": {
+      "pubkey": "REPLACE_WITH_PUBKEY_FROM_tauri_signer_generate",
+      "endpoints": []
+    },
+    "deep-link": {
+      "desktop": {
+        "schemes": [
+          "digicore"
+        ]
+      }
+    }
+  }
+}
