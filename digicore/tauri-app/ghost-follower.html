@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en" class="pill-mode">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ghost Follower</title>
+  <style>
+    * { box-sizing: border-box; }
+    :root {
+      --gf-body-bg: #ffffff;
+      --gf-card-bg: rgba(255, 255, 255, 0.96);
+      --gf-input-bg: #ffffff;
+      --gf-list-bg: #ffffff;
+      --gf-hover-bg: #f3f4f6;
+      --gf-ctx-bg: #ffffff;
+      --gf-text: #1f2937;
+      --gf-text-muted: #6b7280;
+      --gf-border: #e5e7eb;
+      --gf-pill-label: #374151;
+      --gf-pill-close: #9ca3af;
+      --gf-pill-bg: rgba(255, 255, 255, 0.92);
+      --gf-pill-border: rgba(0, 0, 0, 0.06);
+    }
+    [data-theme="dark"] {
+      --gf-body-bg: #1f2937;
+      --gf-card-bg: rgba(55, 65, 81, 0.96);
+      --gf-input-bg: #374151;
+      --gf-list-bg: #374151;
+      --gf-hover-bg: #4b5563;
+      --gf-ctx-bg: #374151;
+      --gf-text: #f9fafb;
+      --gf-text-muted: #9ca3af;
+      --gf-border: #4b5563;
+      --gf-pill-label: #e5e7eb;
+      --gf-pill-close: #9ca3af;
+      --gf-pill-bg: rgba(31, 41, 55, 0.92);
+      --gf-pill-border: rgba(255, 255, 255, 0.08);
+    }
+    html, body { margin: 0; padding: 0; font-family: 'Segoe UI', system-ui, sans-serif; font-size: 12px; color: var(--gf-text); }
+    html { background: transparent !important; }
+    html.glass-mode, html.pill-mode { background: transparent !important; }
+    body { padding: 8px; min-width: 0; min-height: 0; background: transparent !important; }
+    body.pill-mode {
+      padding: 0; display: flex; align-items: center; justify-content: center;
+      min-height: 100%; background: transparent !important; overflow: hidden;
+    }
+    .pill-container {
+      display: flex; align-items: center; justify-content: center; gap: 6px;
+      padding: 6px 12px; cursor: pointer; user-select: none;
+      border-radius: 20px;
+      background: var(--gf-pill-bg, rgba(255, 255, 255, 0.92));
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12), 0 1px 2px rgba(0, 0, 0, 0.08);
+      border: 1px solid var(--gf-pill-border, rgba(0, 0, 0, 0.06));
+      transition: box-shadow 0.15s ease, transform 0.15s ease;
+    }
+    .pill-container:hover { box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15), 0 2px 4px rgba(0, 0, 0, 0.08); }
+    .pill-container .pill-label { font-weight: 600; font-size: 11px; letter-spacing: 0.5px; color: var(--gf-pill-label); }
+    .pill-container .pill-close {
+      color: var(--gf-pill-close); font-size: 11px; font-weight: 400; line-height: 1;
+      padding: 2px 4px; margin: -2px -2px -2px 0; border-radius: 4px;
+      opacity: 0.7; transition: opacity 0.12s ease, color 0.12s ease;
+    }
+    .pill-container .pill-close:hover { opacity: 1; color: #dc2626; background: rgba(220, 38, 38, 0.1); }
+    .pill-drag-hint {
+      color: var(--gf-pill-close); font-size: 12px; line-height: 1; opacity: 0.6;
+      letter-spacing: 1px; cursor: grab; user-select: none;
+    }
+    .pill-wrapper {
+      display: flex; flex-direction: column; align-items: center; gap: 0;
+      transition: opacity 0.15s ease;
+    }
+    .pill-title-bar {
+      display: none; align-items: center; justify-content: flex-end; gap: 2px;
+      width: 100%; padding: 2px 4px 2px 8px; min-height: 22px;
+      background: var(--gf-pill-bg); border-radius: 10px 10px 0 0;
+      border: 1px solid var(--gf-pill-border); border-bottom: none;
+      box-shadow: 0 -1px 4px rgba(0,0,0,0.06);
+      flex-shrink: 0;
+      max-height: 0; overflow: hidden; visibility: hidden; opacity: 0;
+    }
+    .pill-wrapper.title-bar-visible .pill-title-bar {
+      display: flex !important; max-height: 22px; overflow: visible; visibility: visible; opacity: 1;
+    }
+    .pill-title-bar .tb-btn {
+      width: 20px; height: 18px; display: flex; align-items: center; justify-content: center;
+      font-size: 10px; font-weight: 600; color: var(--gf-pill-label); cursor: pointer;
+      border-radius: 4px; transition: background 0.1s, color 0.1s;
+    }
+    .pill-title-bar .tb-btn:hover { background: var(--gf-hover-bg); color: var(--gf-text); }
+    .pill-title-bar .tb-btn.close:hover { background: rgba(220, 38, 38, 0.2); color: #dc2626; }
+    .pill-wrapper .pill-container { border-radius: 0 0 20px 20px; }
+    .pill-wrapper:not(:hover) .pill-container { border-radius: 20px; }
+    .pill-wrapper.ribbon-active { display: none !important; }
+    .ribbon-container { display: none; }
+    .ribbon-container.expanded { display: block; }
+    .card {
+      background: var(--card-bg, var(--gf-card-bg)); border-radius: 10px; padding: 10px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.12), 0 2px 6px rgba(0,0,0,0.06);
+      border: 1px solid var(--gf-border);
+    }
+    .ribbon-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+    .ribbon-header .ribbon-close {
+      color: var(--gf-pill-close); cursor: pointer; font-size: 14px; font-weight: 400;
+      padding: 2px 6px; border-radius: 4px; opacity: 0.8; transition: opacity 0.12s, color 0.12s;
+    }
+    .ribbon-header .ribbon-close:hover { opacity: 1; color: #dc2626; background: rgba(220, 38, 38, 0.1); }
+    h4 { margin: 0 0 8px 0; font-size: 11px; color: var(--gf-text); }
+    .search { margin-bottom: 6px; }
+    .search input { width: 100%; padding: 4px 8px; font-size: 12px; border-radius: 4px; border: 1px solid var(--gf-border); background: var(--input-bg, var(--gf-input-bg)); color: var(--gf-text); }
+    .pinned, .clip-list { max-height: 180px; overflow-y: auto; border: 1px solid var(--gf-border); border-radius: 4px; background: var(--list-bg, var(--gf-list-bg)); }
+    .clip-list { max-height: 150px; margin-top: 6px; }
+    .pinned-item, .clip-item { padding: 6px 10px; cursor: pointer; border-bottom: 1px solid var(--gf-border); }
+    .pinned-item:last-child, .clip-item:last-child { border-bottom: none; }
+    .pinned-item:hover, .clip-item:hover { background: var(--hover-bg, var(--gf-hover-bg)); }
+    .pinned-item .trigger, .clip-item .preview { font-weight: 600; color: var(--gf-text); }
+    .pinned-item .preview, .clip-item .meta { font-size: 11px; color: var(--gf-text-muted); margin-top: 2px; }
+    .section { margin-bottom: 12px; }
+    .ctx-menu { position: fixed; z-index: 9999; background: var(--ctx-bg, var(--gf-ctx-bg)); border: 1px solid var(--gf-border); border-radius: 4px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); min-width: 160px; padding: 4px 0; color: var(--gf-text); }
+    .ctx-menu-item { padding: 6px 12px; cursor: pointer; font-size: 12px; display: flex; align-items: center; gap: 8px; }
+    .ctx-menu-item-icon { width: 14px; text-align: center; opacity: 0.9; }
+    .ctx-menu-item-text { flex: 1; }
+    .ctx-menu-item:hover { background: var(--gf-hover-bg); }
+    .ctx-menu-item.danger { color: #dc2626; }
+    .ctx-menu-item.disabled { color: var(--gf-text-muted); cursor: default; opacity: 0.7; }
+    .ctx-menu-item.disabled:hover { background: transparent; }
+    .empty-msg { padding: 8px; color: var(--gf-text-muted); }
+  </style>
+</head>
+<body class="pill-mode">
+  <div id="pill-wrapper" class="pill-wrapper">
+    <div class="pill-title-bar" data-tauri-drag-region>
+      <span id="pill-minimize" class="tb-btn minimize" title="Minimize">−</span>
+      <span id="pill-maximize" class="tb-btn maximize" title="Maximize">□</span>
+      <span id="pill-close-bar" class="tb-btn close" title="Close">×</span>
+    </div>
+    <div id="pill-container" class="pill-container" data-tauri-drag-region>
+      <span class="pill-label">TE</span>
+      <span class="pill-drag-hint" title="Drag to move">⋮</span>
+      <span id="pill-close" class="pill-close" title="Close">×</span>
+    </div>
+  </div>
+  <div id="ribbon-container" class="ribbon-container">
+    <div class="card">
+      <div class="ribbon-header" data-tauri-drag-region>
+        <h4 data-tauri-drag-region>Pinned Snippets</h4>
+        <span id="ribbon-close" class="ribbon-close" title="Close">×</span>
+      </div>
+      <div class="search">
+        <input type="text" id="search-input" placeholder="Search..." />
+      </div>
+      <div id="pinned-list" class="pinned section"></div>
+      <h4 id="clip-header">Clipboard History</h4>
+      <div id="clip-list" class="clip-list"></div>
+    </div>
+  </div>
+  <div id="ctx-menu" class="ctx-menu" style="display:none"></div>
+  <script type="module" src="/src/ghost-follower.ts"></script>
+</body>
+</html>
