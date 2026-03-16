@@ -31,7 +31,7 @@ use digicore_text_expander::drivers::hotstring::{
 use digicore_text_expander::ports::{storage_keys, StoragePort};
 use digicore_text_expander::services::sync_service::SyncResult;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tauri::menu::{Menu, MenuItem};
 use tauri::{Emitter, Listener, Manager};

@@ -1,20 +1,20 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { getTaurpc } from "@/lib/taurpc";
-import { normalizeAppState } from "@/lib/normalizeState";
+import { getTaurpc } from "../lib/taurpc";
+import { normalizeAppState } from "../lib/normalizeState";
 import { open, confirm } from "@tauri-apps/plugin-dialog";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { FolderOpen, Save, Search, Plus, Pencil, Trash2, FolderSearch, Pin } from "lucide-react";
-import { showNativeContextMenu } from "@/lib/nativeContextMenu";
-import { notify } from "@/lib/notifications";
-import { syncLibraryToSqlite } from "@/lib/sqliteSync";
+import { showNativeContextMenu } from "../lib/nativeContextMenu";
+import { notify } from "../lib/notifications";
+import { syncLibraryToSqlite } from "../lib/sqliteSync";
 import {
   useSqliteRows,
   SQLITE_PARTIAL_THRESHOLD,
   SQLITE_PAGE_SIZE,
-} from "@/lib/useSqliteRows";
-import { formatLastModified, getCellValue, getRawField, COLUMN_KEYS } from "@/lib/libraryUtils";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+} from "../lib/useSqliteRows";
+import { formatLastModified, getCellValue, getRawField, COLUMN_KEYS } from "../lib/libraryUtils";
+import { Button } from "./ui/button";
+import { Input } from "./ui/input";
 
 const VIRTUALIZE_THRESHOLD = 500;
 const ROW_HEIGHT = 40;

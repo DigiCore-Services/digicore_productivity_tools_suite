@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { Button } from "../ui/button";
+import { Input } from "../ui/input";
+import { Label } from "../ui/label";
 import { open } from "@tauri-apps/plugin-dialog";
-import { getTaurpc } from "@/lib/taurpc";
-import type { InteractiveVarDto, SnippetLogicTestResultDto } from "@/bindings";
+import { getTaurpc } from "../../lib/taurpc";
+import type { InteractiveVarDto, SnippetLogicTestResultDto } from "../../bindings";
 import type { Snippet } from "../../types";
 
 interface SnippetEditorProps {

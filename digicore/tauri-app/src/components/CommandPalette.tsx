@@ -5,10 +5,10 @@ import React, {
   useRef,
   useState,
 } from "react";
-import { getTaurpc } from "@/lib/taurpc";
+import { getTaurpc } from "../lib/taurpc";
 import { Search } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
-import { useFuzzySearch, type SnippetWithCategory } from "@/lib/useFuzzySearch";
+import { useFuzzySearch, type SnippetWithCategory } from "../lib/useFuzzySearch";
 import type { AppState, Snippet } from "../types";
 
 function flattenSnippets(library: Record<string, Snippet[]>): SnippetWithCategory[] {
