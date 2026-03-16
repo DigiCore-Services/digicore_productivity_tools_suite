@@ -34,7 +34,7 @@ export async function syncLibraryToSqlite(
       if (!catName || !snippets?.length) continue;
 
       await db.execute(
-        "INSERT INTO categories (id, name) VALUES ($1, $2)",
+        "INSERT OR REPLACE INTO categories (id, name) VALUES ($1, $2)",
         [categoryId, catName]
       );
 

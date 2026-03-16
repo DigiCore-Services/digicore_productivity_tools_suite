@@ -998,7 +998,7 @@ impl TextExpanderApp {
             use digicore_core::domain::value_objects::CorpusConfig;
             let config = CorpusConfig::default();
             let storage = std::sync::Arc::new(FileSystemCorpusStorageAdapter::new(config.output_dir.clone()));
-            let baseline = std::sync::Arc::new(OcrBaselineAdapter::new(config.snapshot_dir.clone()));
+            let baseline = std::sync::Arc::new(OcrBaselineAdapter::new(config.snapshot_dir.clone(), None));
             let corpus_service = std::sync::Arc::new(CorpusService::new(config, storage, baseline));
 
             if let Err(e) = start_listener(self.library.clone(), Some(corpus_service)) {

@@ -16,7 +16,7 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = ["protocol-asset", "tray-icon"] }
 taurpc = "0.7"
 specta = { version = "=2.0.0-rc.22", features = ["derive"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
 tauri-plugin-shell = "2"
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-notification = "2"
@@ -41,10 +41,18 @@ rand = "0.8"
 rusqlite = { version = "0.31", features = ["bundled"] }
 regex = "1"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
+chrono = "0.4"
+anyhow = "1.0"
+thiserror = "2.0"
+fastembed = { version = "5.12.0", features = ["ort-download-binaries-rustls-tls"] }
+sqlite-vec = "0.1"
 windows = { version = "0.61", features = [
   "Win32_Foundation",
   "Win32_UI_WindowsAndMessaging",
 ] }
+notify = "6.1"
+async-trait = "0.1.89"
+dashmap = "6.1.0"
 
 [dev-dependencies]
 tempfile = "3.10"

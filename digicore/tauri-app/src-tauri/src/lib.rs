@@ -7,6 +7,12 @@
 
 mod api;
 mod clipboard_repository;
+mod kms_repository;
+mod kms_error;
+mod kms_service;
+mod kms_diagnostic_service;
+mod embedding_service;
+mod indexing_service;
 
 use crate::api::{save_all_on_exit, Api};
 use digicore_core::domain::Snippet;
@@ -25,6 +31,7 @@ use digicore_text_expander::drivers::hotstring::{
 use digicore_text_expander::ports::{storage_keys, StoragePort};
 use digicore_text_expander::services::sync_service::SyncResult;
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tauri::menu::{Menu, MenuItem};
 use tauri::{Emitter, Listener, Manager};
@@ -34,6 +41,7 @@ use tauri_plugin_sql::{Migration, MigrationKind};
 #[taurpc::ipc_type]
 pub struct AppStateDto {
     pub library_path: String,
+    pub kms_vault_path: String,
     pub library: HashMap<String, Vec<Snippet>>,
     pub categories: Vec<String>,
     pub selected_category: Option<u32>,
@@ -86,6 +94,13 @@ pub struct AppStateDto {
     pub extraction_footer_triggers: String,
     pub extraction_table_min_contiguous_rows: u32,
     pub extraction_table_min_avg_segments: f32,
+    pub extraction_layout_row_lookback: u32,
+    pub extraction_layout_table_break_threshold: f32,
+    pub extraction_layout_paragraph_break_threshold: f32,
+    pub extraction_layout_max_space_clamp: u32,
+    pub extraction_tables_column_jitter_tolerance: f32,
+    pub extraction_tables_merge_y_gap_max: f32,
+    pub extraction_tables_merge_y_gap_min: f32,
 
     pub extraction_adaptive_plaintext_cluster_factor: f32,
     pub extraction_adaptive_plaintext_gap_gate: f32,
@@ -93,6 +108,9 @@ pub struct AppStateDto {
     pub extraction_adaptive_table_gap_gate: f32,
     pub extraction_adaptive_column_cluster_factor: f32,
     pub extraction_adaptive_column_gap_gate: f32,
+    pub extraction_adaptive_plaintext_cross_factor: f32,
+    pub extraction_adaptive_table_cross_factor: f32,
+    pub extraction_adaptive_column_cross_factor: f32,
 
     pub extraction_refinement_entropy_threshold: f32,
     pub extraction_refinement_cluster_threshold_modifier: f32,
@@ -139,6 +157,7 @@ fn sync_result_to_string(r: &SyncResult) -> String {
 fn app_state_to_dto(state: &AppState) -> AppStateDto {
     AppStateDto {
         library_path: state.library_path.clone(),
+        kms_vault_path: state.kms_vault_path.clone(),
         library: state.library.clone(),
         categories: state.categories.clone(),
         selected_category: state.selected_category.map(|v| v as u32),
@@ -191,6 +210,13 @@ fn app_state_to_dto(state: &AppState) -> AppStateDto {
         extraction_footer_triggers: state.extraction_footer_triggers.clone(),
         extraction_table_min_contiguous_rows: state.extraction_table_min_contiguous_rows as u32,
         extraction_table_min_avg_segments: state.extraction_table_min_avg_segments,
+        extraction_layout_row_lookback: state.extraction_layout_row_lookback as u32,
+        extraction_layout_table_break_threshold: state.extraction_layout_table_break_threshold,
+        extraction_layout_paragraph_break_threshold: state.extraction_layout_paragraph_break_threshold,
+        extraction_layout_max_space_clamp: state.extraction_layout_max_space_clamp as u32,
+        extraction_tables_column_jitter_tolerance: state.extraction_tables_column_jitter_tolerance,
+        extraction_tables_merge_y_gap_max: state.extraction_tables_merge_y_gap_max,
+        extraction_tables_merge_y_gap_min: state.extraction_tables_merge_y_gap_min,
 
         extraction_adaptive_plaintext_cluster_factor: state.extraction_adaptive_plaintext_cluster_factor,
         extraction_adaptive_plaintext_gap_gate: state.extraction_adaptive_plaintext_gap_gate,
@@ -198,6 +224,9 @@ fn app_state_to_dto(state: &AppState) -> AppStateDto {
         extraction_adaptive_table_gap_gate: state.extraction_adaptive_table_gap_gate,
         extraction_adaptive_column_cluster_factor: state.extraction_adaptive_column_cluster_factor,
         extraction_adaptive_column_gap_gate: state.extraction_adaptive_column_gap_gate,
+        extraction_adaptive_plaintext_cross_factor: state.extraction_adaptive_plaintext_cross_factor,
+        extraction_adaptive_table_cross_factor: state.extraction_adaptive_table_cross_factor,
+        extraction_adaptive_column_cross_factor: state.extraction_adaptive_column_cross_factor,
 
         extraction_refinement_entropy_threshold: state.extraction_refinement_entropy_threshold,
         extraction_refinement_cluster_threshold_modifier: state.extraction_refinement_cluster_threshold_modifier,
@@ -266,11 +295,7 @@ fn install_tray_menu(handle: &tauri::AppHandle, paused: bool) {
 /// Initialize AppState from JsonFileStorageAdapter (same keys as egui).
 fn init_app_state_from_storage() -> AppState {
     let storage = JsonFileStorageAdapter::load();
-    let library_path = storage.get(storage_keys::LIBRARY_PATH).unwrap_or_else(|| {
-        digicore_text_expander::ports::data_path_resolver::DataPathResolver::script_library_path()
-            .to_string_lossy()
-            .to_string()
-    });
+    let mut state = AppState::default();
     let sync_url = storage.get(storage_keys::SYNC_URL).unwrap_or_default();
     let template_date_format = storage
         .get(storage_keys::TEMPLATE_DATE_FORMAT)
@@ -385,8 +410,6 @@ fn init_app_state_from_storage() -> AppState {
         .get(storage_keys::DISCOVERY_EXCLUDED_WINDOW_TITLES)
         .unwrap_or_default();
 
-    let mut state = AppState::new();
-    state.library_path = library_path;
     state.sync_url = sync_url;
     state.template_date_format = template_date_format;
     state.template_time_format = template_time_format;
@@ -414,6 +437,9 @@ fn init_app_state_from_storage() -> AppState {
     state.discovery_max_len = discovery_max_len;
     state.discovery_excluded_apps = discovery_excluded_apps;
     state.discovery_excluded_window_titles = discovery_excluded_window_titles;
+
+    if let Some(v) = storage.get(storage_keys::LIBRARY_PATH) { state.library_path = v; }
+    if let Some(v) = storage.get(storage_keys::KMS_VAULT_PATH) { state.kms_vault_path = v; }
 
     state.corpus_enabled = storage.get(storage_keys::CORPUS_ENABLED).map(|v| v == "true").unwrap_or(state.corpus_enabled);
     if let Some(v) = storage.get(storage_keys::CORPUS_OUTPUT_DIR) { state.corpus_output_dir = v; }
@@ -450,6 +476,9 @@ fn init_app_state_from_storage() -> AppState {
     if let Some(v) = storage.get(storage_keys::EXTRACTION_ADAPTIVE_TABLE_GAP_GATE).and_then(|s| s.parse().ok()) { state.extraction_adaptive_table_gap_gate = v; }
     if let Some(v) = storage.get(storage_keys::EXTRACTION_ADAPTIVE_COLUMN_CLUSTER_FACTOR).and_then(|s| s.parse().ok()) { state.extraction_adaptive_column_cluster_factor = v; }
     if let Some(v) = storage.get(storage_keys::EXTRACTION_ADAPTIVE_COLUMN_GAP_GATE).and_then(|s| s.parse().ok()) { state.extraction_adaptive_column_gap_gate = v; }
+    if let Some(v) = storage.get(storage_keys::EXTRACTION_ADAPTIVE_PLAINTEXT_CROSS_FACTOR).and_then(|s| s.parse().ok()) { state.extraction_adaptive_plaintext_cross_factor = v; }
+    if let Some(v) = storage.get(storage_keys::EXTRACTION_ADAPTIVE_TABLE_CROSS_FACTOR).and_then(|s| s.parse().ok()) { state.extraction_adaptive_table_cross_factor = v; }
+    if let Some(v) = storage.get(storage_keys::EXTRACTION_ADAPTIVE_COLUMN_CROSS_FACTOR).and_then(|s| s.parse().ok()) { state.extraction_adaptive_column_cross_factor = v; }
 
     if let Some(v) = storage.get(storage_keys::EXTRACTION_REFINEMENT_ENTROPY_THRESHOLD).and_then(|s| s.parse().ok()) { state.extraction_refinement_entropy_threshold = v; }
     if let Some(v) = storage.get(storage_keys::EXTRACTION_REFINEMENT_CLUSTER_THRESHOLD_MODIFIER).and_then(|s| s.parse().ok()) { state.extraction_refinement_cluster_threshold_modifier = v; }
@@ -476,67 +505,34 @@ fn init_app_state_from_storage() -> AppState {
     if let Some(v) = storage.get(storage_keys::EXTRACTION_SCORING_SIZE_PENALTY_WEIGHT).and_then(|s| s.parse().ok()) { state.extraction_scoring_size_penalty_weight = v; }
     if let Some(v) = storage.get(storage_keys::EXTRACTION_SCORING_LOW_CONFIDENCE_THRESHOLD).and_then(|s| s.parse().ok()) { state.extraction_scoring_low_confidence_threshold = v; }
     
+    if let Some(v) = storage.get(storage_keys::EXTRACTION_LAYOUT_ROW_LOOKBACK).and_then(|s| s.parse().ok()) { state.extraction_layout_row_lookback = v; }
+    if let Some(v) = storage.get(storage_keys::EXTRACTION_LAYOUT_TABLE_BREAK_THRESHOLD).and_then(|s| s.parse().ok()) { state.extraction_layout_table_break_threshold = v; }
+    if let Some(v) = storage.get(storage_keys::EXTRACTION_LAYOUT_PARAGRAPH_BREAK_THRESHOLD).and_then(|s| s.parse().ok()) { state.extraction_layout_paragraph_break_threshold = v; }
+    if let Some(v) = storage.get(storage_keys::EXTRACTION_LAYOUT_MAX_SPACE_CLAMP).and_then(|s| s.parse().ok()) { state.extraction_layout_max_space_clamp = v; }
+    if let Some(v) = storage.get(storage_keys::EXTRACTION_TABLES_COLUMN_JITTER_TOLERANCE).and_then(|s| s.parse().ok()) { state.extraction_tables_column_jitter_tolerance = v; }
+    if let Some(v) = storage.get(storage_keys::EXTRACTION_TABLES_MERGE_Y_GAP_MAX).and_then(|s| s.parse().ok()) { state.extraction_tables_merge_y_gap_max = v; }
+    if let Some(v) = storage.get(storage_keys::EXTRACTION_TABLES_MERGE_Y_GAP_MIN).and_then(|s| s.parse().ok()) { state.extraction_tables_merge_y_gap_min = v; }
+    
     state
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     std::panic::set_hook(Box::new(|info| {
-        log::error!("[PANIC] Process panicked: {:?}", info);
+        let payload = info.payload();
+        let msg = if let Some(s) = payload.downcast_ref::<&str>() {
+            *s
+        } else if let Some(s) = payload.downcast_ref::<String>() {
+            s.as_str()
+        } else {
+            "Unknown panic"
+        };
+        println!("[CRITICAL PANIC] {}: {:?}", msg, info.location());
+        log::error!("[PANIC] {}: {:?}", msg, info);
     }));
     let mut app_state = init_app_state_from_storage();
-    // Ensure {js:...} has global library functions available at startup.
-    load_and_apply_script_libraries();
-    let app_handle: Arc<Mutex<Option<tauri::AppHandle>>> = Arc::new(Mutex::new(None));
-    let app_handle_for_setup = app_handle.clone();
     if !app_state.library_path.is_empty() {
         let _ = app_state.try_load_library();
-    }
-    if let Err(e) = clipboard_repository::init(clipboard_repository::default_db_path()) {
-        log::error!("[ClipboardHistory][SQLite] initialization failed: {}", e);
-    } else {
-        digicore_text_expander::application::clipboard_history::set_entry_observer(Some(Arc::new(
-            move |entry| {
-                if entry.content == "[Image]" {
-                    log::debug!("[Clipboard][Observer] Image marker detected, calling sync_current_clipboard_image_to_sqlite");
-                    crate::api::sync_current_clipboard_image_to_sqlite(entry.process_name.clone(), entry.window_title.clone());
-                    return;
-                }
-                log::debug!("[Clipboard][Observer] Text entry detected: '{}'", entry.content);
-                match crate::api::persist_clipboard_entry_with_settings(
-                    &entry.content,
-                    &entry.process_name,
-                    &entry.window_title,
-                ) {
-                    Ok(true) => {
-                        digicore_text_expander::application::expansion_diagnostics::push(
-                            "info",
-                            format!(
-                                "[Clipboard][capture.accepted] app='{}' chars={}",
-                                entry.process_name,
-                                entry.content.chars().count()
-                            ),
-                        );
-                    }
-                    Ok(false) => {
-                        digicore_text_expander::application::expansion_diagnostics::push(
-                            "warn",
-                            format!(
-                                "[Clipboard][capture.skipped] app='{}'",
-                                entry.process_name
-                            ),
-                        );
-                    }
-                    Err(err) => {
-                        log::warn!("[ClipboardHistory][SQLite] insert failed: {}", err);
-                        digicore_text_expander::application::expansion_diagnostics::push(
-                            "error",
-                            format!("[Clipboard][persistence.write_err] {}", err),
-                        );
-                    }
-                }
-            },
-        )));
     }
     use digicore_text_expander::adapters::corpus::{FileSystemCorpusStorageAdapter, OcrBaselineAdapter};
     use digicore_text_expander::application::corpus_generator::CorpusService;
@@ -549,27 +545,12 @@ pub fn run() {
         shortcut_key: app_state.corpus_shortcut_key,
     };
     let corpus_storage = std::sync::Arc::new(FileSystemCorpusStorageAdapter::new(corpus_config.output_dir.clone()));
-    let corpus_baseline = std::sync::Arc::new(OcrBaselineAdapter::new(corpus_config.snapshot_dir.clone()));
+    let ocr_config = digicore_text_expander::adapters::extraction::RuntimeConfig::load_from_json_adapter(&JsonFileStorageAdapter::load());
+    let corpus_baseline = std::sync::Arc::new(OcrBaselineAdapter::new(corpus_config.snapshot_dir.clone(), ocr_config));
     let corpus_service = std::sync::Arc::new(CorpusService::new(corpus_config, corpus_storage, corpus_baseline));
 
-    let _ = start_listener(app_state.library.clone(), Some(corpus_service));
-    // Initial sync to persist seeded clipboard entry from startup
-    crate::api::sync_runtime_clipboard_entries_to_sqlite();
-    set_expansion_paused(app_state.expansion_paused);
-    sync_ghost_config(GhostConfig {
-        suggestor_enabled: app_state.ghost_suggestor_enabled,
-        suggestor_debounce_ms: app_state.ghost_suggestor_debounce_ms,
-        suggestor_display_secs: app_state.ghost_suggestor_display_secs,
-        suggestor_snooze_duration_mins: app_state.ghost_suggestor_snooze_duration_mins,
-        suggestor_offset_x: app_state.ghost_suggestor_offset_x,
-        suggestor_offset_y: app_state.ghost_suggestor_offset_y,
-        follower_enabled: app_state.ghost_follower_enabled,
-        follower_edge_right: app_state.ghost_follower_edge_right,
-        follower_monitor_anchor: app_state.ghost_follower_monitor_anchor,
-        follower_search: app_state.ghost_follower_search.clone(),
-        follower_hover_preview: app_state.ghost_follower_hover_preview,
-        follower_collapse_delay_secs: app_state.ghost_follower_collapse_delay_secs,
-    });
+    // Moving heavy initializations out of run() to background spawn in setup()
+    // clipboard_repository::init and script loading are deferred.
     let storage_for_clip = JsonFileStorageAdapter::load();
     let copy_text_enabled = storage_for_clip
         .get(storage_keys::COPY_TO_CLIPBOARD_ENABLED)
@@ -604,6 +585,9 @@ pub fn run() {
             excluded_window_titles: parse_comma_list(&app_state.discovery_excluded_window_titles),
         },
     );
+    let app_handle: Arc<Mutex<Option<tauri::AppHandle>>> = Arc::new(Mutex::new(None));
+    let app_handle_for_setup = app_handle.clone();
+
     let app_state = Arc::new(Mutex::new(app_state));
     let state_for_exit = app_state.clone();
     let state_for_tray = app_state.clone();
@@ -612,7 +596,21 @@ pub fn run() {
     } else {
         tauri_plugin_prevent_default::init()
     };
+    // Register sqlite-vec extension globally before tauri-plugin-sql initializes its database pools.
+    unsafe {
+        rusqlite::ffi::sqlite3_auto_extension(Some(std::mem::transmute(
+            sqlite_vec::sqlite3_vec_init as *const (),
+        )));
+    }
+
+    let indexing_service = Arc::new(indexing_service::KmsIndexingService::new());
+    indexing_service.register_provider(Arc::new(indexing_service::NoteIndexProvider));
+    indexing_service.register_provider(Arc::new(indexing_service::SnippetIndexProvider));
+    indexing_service.register_provider(Arc::new(indexing_service::ClipboardIndexProvider));
+
     tauri::Builder::default()
+        .manage(app_state.clone())
+        .manage(indexing_service)
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_fs::init())
@@ -682,6 +680,189 @@ pub fn run() {
                                 ALTER TABLE clipboard_history ADD COLUMN image_width INTEGER;
                                 ALTER TABLE clipboard_history ADD COLUMN image_height INTEGER;
                                 ALTER TABLE clipboard_history ADD COLUMN image_bytes INTEGER;
+                            "#,
+                            kind: MigrationKind::Up,
+                        },
+                        Migration {
+                            version: 4,
+                            description: "kms_foundation",
+                            sql: r#"
+                                CREATE TABLE IF NOT EXISTS kms_notes (
+                                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                    path TEXT NOT NULL UNIQUE,
+                                    title TEXT NOT NULL,
+                                    content_preview TEXT,
+                                    last_modified TEXT,
+                                    is_favorite INTEGER DEFAULT 0
+                                );
+                                CREATE TABLE IF NOT EXISTS kms_links (
+                                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                    source_path TEXT NOT NULL,
+                                    target_path TEXT NOT NULL,
+                                    link_type TEXT DEFAULT 'internal',
+                                    context TEXT,
+                                    UNIQUE(source_path, target_path)
+                                );
+                                CREATE TABLE IF NOT EXISTS kms_bookmarks (
+                                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                    url TEXT NOT NULL UNIQUE,
+                                    title TEXT,
+                                    snapshot_path TEXT,
+                                    created_at TEXT
+                                );
+                                CREATE TABLE IF NOT EXISTS kms_tags (
+                                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                    name TEXT NOT NULL UNIQUE
+                                );
+                                CREATE TABLE IF NOT EXISTS kms_note_tags (
+                                    note_id INTEGER NOT NULL,
+                                    tag_id INTEGER NOT NULL,
+                                    PRIMARY KEY (note_id, tag_id),
+                                    FOREIGN KEY (note_id) REFERENCES kms_notes(id) ON DELETE CASCADE,
+                                    FOREIGN KEY (tag_id) REFERENCES kms_tags(id) ON DELETE CASCADE
+                                );
+                            "#,
+                            kind: MigrationKind::Up,
+                        },
+                        Migration {
+                            version: 5,
+                            description: "kms_multi_modal_vector_search",
+                            sql: r#"
+                                -- Virtual tables for vector embeddings (sqlite-vec)
+                                -- float32 dimensions for BGE-small (384)
+                                CREATE VIRTUAL TABLE IF NOT EXISTS kms_embeddings_text USING vec0(
+                                    embedding float[384]
+                                );
+                                
+                                -- float32 dimensions for CLIP-ViT-B-32 (512)
+                                CREATE VIRTUAL TABLE IF NOT EXISTS kms_embeddings_image USING vec0(
+                                    embedding float[512]
+                                );
+
+                                -- Unified mapping table to link vectors to source entities
+                                -- Links vec0 rowid to app components
+                                CREATE TABLE IF NOT EXISTS kms_vector_map (
+                                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                    vec_id INTEGER NOT NULL,
+                                    modality TEXT NOT NULL, -- 'text', 'image'
+                                    entity_type TEXT NOT NULL, -- 'note', 'snippet', 'clipboard', 'image_library'
+                                    entity_id TEXT NOT NULL,   -- path or numeric ID
+                                    content_hash TEXT,
+                                    metadata TEXT,             -- JSON string (Window Title, App Name, etc.)
+                                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                                );
+                                
+                                -- Index for faster mapping
+                                CREATE INDEX IF NOT EXISTS idx_kms_vector_map_entity ON kms_vector_map(entity_type, entity_id);
+                            "#,
+                            kind: MigrationKind::Up,
+                        },
+                        Migration {
+                            version: 6,
+                            description: "kms_fts5_hybrid_search",
+                            sql: r#"
+                                -- Virtual table for Full Text Search (FTS5)
+                                CREATE VIRTUAL TABLE IF NOT EXISTS kms_notes_fts USING fts5(
+                                    title,
+                                    content_preview,
+                                    content='kms_notes',
+                                    content_rowid='id'
+                                );
+
+                                -- Triggers to keep FTS table synchronized with `kms_notes`
+                                CREATE TRIGGER IF NOT EXISTS kms_notes_ai AFTER INSERT ON kms_notes
+                                BEGIN
+                                    INSERT INTO kms_notes_fts (rowid, title, content_preview)
+                                    VALUES (new.id, new.title, new.content_preview);
+                                END;
+
+                                CREATE TRIGGER IF NOT EXISTS kms_notes_ad AFTER DELETE ON kms_notes
+                                BEGIN
+                                    INSERT INTO kms_notes_fts (kms_notes_fts, rowid, title, content_preview)
+                                    VALUES ('delete', old.id, old.title, old.content_preview);
+                                END;
+
+                                CREATE TRIGGER IF NOT EXISTS kms_notes_au AFTER UPDATE ON kms_notes
+                                BEGIN
+                                    INSERT INTO kms_notes_fts (kms_notes_fts, rowid, title, content_preview)
+                                    VALUES ('delete', old.id, old.title, old.content_preview);
+                                    INSERT INTO kms_notes_fts (rowid, title, content_preview)
+                                    VALUES (new.id, new.title, new.content_preview);
+                                END;
+                            "#,
+                            kind: MigrationKind::Up,
+                        },
+                        Migration {
+                            version: 7,
+                            description: "kms_fts5_backfill_existing",
+                            sql: r#"
+                                INSERT INTO kms_notes_fts (rowid, title, content_preview)
+                                SELECT id, title, content_preview FROM kms_notes
+                                WHERE id NOT IN (SELECT rowid FROM kms_notes_fts);
+                            "#,
+                            kind: MigrationKind::Up,
+                        },
+                        Migration {
+                            version: 8,
+                            description: "kms_sync_status_and_errors",
+                            sql: r#"
+                                ALTER TABLE kms_notes ADD COLUMN sync_status TEXT DEFAULT 'indexed';
+                                ALTER TABLE kms_notes ADD COLUMN last_error TEXT;
+                            "#,
+                            kind: MigrationKind::Up,
+                        },
+                        Migration {
+                            version: 9,
+                            description: "kms_granular_index_status",
+                            sql: r#"
+                                CREATE TABLE IF NOT EXISTS kms_index_status (
+                                    entity_type TEXT NOT NULL,
+                                    entity_id TEXT NOT NULL,
+                                    status TEXT NOT NULL, -- 'indexed', 'failed'
+                                    error TEXT,
+                                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                                    PRIMARY KEY (entity_type, entity_id)
+                                );
+                            "#,
+                            kind: MigrationKind::Up,
+                        },
+                        Migration {
+                            version: 10,
+                            description: "kms_unified_hybrid_fts",
+                            sql: r#"
+                                -- Create a unified FTS table for all entity types
+                                CREATE VIRTUAL TABLE IF NOT EXISTS kms_unified_fts USING fts5(
+                                    entity_type UNINDEXED,
+                                    entity_id UNINDEXED,
+                                    title,
+                                    content,
+                                    tokenize='porter'
+                                );
+
+                                -- Trigger to sync NEW notes to the unified FTS table
+                                CREATE TRIGGER IF NOT EXISTS kms_notes_sync_fts_ai AFTER INSERT ON kms_notes
+                                BEGIN
+                                    INSERT INTO kms_unified_fts (entity_type, entity_id, title, content)
+                                    VALUES ('note', new.path, new.title, new.content_preview);
+                                END;
+
+                                -- Trigger to sync UPDATED notes
+                                CREATE TRIGGER IF NOT EXISTS kms_notes_sync_fts_au AFTER UPDATE ON kms_notes
+                                BEGIN
+                                    DELETE FROM kms_unified_fts WHERE entity_type = 'note' AND entity_id = old.path;
+                                    INSERT INTO kms_unified_fts (entity_type, entity_id, title, content)
+                                    VALUES ('note', new.path, new.title, new.content_preview);
+                                END;
+
+                                -- Trigger to sync DELETED notes
+                                CREATE TRIGGER IF NOT EXISTS kms_notes_sync_fts_ad AFTER DELETE ON kms_notes
+                                BEGIN
+                                    DELETE FROM kms_unified_fts WHERE entity_type = 'note' AND entity_id = old.path;
+                                END;
+
+                                -- Backfill existing notes into unified FTS
+                                INSERT INTO kms_unified_fts (entity_type, entity_id, title, content)
+                                SELECT 'note', path, title, content_preview FROM kms_notes;
                             "#,
                             kind: MigrationKind::Up,
                         },
@@ -775,50 +956,179 @@ pub fn run() {
                 .build(),
         )
         .setup(move |app| {
-            *app_handle_for_setup.lock().unwrap() = Some(app.handle().clone());
-            std::thread::spawn(|| {
-                loop {
-                    let result = std::panic::catch_unwind(|| {
-                        crate::api::enforce_appearance_transparency_rules();
-                    });
-                    if let Err(e) = result {
-                        log::error!("[BackgroundThread] Transparency enforcement panicked: {:?}", e);
-                    }
-                    std::thread::sleep(std::time::Duration::from_secs(3));
-                }
-            });
-            #[cfg(desktop)]
-            let _ = app
-                .handle()
-                .plugin(tauri_plugin_updater::Builder::new().build());
-            #[cfg(target_os = "windows")]
-            {
-                use tauri::window::{Effect, EffectsBuilder};
-                if let Some(win) = app.get_webview_window("main") {
-                    let _ = win.set_effects(EffectsBuilder::new().effect(Effect::Mica).build());
-                }
-            }
-            #[cfg(any(windows, target_os = "linux"))]
-            {
-                use tauri_plugin_deep_link::DeepLinkExt;
-                let _ = app.handle().deep_link().register_all();
-            }
-            let args: Vec<String> = std::env::args().collect();
-            let _ = app.emit("initial-cli-args", args);
             let handle = app.handle().clone();
-            let handle_cb = handle.clone();
+            *app_handle_for_setup.lock().unwrap() = Some(handle.clone());
+            
+            // 1. Wire up callbacks IMMEDIATELY (prevents "NO callback set" warnings)
+            let handle_suggestor = handle.clone();
             let cb = std::sync::Arc::new(move || {
                 log::info!("[GhostSuggestor] on_change: emitting ghost-suggestor-update");
-                let _ = handle_cb.emit("ghost-suggestor-update", ());
+                let _ = handle_suggestor.emit("ghost-suggestor-update", ());
             });
             ghost_suggestor::set_on_change_callback(Some(cb));
 
-            // Discovery: use notification toast instead of overlay. Set callback to emit for frontend.
-            let handle_discovery = app.handle().clone();
+            let handle_discovery = handle.clone();
             discovery::set_suggestion_callback(move |phrase, count| {
                 ghost_suggestor::set_pending_discovery_for_notification(phrase.to_string(), count);
                 let _ = handle_discovery.emit("discovery-suggestion", (phrase.to_string(), count));
             });
+
+            // 2. STAGGERED Background Initialization
+            let state_for_init = state_for_tray.clone();
+            let corpus_service_for_init = corpus_service.clone();
+            let handle_for_init = handle.clone();
+            tauri::async_runtime::spawn(async move {
+                // T+1s: Database and Script Libraries
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                log::info!("[Startup] Initializing repositories and scripts");
+                load_and_apply_script_libraries();
+                let db_path = clipboard_repository::default_db_path();
+                if let Err(e) = clipboard_repository::init(db_path.clone()) {
+                    log::error!("[Startup][Clipboard][SQLite] failed: {}", e);
+                }
+                if let Err(e) = kms_repository::init(db_path) {
+                    log::error!("[Startup][KMS][SQLite] failed: {}", e);
+                } else {
+                    let handle_observer = handle_for_init.clone();
+                    digicore_text_expander::application::clipboard_history::set_entry_observer(Some(std::sync::Arc::new(
+                        move |entry| {
+                            if entry.content == "[Image]" {
+                                log::debug!("[Clipboard][Observer] Image marker detected");
+                                crate::api::sync_current_clipboard_image_to_sqlite(entry.process_name.clone(), entry.window_title.clone(), Some(&handle_observer));
+                                return;
+                            }
+                            log::debug!("[Clipboard][Observer] Text entry: '{}'", entry.content);
+                            match crate::api::persist_clipboard_entry_with_settings(
+                                &entry.content,
+                                &entry.process_name,
+                                &entry.window_title,
+                            ) {
+                                Ok(Some(id)) => {
+                                    digicore_text_expander::application::expansion_diagnostics::push(
+                                        "info",
+                                        format!("[Clipboard][capture.accepted] id={} app='{}' chars={}", 
+                                            id, entry.process_name, entry.content.chars().count()),
+                                    );
+                                    
+                                    // Trigger auto-indexing
+                                    let h = handle_observer.clone();
+                                    let service = h.state::<Arc<crate::indexing_service::KmsIndexingService>>().inner().clone();
+                                    let entity_id = id.to_string();
+                                    tauri::async_runtime::spawn(async move {
+                                        let _ = service.index_single_item(&h, "clipboard", &entity_id).await;
+                                    });
+                                }
+                                Ok(None) => {
+                                    digicore_text_expander::application::expansion_diagnostics::push(
+                                        "warn",
+                                        format!("[Clipboard][capture.skipped] app='{}'", entry.process_name),
+                                    );
+                                }
+                                Err(err) => {
+                                    log::warn!("[ClipboardHistory][SQLite] insert failed: {}", err);
+                                    digicore_text_expander::application::expansion_diagnostics::push(
+                                        "error",
+                                        format!("[Clipboard][persistence.write_err] {}", err),
+                                    );
+                                }
+                            }
+                        },
+                    )));
+                }
+
+
+                // T+3s: Background Listener and Sync
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                log::info!("[Startup] Starting listener and sync");
+                let (lib_cloned, paused_cloned, cfg_cloned) = {
+                    let g = state_for_init.lock().unwrap();
+                    (
+                        g.library.clone(),
+                        g.expansion_paused,
+                        GhostConfig {
+                            suggestor_enabled: g.ghost_suggestor_enabled,
+                            suggestor_debounce_ms: g.ghost_suggestor_debounce_ms,
+                            suggestor_display_secs: g.ghost_suggestor_display_secs,
+                            suggestor_snooze_duration_mins: g.ghost_suggestor_snooze_duration_mins,
+                            suggestor_offset_x: g.ghost_suggestor_offset_x,
+                            suggestor_offset_y: g.ghost_suggestor_offset_y,
+                            follower_enabled: g.ghost_follower_enabled,
+                            follower_edge_right: g.ghost_follower_edge_right,
+                            follower_monitor_anchor: g.ghost_follower_monitor_anchor,
+                            follower_search: g.ghost_follower_search.clone(),
+                            follower_hover_preview: g.ghost_follower_hover_preview,
+                            follower_collapse_delay_secs: g.ghost_follower_collapse_delay_secs,
+                        }
+                    )
+                };
+                let _ = start_listener(lib_cloned, Some(corpus_service_for_init));
+                set_expansion_paused(paused_cloned);
+                sync_ghost_config(cfg_cloned);
+
+                // Run sync in its own task so it doesn't block the startup chain
+                let handle_sync = handle_for_init.clone();
+                tauri::async_runtime::spawn(async move {
+                    log::info!("[Startup] Initializing runtime clipboard sync (background)");
+                    crate::api::sync_runtime_clipboard_entries_to_sqlite(&handle_sync);
+                    log::info!("[Startup] Background sync completed");
+                });
+
+
+                // T+4s: KMS Vault Reconciliation & Watcher
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                log::info!("[Startup] Initializing KMS reconciliation sync and watcher");
+                let vault_path = {
+                    let g = state_for_init.lock().unwrap();
+                    g.kms_vault_path.clone()
+                };
+                if !vault_path.is_empty() {
+                    let vault_path_buf = PathBuf::from(&vault_path);
+                    if vault_path_buf.exists() {
+                        let handle_kms = handle_for_init.clone();
+                        let kms_path_clone = vault_path_buf.clone();
+                        tauri::async_runtime::spawn(async move {
+                            log::info!("[KMS][Startup] Starting vault reconciliation...");
+                            let _ = handle_kms.emit("kms-sync-status", "Indexing...");
+                            let _ = crate::api::sync_vault_files_to_db_internal(&handle_kms, &kms_path_clone).await;
+                            let _ = handle_kms.emit("kms-sync-status", "Idle");
+                            let _ = handle_kms.emit("kms-sync-complete", ());
+                            log::info!("[KMS][Startup] Vault reconciliation completed");
+                        });
+                        
+                        // Start watcher
+                        crate::api::start_kms_watcher(handle_for_init.clone(), vault_path_buf);
+                        log::info!("[KMS][Startup] Filesystem watcher initialized");
+                    }
+                }
+
+
+                // T+5s: Appearance enforcement loop
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                log::info!("[Startup] Starting appearance enforcement loop");
+                std::thread::spawn(|| {
+                    loop {
+                        let _ = std::panic::catch_unwind(|| {
+                            crate::api::enforce_appearance_transparency_rules();
+                        });
+                        std::thread::sleep(std::time::Duration::from_secs(3));
+                    }
+                });
+                log::info!("[Startup] All background tasks staggered and running");
+            });
+
+            #[cfg(any(windows, target_os = "linux"))]
+            {
+                // Defer deep link to avoid potential registry locks on main
+                let handle_dl = handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    use tauri_plugin_deep_link::DeepLinkExt;
+                    let _ = handle_dl.deep_link().register_all();
+                });
+            }
+            
+            let args: Vec<String> = std::env::args().collect();
+            let _ = app.emit("initial-cli-args", args);
 
             // Create Ghost Follower, Suggestor, and Quick Search windows from Rust (avoids URL/path issues).
             // Use a thread to avoid Windows deadlocks when creating windows.
@@ -1001,6 +1311,8 @@ pub struct UiPrefsDto {
 #[taurpc::ipc_type]
 #[derive(Default)]
 pub struct ConfigUpdateDto {
+    pub library_path: Option<String>,
+    pub kms_vault_path: Option<String>,
     pub expansion_paused: Option<bool>,
     pub template_date_format: Option<String>,
     pub template_time_format: Option<String>,
@@ -1055,6 +1367,9 @@ pub struct ConfigUpdateDto {
     pub extraction_adaptive_table_gap_gate: Option<f32>,
     pub extraction_adaptive_column_cluster_factor: Option<f32>,
     pub extraction_adaptive_column_gap_gate: Option<f32>,
+    pub extraction_adaptive_plaintext_cross_factor: Option<f32>,
+    pub extraction_adaptive_table_cross_factor: Option<f32>,
+    pub extraction_adaptive_column_cross_factor: Option<f32>,
 
     pub extraction_refinement_entropy_threshold: Option<f32>,
     pub extraction_refinement_cluster_threshold_modifier: Option<f32>,
@@ -1080,6 +1395,14 @@ pub struct ConfigUpdateDto {
     pub extraction_scoring_jitter_penalty_weight: Option<f32>,
     pub extraction_scoring_size_penalty_weight: Option<f32>,
     pub extraction_scoring_low_confidence_threshold: Option<f32>,
+
+    pub extraction_layout_row_lookback: Option<u32>,
+    pub extraction_layout_table_break_threshold: Option<f32>,
+    pub extraction_layout_paragraph_break_threshold: Option<f32>,
+    pub extraction_layout_max_space_clamp: Option<u32>,
+    pub extraction_tables_column_jitter_tolerance: Option<f32>,
+    pub extraction_tables_merge_y_gap_max: Option<f32>,
+    pub extraction_tables_merge_y_gap_min: Option<f32>,
 }
 
 #[taurpc::ipc_type]
@@ -1424,4 +1747,5 @@ pub struct ClipEntryDto {
     pub image_height: Option<u32>,
     pub image_bytes: Option<u32>,
     pub parent_id: Option<u32>,
+    pub metadata: Option<String>,
 }

@@ -5,12 +5,6 @@ use windows::Media::Ocr::OcrEngine;
 use windows::Storage::Streams::{DataWriter, InMemoryRandomAccessStream};
 use std::fs;
 
-#[derive(Clone, Debug)]
-enum ReconstructedElement {
-    PlainText(String),
-    Header(usize, String),
-    Table(TableBlock),
-}
 
 /// Root configuration structure for runtime tuning.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -35,7 +29,7 @@ pub struct ExtractionConfig {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct LayoutHeuristicsConfig {
-    pub row_overlap_tolerance: f32,
+    pub row_overlap_tolerance: f32, // fraction of height
     pub cluster_threshold_factor: f32,
     pub zone_proximity: f32,
     pub cross_zone_gap_factor: f32,
@@ -44,6 +38,10 @@ pub struct LayoutHeuristicsConfig {
     pub char_width_factor: f32,
     pub bridged_threshold: f32,
     pub word_spacing_factor: f32,
+    pub row_lookback: usize,
+    pub table_break_threshold: f32,
+    pub paragraph_break_threshold: f32,
+    pub max_space_clamp: usize,
 }
 impl Default for LayoutHeuristicsConfig {
     fn default() -> Self {
@@ -57,6 +55,10 @@ impl Default for LayoutHeuristicsConfig {
             char_width_factor: 0.45,
             bridged_threshold: 0.4,
             word_spacing_factor: 0.2,
+            row_lookback: 5,
+            table_break_threshold: 3.0,
+            paragraph_break_threshold: 3.0,
+            max_space_clamp: 6,
         }
     }
 }
@@ -67,6 +69,9 @@ pub struct TablesConfig {
     pub footer_triggers: Vec<String>,
     pub min_contiguous_rows: usize,
     pub min_avg_segments: f32,
+    pub column_jitter_tolerance: f32,
+    pub merge_y_gap_max: f32,
+    pub merge_y_gap_min: f32,
 }
 impl Default for TablesConfig {
     fn default() -> Self {
@@ -74,6 +79,9 @@ impl Default for TablesConfig {
             footer_triggers: vec!["total".to_string(), "sum".to_string(), "subtotal".to_string(), "balance".to_string()],
             min_contiguous_rows: 4,
             min_avg_segments: 3.1,
+            column_jitter_tolerance: 20.0,
+            merge_y_gap_max: 100.0,
+            merge_y_gap_min: 40.0,
         }
     }
 }
@@ -153,7 +161,7 @@ impl Default for AdaptiveOverridesConfig {
         Self {
             plaintext_cluster_factor: 1.1,
             plaintext_gap_gate: 0.5,
-            table_cluster_factor: 0.35,
+            table_cluster_factor: 0.45,
             table_gap_gate: 1.2,
             column_cluster_factor: 0.45,
             column_gap_gate: 0.8,
@@ -211,30 +219,37 @@ impl Default for RuntimeConfig {
 }
 
 impl RuntimeConfig {
-    pub fn load_from_json_adapter() -> Option<Self> {
-        use crate::adapters::storage::json_file_storage::JsonFileStorageAdapter;
-        use crate::ports::StoragePort;
+    pub fn load_from_json_adapter(storage: &dyn crate::ports::StoragePort) -> Option<Self> {
         use crate::ports::storage_keys;
         
-        let storage = JsonFileStorageAdapter::load();
         let mut def = Self::default();
         let ext = &mut def.extraction;
         
-        if let Some(s) = storage.get(storage_keys::EXTRACTION_ROW_OVERLAP_TOLERANCE) { if let Ok(v) = s.parse() { ext.layout_heuristics.row_overlap_tolerance = v; } }
-        if let Some(s) = storage.get(storage_keys::EXTRACTION_CLUSTER_THRESHOLD_FACTOR) { if let Ok(v) = s.parse() { ext.layout_heuristics.cluster_threshold_factor = v; } }
-        if let Some(s) = storage.get(storage_keys::EXTRACTION_ZONE_PROXIMITY) { if let Ok(v) = s.parse() { ext.layout_heuristics.zone_proximity = v; } }
-        if let Some(s) = storage.get(storage_keys::EXTRACTION_CROSS_ZONE_GAP_FACTOR) { if let Ok(v) = s.parse() { ext.layout_heuristics.cross_zone_gap_factor = v; } }
-        if let Some(s) = storage.get(storage_keys::EXTRACTION_SAME_ZONE_GAP_FACTOR) { if let Ok(v) = s.parse() { ext.layout_heuristics.same_zone_gap_factor = v; } }
-        if let Some(s) = storage.get(storage_keys::EXTRACTION_SIGNIFICANT_GAP_GATE) { if let Ok(v) = s.parse() { ext.layout_heuristics.significant_gap_gate = v; } }
-        if let Some(s) = storage.get(storage_keys::EXTRACTION_CHAR_WIDTH_FACTOR) { if let Ok(v) = s.parse() { ext.layout_heuristics.char_width_factor = v; } }
-        if let Some(s) = storage.get(storage_keys::EXTRACTION_BRIDGED_THRESHOLD) { if let Ok(v) = s.parse() { ext.layout_heuristics.bridged_threshold = v; } }
-        if let Some(s) = storage.get(storage_keys::EXTRACTION_WORD_SPACING_FACTOR) { if let Ok(v) = s.parse() { ext.layout_heuristics.word_spacing_factor = v; } }
-
-        if let Some(s) = storage.get(storage_keys::EXTRACTION_FOOTER_TRIGGERS) {
-            ext.tables.footer_triggers = s.split(',').map(|x| x.trim().to_string()).collect();
-        }
-        if let Some(s) = storage.get(storage_keys::EXTRACTION_TABLE_MIN_CONTIGUOUS_ROWS) { if let Ok(v) = s.parse() { ext.tables.min_contiguous_rows = v; } }
-        if let Some(s) = storage.get(storage_keys::EXTRACTION_TABLE_MIN_AVG_SEGMENTS) { if let Ok(v) = s.parse() { ext.tables.min_avg_segments = v; } }
+        ext.layout_heuristics = LayoutHeuristicsConfig {
+            row_overlap_tolerance: storage.get(storage_keys::EXTRACTION_ROW_OVERLAP_TOLERANCE).and_then(|s| s.parse().ok()).unwrap_or(0.6),
+            cluster_threshold_factor: storage.get(storage_keys::EXTRACTION_CLUSTER_THRESHOLD_FACTOR).and_then(|s| s.parse().ok()).unwrap_or(0.45),
+            zone_proximity: storage.get(storage_keys::EXTRACTION_ZONE_PROXIMITY).and_then(|s| s.parse().ok()).unwrap_or(15.0),
+            cross_zone_gap_factor: storage.get(storage_keys::EXTRACTION_CROSS_ZONE_GAP_FACTOR).and_then(|s| s.parse().ok()).unwrap_or(0.25),
+            same_zone_gap_factor: storage.get(storage_keys::EXTRACTION_SAME_ZONE_GAP_FACTOR).and_then(|s| s.parse().ok()).unwrap_or(0.8),
+            significant_gap_gate: storage.get(storage_keys::EXTRACTION_SIGNIFICANT_GAP_GATE).and_then(|s| s.parse().ok()).unwrap_or(0.8),
+            char_width_factor: storage.get(storage_keys::EXTRACTION_CHAR_WIDTH_FACTOR).and_then(|s| s.parse().ok()).unwrap_or(0.45),
+            bridged_threshold: storage.get(storage_keys::EXTRACTION_BRIDGED_THRESHOLD).and_then(|s| s.parse().ok()).unwrap_or(0.4),
+            word_spacing_factor: storage.get(storage_keys::EXTRACTION_WORD_SPACING_FACTOR).and_then(|s| s.parse().ok()).unwrap_or(0.2),
+            row_lookback: storage.get(storage_keys::EXTRACTION_LAYOUT_ROW_LOOKBACK).and_then(|s| s.parse().ok()).unwrap_or(5),
+            table_break_threshold: storage.get(storage_keys::EXTRACTION_LAYOUT_TABLE_BREAK_THRESHOLD).and_then(|s| s.parse().ok()).unwrap_or(3.0),
+            paragraph_break_threshold: storage.get(storage_keys::EXTRACTION_LAYOUT_PARAGRAPH_BREAK_THRESHOLD).and_then(|s| s.parse().ok()).unwrap_or(3.0),
+            max_space_clamp: storage.get(storage_keys::EXTRACTION_LAYOUT_MAX_SPACE_CLAMP).and_then(|s| s.parse().ok()).unwrap_or(6),
+        };
+        ext.tables = TablesConfig {
+            footer_triggers: storage.get(storage_keys::EXTRACTION_FOOTER_TRIGGERS)
+                .map(|s| s.split(',').map(|t| t.trim().to_string()).collect())
+                .unwrap_or_else(|| vec!["total".to_string(), "sum".to_string(), "subtotal".to_string(), "balance".to_string()]),
+            min_contiguous_rows: storage.get(storage_keys::EXTRACTION_TABLE_MIN_CONTIGUOUS_ROWS).and_then(|s| s.parse().ok()).unwrap_or(4),
+            min_avg_segments: storage.get(storage_keys::EXTRACTION_TABLE_MIN_AVG_SEGMENTS).and_then(|s| s.parse().ok()).unwrap_or(3.1),
+            column_jitter_tolerance: storage.get(storage_keys::EXTRACTION_TABLES_COLUMN_JITTER_TOLERANCE).and_then(|s| s.parse().ok()).unwrap_or(20.0),
+            merge_y_gap_max: storage.get(storage_keys::EXTRACTION_TABLES_MERGE_Y_GAP_MAX).and_then(|s| s.parse().ok()).unwrap_or(100.0),
+            merge_y_gap_min: storage.get(storage_keys::EXTRACTION_TABLES_MERGE_Y_GAP_MIN).and_then(|s| s.parse().ok()).unwrap_or(40.0),
+        };
 
         if let Some(s) = storage.get(storage_keys::EXTRACTION_ADAPTIVE_PLAINTEXT_CLUSTER_FACTOR) { if let Ok(v) = s.parse() { ext.adaptive_overrides.plaintext_cluster_factor = v; } }
         if let Some(s) = storage.get(storage_keys::EXTRACTION_ADAPTIVE_PLAINTEXT_GAP_GATE) { if let Ok(v) = s.parse() { ext.adaptive_overrides.plaintext_gap_gate = v; } }
@@ -300,7 +315,6 @@ struct WordInfo {
     y: f32,
     w: f32,
     h: f32,
-    flags: Vec<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -351,7 +365,7 @@ impl WindowsNativeOcrAdapter {
 impl Default for WindowsNativeOcrAdapter {
     fn default() -> Self {
         Self {
-            config: RuntimeConfig::load_from_json_adapter(),
+            config: None,
         }
     }
 }
@@ -414,14 +428,13 @@ impl TextExtractionPort for WindowsNativeOcrAdapter {
                             y: rect.Y,
                             w: rect.Width,
                             h: rect.Height,
-                            flags: Vec::new(),
                         });
                         total_h += rect.Height;
                     }
                 }
             }
         }
-        let avg_h = if all_words.is_empty() { 20.0 } else { total_h / all_words.len() as f32 };
+        let _avg_h = if all_words.is_empty() { 20.0 } else { total_h / all_words.len() as f32 };
         let img_width = match bitmap.PixelWidth() { Ok(w) => w as f32, Err(_) => 1000.0 };
 
         if all_words.is_empty() {
@@ -438,8 +451,10 @@ impl TextExtractionPort for WindowsNativeOcrAdapter {
         let img_height = match bitmap.PixelHeight() { Ok(h) => h as f32, Err(_) => 1000.0 };
 
         // --- PHASE 47: Recursive Refinement Loop ---
+        use crate::adapters::storage::json_file_storage::JsonFileStorageAdapter;
+        use crate::ports::StoragePort;
         let initial_config = self.config.clone().unwrap_or_else(|| {
-            RuntimeConfig::load_from_json_adapter().unwrap_or_default()
+            RuntimeConfig::load_from_json_adapter(&JsonFileStorageAdapter::load()).unwrap_or_default()
         });
         let first_pass = self.perform_reconstruction_pass(&all_words, &initial_config, img_width, img_height);
         
@@ -498,10 +513,10 @@ impl WindowsNativeOcrAdapter {
             let mut found_row = false;
             let word_mid_y = word.y + (word.h / 2.0);
             
-            for row in rows.iter_mut().rev().take(5) { 
+            for row in rows.iter_mut().rev().take(config.extraction.layout_heuristics.row_lookback) { 
                 if let Some(first_in_row) = row.first() {
                     let row_h = first_in_row.h;
-                    let tolerance = row_h * 0.6; 
+                    let tolerance = row_h * config.extraction.layout_heuristics.row_overlap_tolerance; 
                     if (word_mid_y - (first_in_row.y + row_h / 2.0)).abs() < tolerance {
                         row.push(word);
                         found_row = true;
@@ -523,7 +538,7 @@ impl WindowsNativeOcrAdapter {
         let mut potential_gutters = 0;
         if x_starts.len() > 1 {
             for i in 0..x_starts.len() - 1 {
-                if x_starts[i+1] - x_starts[i] > first_avg_h * 5.0 {
+                if x_starts[i+1] - x_starts[i] > first_avg_h * config.extraction.columns.gutter_gap_factor {
                     potential_gutters += 1;
                 }
             }
@@ -586,7 +601,7 @@ impl WindowsNativeOcrAdapter {
                 let row_h = row[0].h;
                 let mut last_x_end = row[0].x + row[0].w;
                 for word in row.iter().skip(1) {
-                    if word.x - last_x_end > row_h * 0.4 { 
+                    if word.x - last_x_end > row_h * config.extraction.layout_heuristics.bridged_threshold { 
                         x_starts_all.push(word.x);
                     }
                     last_x_end = word.x + word.w;
@@ -678,7 +693,7 @@ impl WindowsNativeOcrAdapter {
             let row_h = sorted_row.iter().map(|w| w.h).fold(0.0, f32::max);
             let row_start_x = sorted_row[0].x;
             let mut current_segment_text = String::with_capacity(expected_chars);
-            let mut current_zone_idx = column_zones.iter().position(|z| row_start_x >= z.min_x - 15.0 && row_start_x <= z.max_x + 15.0).unwrap_or(0);
+            let mut current_zone_idx = column_zones.iter().position(|z| row_start_x >= z.min_x - active_heuristics.zone_proximity && row_start_x <= z.max_x + active_heuristics.zone_proximity).unwrap_or(0);
             let mut last_x_end = -1.0;
             let mut segment_start_x = row_start_x;
             for word in &sorted_row {
@@ -743,8 +758,8 @@ impl WindowsNativeOcrAdapter {
             }
             if row.is_table_candidate {
                 let mut contiguous = 1;
-                let mut j = i; while j > 0 && processed_rows[j-1].is_table_candidate { j -= 1; contiguous += 1; }
-                let mut k = i; while k + 1 < processed_rows.len() && processed_rows[k+1].is_table_candidate { k += 1; contiguous += 1; }
+                let mut j = i; while j > 0 && (processed_rows[j-1].is_table_candidate || row_types[j-1] == 2) { j -= 1; contiguous += 1; }
+                let mut k = i; while k + 1 < processed_rows.len() && (processed_rows[k+1].is_table_candidate || row_types[k+1] == 2) { k += 1; contiguous += 1; }
                 let total_segments: usize = (j..=k).map(|idx| processed_rows[idx].segments.len()).sum();
                 let avg_segments = total_segments as f32 / (k - j + 1) as f32;
                 if contiguous >= config.extraction.tables.min_contiguous_rows && avg_segments > config.extraction.tables.min_avg_segments {
@@ -787,7 +802,7 @@ impl WindowsNativeOcrAdapter {
             let mut current_table_rows: Vec<Vec<String>> = Vec::new();
             let mut current_table_y_top = 0.0;
             let mut current_table_column_centers = Vec::new();
-            let mut current_table_idx = 0;
+            let mut _current_table_idx = 0;
 
             for i in 0..processed_rows.len() {
                 let full_row = &processed_rows[i];
@@ -797,13 +812,13 @@ impl WindowsNativeOcrAdapter {
                 let row_type = row_types[i];
                 if last_y_end >= 0.0 {
                     let gap = full_row.y_top - last_y_end;
-                    let break_threshold = if in_active_table { 3.0 } else { active_heuristics.significant_gap_gate };
+                    let break_threshold = if in_active_table { config.extraction.layout_heuristics.table_break_threshold } else { active_heuristics.significant_gap_gate };
                     if gap > full_row.h * break_threshold { 
                         final_text.push_str("\n\n");
                         if in_active_table {
                             if !current_table_rows.is_empty() { 
                                 let mut headers = Vec::new();
-                                let mut body = Vec::new();
+                                let body;
                                 let mut footers = Vec::new();
                                 if !current_table_rows.is_empty() {
                                     headers.push(current_table_rows.remove(0));
@@ -833,7 +848,7 @@ impl WindowsNativeOcrAdapter {
                             }
                             in_active_table = false;
                         }
-                    } else if gap > 3.0 { final_text.push('\n'); }
+                    } else if gap > config.extraction.layout_heuristics.paragraph_break_threshold { final_text.push('\n'); }
                 }
 
                 for seg in &full_row.segments {
@@ -856,8 +871,8 @@ impl WindowsNativeOcrAdapter {
                             let z = &column_zones[z_idx];
                             (z.min_x + z.max_x) / 2.0
                         }).collect();
-                        current_table_idx = all_extracted_tables.len();
-                        final_text.push_str(&format!("{{{{TABLE_BLOCK_{}}}}}", current_table_idx));
+                        _current_table_idx = all_extracted_tables.len();
+                        final_text.push_str(&format!("{{{{TABLE_BLOCK_{}}}}}", _current_table_idx));
                     }
 
                     let mut current_row_cells = Vec::new();
@@ -879,7 +894,7 @@ impl WindowsNativeOcrAdapter {
                     if in_active_table {
                         if !current_table_rows.is_empty() { 
                             let mut headers = Vec::new();
-                            let mut body = Vec::new();
+                            let body;
                             let mut footers = Vec::new();
                             if !current_table_rows.is_empty() {
                                 headers.push(current_table_rows.remove(0));
@@ -919,7 +934,7 @@ impl WindowsNativeOcrAdapter {
                             let last_seg = &row_segments[idx-1];
                             let gap_px = seg.start_x - (last_seg.start_x + last_seg.text.len() as f32 * char_width);
                             let gap_chars = (gap_px.max(0.0) / char_width) as usize;
-                            for _ in 0..gap_chars.clamp(1, 6) { row_content.push(' '); }
+                            for _ in 0..gap_chars.clamp(1, config.extraction.layout_heuristics.max_space_clamp) { row_content.push(' '); }
                         }
                         row_content.push_str(&seg.text);
                     }
@@ -935,7 +950,7 @@ impl WindowsNativeOcrAdapter {
             }
             if in_active_table && !current_table_rows.is_empty() {
                 let mut headers = Vec::new();
-                let mut body = Vec::new();
+                let body;
                 let mut footers = Vec::new();
                 if !current_table_rows.is_empty() {
                     headers.push(current_table_rows.remove(0));
@@ -964,11 +979,11 @@ impl WindowsNativeOcrAdapter {
         }
 
         let original_tables = all_extracted_tables.clone();
-        let all_extracted_tables = self.merge_tables(all_extracted_tables);
+        let all_extracted_tables = self.merge_tables(all_extracted_tables, config);
 
         // Replace placeholders with merged Markdown
         let mut final_repaired_text = final_text;
-        for (i, table) in all_extracted_tables.iter().enumerate() {
+        for (_i, table) in all_extracted_tables.iter().enumerate() {
             let mut md_table = String::new();
             
             let mut all_rows = Vec::new();
@@ -1040,7 +1055,7 @@ impl WindowsNativeOcrAdapter {
         entities
     }
 
-    fn merge_tables(&self, tables: Vec<TableBlock>) -> Vec<TableBlock> {
+    fn merge_tables(&self, tables: Vec<TableBlock>, config: &RuntimeConfig) -> Vec<TableBlock> {
         if tables.len() < 2 { return tables; }
         
         let mut merged = Vec::new();
@@ -1054,7 +1069,7 @@ impl WindowsNativeOcrAdapter {
             let column_match = if current.column_centers.len() == next.column_centers.len() {
                 let mut all_match = true;
                 for (c1, c2) in current.column_centers.iter().zip(next.column_centers.iter()) {
-                    if (*c1 - *c2).abs() > 20.0 { // 20px jitter tolerance
+                    if (*c1 - *c2).abs() > config.extraction.tables.column_jitter_tolerance { // e.g. 20px jitter tolerance
                         all_match = false;
                         break;
                     }
@@ -1065,7 +1080,7 @@ impl WindowsNativeOcrAdapter {
             };
             
             // Merge if vertically close OR column signature is identical
-            if (y_gap < 100.0 && column_match) || (y_gap < 40.0 && current.column_centers.len() == next.column_centers.len()) {
+            if (y_gap < config.extraction.tables.merge_y_gap_max && column_match) || (y_gap < config.extraction.tables.merge_y_gap_min && current.column_centers.len() == next.column_centers.len()) {
                 current.body.extend(current.footers);
                 current.footers = Vec::new();
                 current.body.extend(next.headers);
@@ -1085,7 +1100,7 @@ impl WindowsNativeOcrAdapter {
 impl WindowsNativeOcrAdapter {
     /// Performs a post-processing pass to correct common OCR misinterpretations 
     /// (e.g. '|' read as 'l', '1', or 'I' in tables).
-    fn refine_extracted_text(&self, text: String, _rows: &[ProcessedRow], _zones: &[ColumnZone]) -> String {
+    fn _refine_extracted_text(&self, text: String, _rows: &[ProcessedRow], _zones: &[ColumnZone]) -> String {
         let mut lines: Vec<String> = text.lines().map(|s| s.to_string()).collect();
         let mut table_block_ranges = Vec::new();
         

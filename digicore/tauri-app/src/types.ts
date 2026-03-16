@@ -11,6 +11,7 @@ export interface Snippet {
 
 export interface AppState {
   library_path: string;
+  kms_vault_path: string;
   library: Record<string, Snippet[]>;
   categories: string[];
   selected_category?: number;
@@ -63,6 +64,13 @@ export interface AppState {
   extraction_footer_triggers: string;
   extraction_table_min_contiguous_rows: number;
   extraction_table_min_avg_segments: number;
+  extraction_layout_row_lookback: number;
+  extraction_layout_table_break_threshold: number;
+  extraction_layout_paragraph_break_threshold: number;
+  extraction_layout_max_space_clamp: number;
+  extraction_tables_column_jitter_tolerance: number;
+  extraction_tables_merge_y_gap_max: number;
+  extraction_tables_merge_y_gap_min: number;
 
   extraction_adaptive_plaintext_cluster_factor: number;
   extraction_adaptive_plaintext_gap_gate: number;
@@ -70,6 +78,9 @@ export interface AppState {
   extraction_adaptive_table_gap_gate: number;
   extraction_adaptive_column_cluster_factor: number;
   extraction_adaptive_column_gap_gate: number;
+  extraction_adaptive_plaintext_cross_factor: number;
+  extraction_adaptive_table_cross_factor: number;
+  extraction_adaptive_column_cross_factor: number;
 
   extraction_refinement_entropy_threshold: number;
   extraction_refinement_cluster_threshold_modifier: number;
@@ -113,6 +124,7 @@ export interface ClipEntry {
   image_height?: number | null;
   image_bytes?: number | null;
   parent_id?: number | null;
+  metadata?: string | null;
 }
 
 export interface InteractiveVarDto {

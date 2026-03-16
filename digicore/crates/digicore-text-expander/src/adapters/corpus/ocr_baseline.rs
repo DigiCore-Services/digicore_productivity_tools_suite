@@ -10,10 +10,10 @@ pub struct OcrBaselineAdapter {
 }
 
 impl OcrBaselineAdapter {
-    pub fn new(snapshot_dir: String) -> Self {
+    pub fn new(snapshot_dir: String, config: Option<crate::adapters::extraction::RuntimeConfig>) -> Self {
         Self {
             snapshot_dir,
-            ocr_adapter: WindowsNativeOcrAdapter::new(None),
+            ocr_adapter: WindowsNativeOcrAdapter::new(config),
         }
     }
 }

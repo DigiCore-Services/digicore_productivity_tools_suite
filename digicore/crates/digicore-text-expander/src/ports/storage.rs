@@ -10,10 +10,9 @@
 /// Storage keys for Text Expander user preferences.
 /// Used by adapters to read/write from backing store.
 pub mod keys {
-    pub const LIBRARY_PATH: &str = "library_path";
-    pub const SYNC_URL: &str = "sync_url";
     pub const TEMPLATE_DATE_FORMAT: &str = "template_date_format";
     pub const TEMPLATE_TIME_FORMAT: &str = "template_time_format";
+    pub const SYNC_URL: &str = "sync_url";
     pub const SCRIPT_LIBRARY_RUN_DISABLED: &str = "script_library_run_disabled";
     pub const SCRIPT_LIBRARY_RUN_ALLOWLIST: &str = "script_library_run_allowlist";
     pub const GHOST_SUGGESTOR_DISPLAY_SECS: &str = "ghost_suggestor_display_secs";
@@ -74,11 +73,18 @@ pub mod keys {
     pub const EXTRACTION_CHAR_WIDTH_FACTOR: &str = "extraction_char_width_factor";
     pub const EXTRACTION_BRIDGED_THRESHOLD: &str = "extraction_bridged_threshold";
     pub const EXTRACTION_WORD_SPACING_FACTOR: &str = "extraction_word_spacing_factor";
+    pub const EXTRACTION_LAYOUT_ROW_LOOKBACK: &str = "extraction_layout_row_lookback";
+    pub const EXTRACTION_LAYOUT_TABLE_BREAK_THRESHOLD: &str = "extraction_layout_table_break_threshold";
+    pub const EXTRACTION_LAYOUT_PARAGRAPH_BREAK_THRESHOLD: &str = "extraction_layout_paragraph_break_threshold";
+    pub const EXTRACTION_LAYOUT_MAX_SPACE_CLAMP: &str = "extraction_layout_max_space_clamp";
 
     // Extraction Tables Keys
     pub const EXTRACTION_FOOTER_TRIGGERS: &str = "extraction_footer_triggers";
     pub const EXTRACTION_TABLE_MIN_CONTIGUOUS_ROWS: &str = "extraction_table_min_contiguous_rows";
     pub const EXTRACTION_TABLE_MIN_AVG_SEGMENTS: &str = "extraction_table_min_avg_segments";
+    pub const EXTRACTION_TABLES_COLUMN_JITTER_TOLERANCE: &str = "extraction_tables_column_jitter_tolerance";
+    pub const EXTRACTION_TABLES_MERGE_Y_GAP_MAX: &str = "extraction_tables_merge_y_gap_max";
+    pub const EXTRACTION_TABLES_MERGE_Y_GAP_MIN: &str = "extraction_tables_merge_y_gap_min";
 
     // Extraction Adaptive Overrides
     pub const EXTRACTION_ADAPTIVE_PLAINTEXT_CLUSTER_FACTOR: &str = "extraction_adaptive_plaintext_cluster_factor";
@@ -120,6 +126,9 @@ pub mod keys {
     pub const EXTRACTION_SCORING_JITTER_PENALTY_WEIGHT: &str = "extraction_scoring_jitter_penalty_weight";
     pub const EXTRACTION_SCORING_SIZE_PENALTY_WEIGHT: &str = "extraction_scoring_size_penalty_weight";
     pub const EXTRACTION_SCORING_LOW_CONFIDENCE_THRESHOLD: &str = "extraction_scoring_low_confidence_threshold";
+
+    pub const LIBRARY_PATH: &str = "library_path";
+    pub const KMS_VAULT_PATH: &str = "kms_vault_path";
 }
 
 /// Port for key-value persistence (user preferences, window state).

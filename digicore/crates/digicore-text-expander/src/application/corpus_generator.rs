@@ -1,7 +1,6 @@
 use digicore_core::domain::ports::{CorpusBaselinePort, CorpusStoragePort};
 use digicore_core::domain::value_objects::CorpusConfig;
 use std::sync::Arc;
-use chrono::Local;
 
 /// Service responsible for handling the "One-Click" Corpus Generation Utility workflow.
 pub struct CorpusService {
@@ -58,7 +57,7 @@ impl CorpusService {
         );
 
         let mut png_data = std::io::Cursor::new(Vec::new());
-        if let Some(mut b) = buf {
+        if let Some(b) = buf {
             // Arboard uses RGBA bytes natively. However, sometimes platforms differ.
             // Assuming standard RGBA formatting here for the test corpus.
             if let Err(e) = b.write_to(&mut png_data, image::ImageFormat::Png) {

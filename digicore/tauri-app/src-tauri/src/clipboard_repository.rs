@@ -23,6 +23,7 @@ pub struct ClipboardRow {
     pub image_height: Option<u32>,
     pub image_bytes: Option<u32>,
     pub parent_id: Option<u32>,
+    pub metadata: Option<String>,
 }
 
 static DB_PATH: OnceLock<PathBuf> = OnceLock::new();
@@ -57,7 +58,7 @@ fn word_count(content: &str) -> u32 {
     content.split_whitespace().count() as u32
 }
 
-fn assets_root_dir() -> PathBuf {
+pub fn assets_root_dir() -> PathBuf {
     digicore_text_expander::ports::data_path_resolver::DataPathResolver::clipboard_images_dir()
 }
 
@@ -111,7 +112,8 @@ pub fn init(db_path: PathBuf) -> Result<(), String> {
             image_width INTEGER,
             image_height INTEGER,
             image_bytes INTEGER,
-            parent_id INTEGER
+            parent_id INTEGER,
+            metadata TEXT
         );
         CREATE INDEX IF NOT EXISTS idx_clipboard_history_created_at
             ON clipboard_history(created_at_unix_ms DESC);
@@ -128,6 +130,7 @@ pub fn init(db_path: PathBuf) -> Result<(), String> {
     ensure_column(&conn, "image_height", "INTEGER")?;
     ensure_column(&conn, "image_bytes", "INTEGER")?;
     ensure_column(&conn, "parent_id", "INTEGER")?;
+    ensure_column(&conn, "metadata", "TEXT")?;
     let _ = DB_CONN.set(Mutex::new(conn));
     Ok(())
 }
@@ -149,15 +152,15 @@ fn latest_content_hash(conn: &Connection) -> Result<Option<String>, String> {
     .map_err(|e| e.to_string())
 }
 
-pub fn insert_entry(content: &str, process_name: &str, window_title: &str) -> Result<bool, String> {
+pub fn insert_entry(content: &str, process_name: &str, window_title: &str) -> Result<Option<u32>, String> {
     let normalized = normalize_content_for_hash(content);
     if normalized.is_empty() {
-        return Ok(false);
+        return Ok(None);
     }
     let hash = content_hash(content);
     let conn = conn_guard()?;
     if latest_content_hash(&conn)?.as_deref() == Some(hash.as_str()) {
-        return Ok(false);
+        return Ok(None);
     }
     let chars = content.chars().count() as u32;
     let words = word_count(content);
@@ -170,9 +173,11 @@ pub fn insert_entry(content: &str, process_name: &str, window_title: &str) -> Re
         params![content, process_name, window_title, chars, words, hash, now_ms, None::<u32>],
     )
     .map_err(|e| e.to_string())?;
-    log::info!("[ClipboardRepository] Text insertion successful, row_id: {}", conn.last_insert_rowid());
-    Ok(true)
+    let id = conn.last_insert_rowid() as u32;
+    log::info!("[ClipboardRepository] Text insertion successful, row_id: {}", id);
+    Ok(Some(id))
 }
+
 
 fn save_image_assets(
     hash: &str,
@@ -406,6 +411,7 @@ fn map_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ClipboardRow> {
         image_height: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
         image_bytes: row.get::<_, Option<i64>>(13)?.map(|v| v as u32),
         parent_id: row.get::<_, Option<i64>>(14)?.map(|v| v as u32),
+        metadata: row.get(15)?,
     })
 }
 
@@ -415,7 +421,7 @@ pub fn list_entries(search: Option<&str>, limit: u32) -> Result<Vec<ClipboardRow
     let mut rows = Vec::new();
     let select_sql = "SELECT
             id, content, process_name, window_title, char_count, word_count, created_at_unix_ms,
-            entry_type, mime_type, image_path, thumb_path, image_width, image_height, image_bytes, parent_id
+            entry_type, mime_type, image_path, thumb_path, image_width, image_height, image_bytes, parent_id, metadata
         FROM clipboard_history";
     if let Some(search_raw) = search {
         let search_trim = search_raw.trim();
@@ -551,7 +557,7 @@ pub fn get_entry_by_id(id: u32) -> Result<Option<ClipboardRow>, String> {
         .prepare(
             "SELECT
                 id, content, process_name, window_title, char_count, word_count, created_at_unix_ms,
-                entry_type, mime_type, image_path, thumb_path, image_width, image_height, image_bytes, parent_id
+                entry_type, mime_type, image_path, thumb_path, image_width, image_height, image_bytes, parent_id, metadata
              FROM clipboard_history
              WHERE id = ?1
              LIMIT 1",
@@ -594,17 +600,17 @@ pub fn clear_all() -> Result<(), String> {
     Ok(())
 }
 
-pub fn trim_to_depth(max_depth: u32) -> Result<u32, String> {
+pub fn trim_to_depth(max_depth: u32) -> Result<Vec<u32>, String> {
     if max_depth == 0 {
-        return Ok(0);
+        return Ok(Vec::new());
     }
     let conn = conn_guard()?;
     let depth = max_depth as i64;
-    let mut stale_assets = Vec::<(Option<String>, Option<String>)>::new();
+    let mut stale_entries = Vec::<(u32, Option<String>, Option<String>)>::new();
     {
         let mut stmt = conn
             .prepare(
-                "SELECT image_path, thumb_path
+                "SELECT id, image_path, thumb_path
                  FROM clipboard_history
                  WHERE id NOT IN (
                      SELECT id FROM clipboard_history ORDER BY id DESC LIMIT ?1
@@ -613,14 +619,25 @@ pub fn trim_to_depth(max_depth: u32) -> Result<u32, String> {
             .map_err(|e| e.to_string())?;
         let rows = stmt
             .query_map(params![depth], |row| {
-                Ok((row.get::<_, Option<String>>(0)?, row.get::<_, Option<String>>(1)?))
+                Ok((
+                    row.get::<_, i64>(0)? as u32,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                ))
             })
             .map_err(|e| e.to_string())?;
         for item in rows {
-            stale_assets.push(item.map_err(|e| e.to_string())?);
+            stale_entries.push(item.map_err(|e| e.to_string())?);
         }
     }
-    let affected = conn
+
+    if stale_entries.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let deleted_ids: Vec<u32> = stale_entries.iter().map(|(id, _, _)| *id).collect();
+
+    let _affected = conn
         .execute(
             "DELETE FROM clipboard_history
              WHERE id NOT IN (
@@ -629,7 +646,8 @@ pub fn trim_to_depth(max_depth: u32) -> Result<u32, String> {
             params![depth],
         )
         .map_err(|e| e.to_string())?;
-    for (image_path, thumb_path) in stale_assets {
+
+    for (_, image_path, thumb_path) in stale_entries {
         if let Some(path) = image_path {
             let _ = std::fs::remove_file(path);
         }
@@ -637,7 +655,7 @@ pub fn trim_to_depth(max_depth: u32) -> Result<u32, String> {
             let _ = std::fs::remove_file(path);
         }
     }
-    Ok(affected as u32)
+    Ok(deleted_ids)
 }
 
 pub fn count() -> Result<u32, String> {
@@ -653,7 +671,7 @@ pub fn insert_extracted_text_entry(
     process_name: &str,
     window_title: &str,
     parent_id: u32,
-    _metadata: &serde_json::Value,
+    metadata: &serde_json::Value,
 ) -> Result<u32, String> {
     let now_ms = now_unix_ms() as i64;
     let conn = conn_guard()?;
@@ -662,8 +680,8 @@ pub fn insert_extracted_text_entry(
     
     conn.execute(
         "INSERT INTO clipboard_history (
-            content, process_name, window_title, char_count, word_count, created_at_unix_ms, entry_type, parent_id
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'extracted_text', ?7)",
+            content, process_name, window_title, char_count, word_count, created_at_unix_ms, entry_type, parent_id, metadata
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'extracted_text', ?7, ?8)",
         params![
             content,
             process_name,
@@ -671,10 +689,85 @@ pub fn insert_extracted_text_entry(
             content.chars().count() as i64,
             word_count(content) as i64,
             now_ms,
-            parent_id
+            parent_id,
+            serde_json::to_string(metadata).ok()
         ],
     )
     .map_err(|e| e.to_string())?;
     
     Ok(conn.last_insert_rowid() as u32)
+}
+
+pub fn list_image_entries(search: Option<&str>, page: u32, page_size: u32) -> Result<(Vec<ClipboardRow>, u32), String> {
+    let conn = conn_guard()?;
+    let offset = (page.max(1) - 1) * page_size;
+    let limit = page_size.clamp(1, 100);
+    
+    let mut rows = Vec::new();
+    let select_sql = "SELECT
+            id, content, process_name, window_title, char_count, word_count, created_at_unix_ms,
+            entry_type, mime_type, image_path, thumb_path, image_width, image_height, image_bytes, parent_id, metadata
+        FROM clipboard_history
+        WHERE entry_type = 'image'";
+
+    let (final_rows, total_count) = if let Some(search_raw) = search {
+        let search_trim = search_raw.trim();
+        if !search_trim.is_empty() {
+             let like = format!("%{}%", search_trim);
+             let mut count_stmt = conn.prepare("SELECT COUNT(1) FROM clipboard_history WHERE entry_type = 'image' AND (content LIKE ?1 OR process_name LIKE ?1 OR window_title LIKE ?1)").map_err(|e| e.to_string())?;
+             let total: i64 = count_stmt.query_row(params![like], |row| row.get(0)).map_err(|e| e.to_string())?;
+             
+             let mut stmt = conn.prepare(&format!("{select_sql} AND (content LIKE ?1 OR process_name LIKE ?1 OR window_title LIKE ?1) ORDER BY id DESC LIMIT ?2 OFFSET ?3")).map_err(|e| e.to_string())?;
+             let mapped = stmt.query_map(params![like, limit, offset], map_row).map_err(|e| e.to_string())?;
+             for item in mapped {
+                 let mut row = item.map_err(|e| e.to_string())?;
+                 ensure_row_thumbnail(&mut row);
+                 rows.push(row);
+             }
+             (rows, total as u32)
+        } else {
+             let mut count_stmt = conn.prepare("SELECT COUNT(1) FROM clipboard_history WHERE entry_type = 'image'").map_err(|e| e.to_string())?;
+             let total: i64 = count_stmt.query_row([], |row| row.get(0)).map_err(|e| e.to_string())?;
+
+             let mut stmt = conn.prepare(&format!("{select_sql} ORDER BY id DESC LIMIT ?1 OFFSET ?2")).map_err(|e| e.to_string())?;
+             let mapped = stmt.query_map(params![limit, offset], map_row).map_err(|e| e.to_string())?;
+             for item in mapped {
+                 let mut row = item.map_err(|e| e.to_string())?;
+                 ensure_row_thumbnail(&mut row);
+                 rows.push(row);
+             }
+             (rows, total as u32)
+        }
+    } else {
+        let mut count_stmt = conn.prepare("SELECT COUNT(1) FROM clipboard_history WHERE entry_type = 'image'").map_err(|e| e.to_string())?;
+        let total: i64 = count_stmt.query_row([], |row| row.get(0)).map_err(|e| e.to_string())?;
+
+        let mut stmt = conn.prepare(&format!("{select_sql} ORDER BY id DESC LIMIT ?1 OFFSET ?2")).map_err(|e| e.to_string())?;
+        let mapped = stmt.query_map(params![limit, offset], map_row).map_err(|e| e.to_string())?;
+        for item in mapped {
+            let mut row = item.map_err(|e| e.to_string())?;
+            ensure_row_thumbnail(&mut row);
+            rows.push(row);
+        }
+        (rows, total as u32)
+    };
+
+    Ok((final_rows, total_count))
+}
+
+pub fn get_child_entries(parent_id: u32) -> Result<Vec<ClipboardRow>, String> {
+    let conn = conn_guard()?;
+    let mut rows = Vec::new();
+    let select_sql = "SELECT
+            id, content, process_name, window_title, char_count, word_count, created_at_unix_ms,
+            entry_type, mime_type, image_path, thumb_path, image_width, image_height, image_bytes, parent_id, metadata
+        FROM clipboard_history
+        WHERE parent_id = ?1
+        ORDER BY id ASC";
+    let mut stmt = conn.prepare(select_sql).map_err(|e| e.to_string())?;
+    let mapped = stmt.query_map(params![parent_id], map_row).map_err(|e| e.to_string())?;
+    for item in mapped {
+        rows.push(item.map_err(|e| e.to_string())?);
+    }
+    Ok(rows)
 }

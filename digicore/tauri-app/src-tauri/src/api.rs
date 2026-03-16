@@ -2,6 +2,11 @@
 
 use crate::{
     clipboard_repository,
+    kms_repository,
+    kms_service::KmsService,
+    kms_diagnostic_service::KmsDiagnosticService,
+    embedding_service,
+    indexing_service,
     app_state_to_dto, AppearanceTransparencyRuleDto, ConfigUpdateDto, ExpansionStatsDto, GhostFollowerStateDto,
     GhostSuggestorStateDto, ScriptingDslConfigDto, ScriptingEngineConfigDto, ScriptingHttpConfigDto,
     ScriptingDetachedSignatureExportDto, ScriptingLuaConfigDto, ScriptingProfileDiffEntryDto,
@@ -31,8 +36,9 @@ use digicore_text_expander::application::app_state::AppState;
 use digicore_text_expander::ports::{storage_keys, StoragePort};
 use digicore_text_expander::services::extraction_service::create_extraction_service;
 use digicore_core::domain::{ExtractionSource, ExtractionMimeType};
+use chrono;
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use tauri::{AppHandle, Emitter, Manager};
 use base64::Engine;
@@ -54,6 +60,7 @@ use crate::{
     ClipEntryDto, DiagnosticEntryDto, InteractiveVarDto, PinnedSnippetDto,
     PendingVariableInputDto as PendingVarDto, SuggestionDto,
 };
+use notify::{Watcher, RecursiveMode, Config, Event};
 
 fn load_appearance_rules(storage: &JsonFileStorageAdapter) -> Vec<AppearanceTransparencyRuleDto> {
     storage
@@ -287,7 +294,7 @@ pub(crate) fn persist_clipboard_entry_with_settings(
     content: &str,
     process_name: &str,
     window_title: &str,
-) -> Result<bool, String> {
+) -> Result<Option<u32>, String> {
     let storage = JsonFileStorageAdapter::load();
     let max_depth = storage
         .get(storage_keys::CLIP_HISTORY_MAX_DEPTH)
@@ -295,18 +302,18 @@ pub(crate) fn persist_clipboard_entry_with_settings(
         .unwrap_or(20);
     let cfg = load_copy_to_clipboard_config(&storage, max_depth);
     if !cfg.enabled {
-        return Ok(false);
+        return Ok(None);
     }
     if process_is_blacklisted(process_name, &cfg.blacklist_processes) {
-        return Ok(false);
+        return Ok(None);
     }
     if content.trim().chars().count() < cfg.min_log_length as usize {
-        return Ok(false);
+        return Ok(None);
     }
     let masked = apply_masking(content.to_string(), &cfg);
-    let inserted = clipboard_repository::insert_entry(&masked, process_name, window_title)?;
-    log::info!("[Clipboard] clipboard_repository::insert_entry returned {}", inserted);
-    if inserted {
+    let inserted_id = clipboard_repository::insert_entry(&masked, process_name, window_title)?;
+    log::info!("[Clipboard] clipboard_repository::insert_entry returned {:?}", inserted_id);
+    if let Some(_id) = inserted_id {
         if cfg.json_output_enabled {
             if let Err(err) = write_clipboard_text_json_record(
                 &cfg.json_output_dir,
@@ -321,8 +328,9 @@ pub(crate) fn persist_clipboard_entry_with_settings(
             let _ = clipboard_repository::trim_to_depth(cfg.max_history_entries);
         }
     }
-    Ok(inserted)
+    Ok(inserted_id)
 }
+
 
 const SETTINGS_GROUP_TEMPLATES: &str = "templates";
 const SETTINGS_GROUP_SYNC: &str = "sync";
@@ -1205,6 +1213,10 @@ fn persist_settings_to_storage(state: &AppState) -> Result<(), String> {
     storage.set(storage_keys::EXTRACTION_ADAPTIVE_TABLE_GAP_GATE, &state.extraction_adaptive_table_gap_gate.to_string());
     storage.set(storage_keys::EXTRACTION_ADAPTIVE_COLUMN_CLUSTER_FACTOR, &state.extraction_adaptive_column_cluster_factor.to_string());
     storage.set(storage_keys::EXTRACTION_ADAPTIVE_COLUMN_GAP_GATE, &state.extraction_adaptive_column_gap_gate.to_string());
+    storage.set(storage_keys::EXTRACTION_ADAPTIVE_PLAINTEXT_CROSS_FACTOR, &state.extraction_adaptive_plaintext_cross_factor.to_string());
+    storage.set(storage_keys::EXTRACTION_ADAPTIVE_TABLE_CROSS_FACTOR, &state.extraction_adaptive_table_cross_factor.to_string());
+    storage.set(storage_keys::EXTRACTION_ADAPTIVE_COLUMN_CROSS_FACTOR, &state.extraction_adaptive_column_cross_factor.to_string());
+
 
     storage.set(storage_keys::EXTRACTION_REFINEMENT_ENTROPY_THRESHOLD, &state.extraction_refinement_entropy_threshold.to_string());
     storage.set(storage_keys::EXTRACTION_REFINEMENT_CLUSTER_THRESHOLD_MODIFIER, &state.extraction_refinement_cluster_threshold_modifier.to_string());
@@ -1230,6 +1242,14 @@ fn persist_settings_to_storage(state: &AppState) -> Result<(), String> {
     storage.set(storage_keys::EXTRACTION_SCORING_JITTER_PENALTY_WEIGHT, &state.extraction_scoring_jitter_penalty_weight.to_string());
     storage.set(storage_keys::EXTRACTION_SCORING_SIZE_PENALTY_WEIGHT, &state.extraction_scoring_size_penalty_weight.to_string());
     storage.set(storage_keys::EXTRACTION_SCORING_LOW_CONFIDENCE_THRESHOLD, &state.extraction_scoring_low_confidence_threshold.to_string());
+    
+    storage.set(storage_keys::EXTRACTION_LAYOUT_ROW_LOOKBACK, &state.extraction_layout_row_lookback.to_string());
+    storage.set(storage_keys::EXTRACTION_LAYOUT_TABLE_BREAK_THRESHOLD, &state.extraction_layout_table_break_threshold.to_string());
+    storage.set(storage_keys::EXTRACTION_LAYOUT_PARAGRAPH_BREAK_THRESHOLD, &state.extraction_layout_paragraph_break_threshold.to_string());
+    storage.set(storage_keys::EXTRACTION_LAYOUT_MAX_SPACE_CLAMP, &state.extraction_layout_max_space_clamp.to_string());
+    storage.set(storage_keys::EXTRACTION_TABLES_COLUMN_JITTER_TOLERANCE, &state.extraction_tables_column_jitter_tolerance.to_string());
+    storage.set(storage_keys::EXTRACTION_TABLES_MERGE_Y_GAP_MAX, &state.extraction_tables_merge_y_gap_max.to_string());
+    storage.set(storage_keys::EXTRACTION_TABLES_MERGE_Y_GAP_MIN, &state.extraction_tables_merge_y_gap_min.to_string());
 
     storage.persist().map_err(|e| e.to_string())
 }
@@ -1280,6 +1300,12 @@ pub trait Api {
     async fn delete_clip_entry(index: u32) -> Result<(), String>;
     async fn delete_clip_entry_by_id(id: u32) -> Result<(), String>;
     async fn clear_clipboard_history() -> Result<(), String>;
+    async fn get_image_gallery(
+        search: Option<String>,
+        page: u32,
+        page_size: u32,
+    ) -> Result<(Vec<ClipEntryDto>, u32), String>;
+    async fn get_child_entries(parent_id: u32) -> Result<Vec<ClipEntryDto>, String>;
     async fn get_copy_to_clipboard_config() -> Result<CopyToClipboardConfigDto, String>;
     async fn save_copy_to_clipboard_config(config: CopyToClipboardConfigDto) -> Result<(), String>;
     async fn get_copy_to_clipboard_stats() -> Result<CopyToClipboardStatsDto, String>;
@@ -1287,6 +1313,7 @@ pub trait Api {
     async fn copy_clipboard_image_by_id(id: u32) -> Result<(), String>;
     async fn save_clipboard_image_by_id(id: u32, path: String) -> Result<(), String>;
     async fn open_clipboard_image_by_id(id: u32) -> Result<(), String>;
+    async fn get_clip_entry_by_id(id: u32) -> Result<Option<ClipEntryDto>, String>;
     async fn get_script_library_js() -> Result<String, String>;
     async fn save_script_library_js(content: String) -> Result<(), String>;
     async fn get_script_library_py() -> Result<String, String>;
@@ -1368,6 +1395,96 @@ pub trait Api {
         country: Option<String>,
         region: Option<String>,
     ) -> Result<Vec<String>, String>;
+    async fn kms_launch() -> Result<(), String>;
+    async fn kms_initialize() -> Result<String, String>;
+    async fn kms_list_notes() -> Result<Vec<KmsNoteDto>, String>;
+    async fn kms_load_note(path: String) -> Result<String, String>;
+    async fn kms_save_note(path: String, content: String) -> Result<(), String>;
+    async fn kms_delete_note(path: String) -> Result<(), String>;
+    async fn kms_rename_note(old_path: String, new_name: String) -> Result<String, String>;
+    async fn kms_rename_folder(old_path: String, new_name: String) -> Result<String, String>;
+    async fn kms_delete_folder(path: String) -> Result<(), String>;
+    async fn kms_move_item(path: String, new_parent_path: String) -> Result<String, String>;
+    async fn kms_create_folder(path: String) -> Result<(), String>;
+    async fn kms_search_semantic(query: String, modality: Option<String>, limit: u32, search_mode: Option<String>) -> Result<Vec<SearchResultDto>, String>;
+    async fn kms_reindex_all() -> Result<(), String>;
+    async fn kms_reindex_note(path: String) -> Result<(), String>;
+    async fn kms_repair_database() -> Result<(), String>;
+    async fn kms_get_vault_path() -> Result<String, String>;
+    async fn kms_set_vault_path(new_path: String, migrate: bool) -> Result<(), String>;
+    async fn kms_reindex_type(provider_id: String) -> Result<u32, String>;
+    async fn kms_get_indexing_status() -> Result<Vec<IndexingStatusDto>, String>;
+    async fn kms_get_indexing_details(provider_id: String) -> Result<Vec<KmsIndexStatusRow>, String>;
+    async fn kms_retry_item(provider_id: String, entity_id: String) -> Result<(), String>;
+    async fn kms_retry_failed(provider_id: String) -> Result<(), String>;
+    async fn kms_get_note_links(path: String) -> Result<KmsLinksDto, String>;
+    async fn kms_get_logs(limit: u32) -> Result<Vec<KmsLogDto>, String>;
+    async fn kms_clear_logs() -> Result<(), String>;
+    async fn kms_get_vault_structure() -> Result<KmsFileSystemItemDto, String>;
+}
+
+#[taurpc::ipc_type]
+pub struct KmsNoteDto {
+    pub id: i32,
+    pub path: String,
+    pub title: String,
+    pub preview: Option<String>,
+    pub last_modified: Option<String>,
+    pub is_favorite: bool,
+    pub sync_status: String,
+}
+
+#[taurpc::ipc_type]
+pub struct KmsLogDto {
+    pub id: i32,
+    pub level: String,
+    pub message: String,
+    pub details: Option<String>,
+    pub timestamp: String,
+}
+
+#[taurpc::ipc_type]
+pub struct KmsFileSystemItemDto {
+    pub name: String,
+    pub path: String,
+    pub rel_path: String,
+    pub item_type: String, // "file" | "directory"
+    pub children: Option<Vec<KmsFileSystemItemDto>>,
+    pub note: Option<KmsNoteDto>,
+}
+
+#[taurpc::ipc_type]
+pub struct KmsLinksDto {
+    pub outgoing: Vec<KmsNoteDto>,
+    pub incoming: Vec<KmsNoteDto>,
+}
+
+#[taurpc::ipc_type]
+pub struct SearchResultDto {
+    pub entity_type: String, // 'note', 'snippet', 'clip'
+    pub entity_id: String,
+    pub distance: f32,
+    pub modality: String, // 'text', 'image'
+    pub metadata: Option<String>,
+    pub snippet: Option<String>,
+}
+
+#[taurpc::ipc_type]
+pub struct IndexingStatusDto {
+    pub category: String, // "notes", "snippets", "clipboard"
+    pub indexed_count: u32,
+    pub failed_count: u32,
+    pub total_count: u32,
+    pub last_error: Option<String>,
+}
+
+#[taurpc::ipc_type]
+pub struct KmsIndexStatusRow {
+    pub entity_type: String,
+    pub entity_id: String,
+    pub status: String,
+    pub error: Option<String>,
+    pub updated_at: String,
 }
 
 #[derive(Clone)]
@@ -1375,6 +1492,38 @@ pub struct ApiImpl {
     pub state: Arc<Mutex<digicore_text_expander::application::app_state::AppState>>,
     pub app_handle: Arc<Mutex<Option<AppHandle>>>,
 }
+
+impl ApiImpl {
+
+    fn get_vault_path(&self) -> PathBuf {
+        let app = get_app(&self.app_handle);
+        let app_state = app.state::<Arc<Mutex<AppState>>>();
+        let state = app_state.lock().unwrap();
+        
+        if state.kms_vault_path.is_empty() {
+             // Fallback to default documents dir
+             let docs = app.path().document_dir().unwrap_or_else(|_| PathBuf::from(""));
+             docs.join("DigiCore Notes")
+        } else {
+             PathBuf::from(&state.kms_vault_path)
+        }
+    }
+
+    fn resolve_absolute_path(&self, relative_path: &str) -> PathBuf {
+        self.get_vault_path().join(relative_path)
+    }
+
+    fn get_relative_path(&self, absolute_path: &Path) -> Result<String, String> {
+        let vault = self.get_vault_path();
+        absolute_path
+            .strip_prefix(&vault)
+            .map(|p| p.to_string_lossy().replace('\\', "/"))
+            .map_err(|_| format!("Path {} is not within the vault {}", absolute_path.display(), vault.display()))
+    }
+}
+
+// Ensure KmsIndexingService is imported for the trait methods to find it
+use crate::indexing_service::KmsIndexingService;
 
 fn get_app(app: &Arc<Mutex<Option<AppHandle>>>) -> AppHandle {
     app.lock()
@@ -1411,10 +1560,10 @@ fn var_type_to_string(t: &InteractiveVarType) -> &'static str {
     }
 }
 
-pub(crate) fn sync_runtime_clipboard_entries_to_sqlite() {
+pub(crate) fn sync_runtime_clipboard_entries_to_sqlite(app: &tauri::AppHandle) {
     let entries = clipboard_history::get_entries();
     if entries.is_empty() {
-        sync_current_clipboard_image_to_sqlite(String::new(), String::new());
+        sync_current_clipboard_image_to_sqlite(String::new(), String::new(), Some(app));
         return;
     }
     for entry in entries.into_iter().rev() {
@@ -1424,10 +1573,10 @@ pub(crate) fn sync_runtime_clipboard_entries_to_sqlite() {
             &entry.window_title,
         );
     }
-    sync_current_clipboard_image_to_sqlite(String::new(), String::new());
+    sync_current_clipboard_image_to_sqlite(String::new(), String::new(), Some(app));
 }
 
-pub(crate) fn sync_current_clipboard_image_to_sqlite(process_name: String, window_title: String) {
+pub(crate) fn sync_current_clipboard_image_to_sqlite(process_name: String, window_title: String, app: Option<&tauri::AppHandle>) {
     let storage = JsonFileStorageAdapter::load();
     let max_depth = storage
         .get(storage_keys::CLIP_HISTORY_MAX_DEPTH)
@@ -1488,12 +1637,26 @@ pub(crate) fn sync_current_clipboard_image_to_sqlite(process_name: String, windo
     ).unwrap_or(0);
 
     if inserted_id > 0 {
+        if let Some(handle) = app {
+            let h = handle.clone();
+            let service = h.state::<Arc<crate::indexing_service::KmsIndexingService>>().inner().clone();
+            let entity_id = inserted_id.to_string();
+            tauri::async_runtime::spawn(async move {
+                let _ = service.index_single_item(&h, "clipboard", &entity_id).await;
+            });
+        }
+
         if cfg.max_history_entries > 0 {
-            let _ = clipboard_repository::trim_to_depth(cfg.max_history_entries);
+            if let Ok(deleted_ids) = clipboard_repository::trim_to_depth(cfg.max_history_entries) {
+                for id in deleted_ids {
+                    let _ = kms_repository::delete_embeddings_for_entity("clipboard", &id.to_string());
+                }
+            }
         }
         diag_log("info", "[Clipboard][capture.image] persisted clipboard image");
 
         // Spawn OCR if enabled
+        let app_handle_for_ocr = app.cloned();
         if ocr_enabled {
             tauri::async_runtime::spawn(async move {
                 let dispatcher = create_extraction_service();
@@ -1521,13 +1684,23 @@ pub(crate) fn sync_current_clipboard_image_to_sqlite(process_name: String, windo
                 match dispatcher.extract(source, mime).await {
                     Ok(result) => {
                         if !result.text.trim().is_empty() {
-                            let _ = clipboard_repository::insert_extracted_text_entry(
+                            let text_id = clipboard_repository::insert_extracted_text_entry(
                                 &result.text,
                                 &proc,
                                 &win,
                                 inserted_id,
                                 &result.metadata,
-                            );
+                            ).unwrap_or(0);
+                            
+                            if text_id > 0 {
+                                if let Some(h) = app_handle_for_ocr {
+                                    let service = h.state::<Arc<crate::indexing_service::KmsIndexingService>>().inner().clone();
+                                    let entity_id = text_id.to_string();
+                                    tauri::async_runtime::spawn(async move {
+                                        let _ = service.index_single_item(&h, "clipboard", &entity_id).await;
+                                    });
+                                }
+                            }
                             log::info!("[Clipboard][OCR] OCR completed and saved for parent_id: {}", inserted_id);
                         } else {
                             log::info!("[Clipboard][OCR] OCR completed but no text found for parent_id: {}", inserted_id);
@@ -1643,10 +1816,21 @@ impl Api for ApiImpl {
     }
 
     async fn add_snippet(self, category: String, snippet: Snippet) -> Result<(), String> {
-        let mut guard = self.state.lock().map_err(|e| e.to_string())?;
-        guard.add_snippet(&category, &snippet);
-        update_library(guard.library.clone());
-        let _ = get_app(&self.app_handle).emit("ghost-follower-update", ());
+        let trigger = snippet.trigger.clone();
+        {
+            let mut guard = self.state.lock().map_err(|e| e.to_string())?;
+            guard.add_snippet(&category, &snippet);
+            update_library(guard.library.clone());
+        }
+        
+        let handle = crate::api::get_app(&self.app_handle);
+        let service = handle.state::<Arc<crate::indexing_service::KmsIndexingService>>().inner().clone();
+        let handle_clone = handle.clone();
+        tokio::spawn(async move {
+            let _ = service.index_single_item(&handle_clone, "snippets", &trigger).await;
+        });
+
+        let _ = crate::api::get_app(&self.app_handle).emit("ghost-follower-update", ());
         Ok(())
     }
 
@@ -1656,24 +1840,70 @@ impl Api for ApiImpl {
         snippet_idx: u32,
         snippet: Snippet,
     ) -> Result<(), String> {
-        let mut guard = self.state.lock().map_err(|e| e.to_string())?;
-        guard
-            .update_snippet(&category, snippet_idx as usize, &snippet)
-            .map_err(|e| e.to_string())?;
-        update_library(guard.library.clone());
-        let _ = get_app(&self.app_handle).emit("ghost-follower-update", ());
+        let new_trigger = snippet.trigger.clone();
+        let old_trigger = {
+            let guard = self.state.lock().map_err(|e| e.to_string())?;
+            guard
+                .library
+                .get(&category)
+                .and_then(|v| v.get(snippet_idx as usize))
+                .map(|s| s.trigger.clone())
+        };
+
+        {
+            let mut guard = self.state.lock().map_err(|e| e.to_string())?;
+            guard
+                .update_snippet(&category, snippet_idx as usize, &snippet)
+                .map_err(|e| e.to_string())?;
+            update_library(guard.library.clone());
+        }
+
+        if let Some(old) = old_trigger {
+            if old != new_trigger {
+                let _ = crate::kms_repository::delete_embedding("text", "snippet", &old);
+                let _ = crate::kms_repository::update_index_status("snippets", &old, "deleted", None);
+            }
+        }
+
+        let handle = crate::api::get_app(&self.app_handle);
+        let service = handle.state::<Arc<crate::indexing_service::KmsIndexingService>>().inner().clone();
+        let handle_clone = handle.clone();
+        tokio::spawn(async move {
+            let _ = service.index_single_item(&handle_clone, "snippets", &new_trigger).await;
+        });
+
+        let _ = crate::api::get_app(&self.app_handle).emit("ghost-follower-update", ());
         Ok(())
     }
 
+
     async fn delete_snippet(self, category: String, snippet_idx: u32) -> Result<(), String> {
-        let mut guard = self.state.lock().map_err(|e| e.to_string())?;
-        guard
-            .delete_snippet(&category, snippet_idx as usize)
-            .map_err(|e| e.to_string())?;
-        update_library(guard.library.clone());
-        let _ = get_app(&self.app_handle).emit("ghost-follower-update", ());
+        let trigger = {
+            let guard = self.state.lock().map_err(|e| e.to_string())?;
+            guard
+                .library
+                .get(&category)
+                .and_then(|v| v.get(snippet_idx as usize))
+                .map(|s| s.trigger.clone())
+        };
+
+        {
+            let mut guard = self.state.lock().map_err(|e| e.to_string())?;
+            guard
+                .delete_snippet(&category, snippet_idx as usize)
+                .map_err(|e| e.to_string())?;
+            update_library(guard.library.clone());
+        }
+
+        if let Some(t) = trigger {
+            let _ = crate::kms_repository::delete_embedding("text", "snippet", &t);
+            let _ = crate::kms_repository::update_index_status("snippets", &t, "deleted", None);
+        }
+
+        let _ = crate::api::get_app(&self.app_handle).emit("ghost-follower-update", ());
         Ok(())
     }
+
 
     async fn update_config(self, config: ConfigUpdateDto) -> Result<(), String> {
         let mut guard = self.state.lock().map_err(|e| e.to_string())?;
@@ -1761,7 +1991,11 @@ impl Api for ApiImpl {
             copy_cfg.max_history_entries = depth as u32;
             let _ = save_copy_to_clipboard_config(&copy_cfg);
             if depth > 0 {
-                let _ = clipboard_repository::trim_to_depth(depth as u32);
+                if let Ok(deleted_ids) = clipboard_repository::trim_to_depth(depth as u32) {
+                    for id in deleted_ids {
+                        let _ = kms_repository::delete_embeddings_for_entity("clipboard", &id.to_string());
+                    }
+                }
             }
         }
         if let Some(v) = config.script_library_run_disabled {
@@ -1797,6 +2031,9 @@ impl Api for ApiImpl {
         if let Some(v) = config.extraction_adaptive_table_gap_gate { guard.extraction_adaptive_table_gap_gate = v; }
         if let Some(v) = config.extraction_adaptive_column_cluster_factor { guard.extraction_adaptive_column_cluster_factor = v; }
         if let Some(v) = config.extraction_adaptive_column_gap_gate { guard.extraction_adaptive_column_gap_gate = v; }
+        if let Some(v) = config.extraction_adaptive_plaintext_cross_factor { guard.extraction_adaptive_plaintext_cross_factor = v; }
+        if let Some(v) = config.extraction_adaptive_table_cross_factor { guard.extraction_adaptive_table_cross_factor = v; }
+        if let Some(v) = config.extraction_adaptive_column_cross_factor { guard.extraction_adaptive_column_cross_factor = v; }
 
         if let Some(v) = config.extraction_refinement_entropy_threshold { guard.extraction_refinement_entropy_threshold = v; }
         if let Some(v) = config.extraction_refinement_cluster_threshold_modifier { guard.extraction_refinement_cluster_threshold_modifier = v; }
@@ -1822,6 +2059,15 @@ impl Api for ApiImpl {
         if let Some(v) = config.extraction_scoring_jitter_penalty_weight { guard.extraction_scoring_jitter_penalty_weight = v; }
         if let Some(v) = config.extraction_scoring_size_penalty_weight { guard.extraction_scoring_size_penalty_weight = v; }
         if let Some(v) = config.extraction_scoring_low_confidence_threshold { guard.extraction_scoring_low_confidence_threshold = v; }
+
+        if let Some(v) = config.extraction_layout_row_lookback { guard.extraction_layout_row_lookback = v as usize; }
+        if let Some(v) = config.extraction_layout_table_break_threshold { guard.extraction_layout_table_break_threshold = v; }
+        if let Some(v) = config.extraction_layout_paragraph_break_threshold { guard.extraction_layout_paragraph_break_threshold = v; }
+        if let Some(v) = config.extraction_layout_max_space_clamp { guard.extraction_layout_max_space_clamp = v as usize; }
+        if let Some(v) = config.extraction_tables_column_jitter_tolerance { guard.extraction_tables_column_jitter_tolerance = v; }
+        if let Some(v) = config.extraction_tables_merge_y_gap_max { guard.extraction_tables_merge_y_gap_max = v; }
+        if let Some(v) = config.extraction_tables_merge_y_gap_min { guard.extraction_tables_merge_y_gap_min = v; }
+
         sync_discovery_config(
             guard.discovery_enabled,
             discovery::DiscoveryConfig {
@@ -1870,13 +2116,19 @@ impl Api for ApiImpl {
                 shortcut_key: guard.corpus_shortcut_key,
             };
             let corpus_storage = std::sync::Arc::new(FileSystemCorpusStorageAdapter::new(corpus_config.output_dir.clone()));
-            let corpus_baseline = std::sync::Arc::new(OcrBaselineAdapter::new(corpus_config.snapshot_dir.clone()));
+            let ocr_config = digicore_text_expander::adapters::extraction::RuntimeConfig::load_from_json_adapter(&JsonFileStorageAdapter::load());
+            let corpus_baseline = std::sync::Arc::new(OcrBaselineAdapter::new(corpus_config.snapshot_dir.clone(), ocr_config));
             let corpus_service = std::sync::Arc::new(CorpusService::new(corpus_config, corpus_storage, corpus_baseline));
             digicore_text_expander::drivers::hotstring::update_corpus_service(Some(corpus_service));
         }
         let _ = get_app(&self.app_handle).emit("ghost-follower-update", ());
+        
+        // Persist all AppState fields to storage
+        persist_settings_to_storage(&guard)?;
+        
         Ok(())
     }
+
 
     async fn get_clipboard_entries(self) -> Result<Vec<ClipEntryDto>, String> {
         let rows = clipboard_repository::list_entries(None, 500)?;
@@ -1898,6 +2150,7 @@ impl Api for ApiImpl {
                 image_height: r.image_height,
                 image_bytes: r.image_bytes,
                 parent_id: r.parent_id,
+                metadata: r.metadata,
             })
             .collect())
     }
@@ -1931,6 +2184,7 @@ impl Api for ApiImpl {
                 image_height: r.image_height,
                 image_bytes: r.image_bytes,
                 parent_id: r.parent_id,
+                metadata: r.metadata,
             })
             .collect())
     }
@@ -1938,10 +2192,12 @@ impl Api for ApiImpl {
     async fn delete_clip_entry(self, index: u32) -> Result<(), String> {
         let rows = clipboard_repository::list_entries(None, index.saturating_add(1))?;
         if let Some(row) = rows.get(index as usize) {
-            clipboard_repository::delete_entry_by_id(row.id)?;
+            let id = row.id;
+            clipboard_repository::delete_entry_by_id(id)?;
+            let _ = kms_repository::delete_embeddings_for_entity("clipboard", &id.to_string());
             diag_log(
                 "info",
-                format!("[Clipboard][delete] removed entry id={} via index", row.id),
+                format!("[Clipboard][delete] removed entry id={} via index", id),
             );
         }
         clipboard_history::delete_entry_at(index as usize);
@@ -1950,6 +2206,7 @@ impl Api for ApiImpl {
 
     async fn delete_clip_entry_by_id(self, id: u32) -> Result<(), String> {
         clipboard_repository::delete_entry_by_id(id)?;
+        let _ = kms_repository::delete_embeddings_for_entity("clipboard", &id.to_string());
         diag_log("info", format!("[Clipboard][delete] removed entry id={id}"));
         Ok(())
     }
@@ -1957,8 +2214,66 @@ impl Api for ApiImpl {
     async fn clear_clipboard_history(self) -> Result<(), String> {
         clipboard_repository::clear_all()?;
         clipboard_history::clear_all();
+        let _ = kms_repository::delete_all_embeddings_for_type("clipboard");
         diag_log("info", "[Clipboard][clear] cleared all clipboard history");
         Ok(())
+    }
+
+    async fn get_image_gallery(
+        self,
+        search: Option<String>,
+        page: u32,
+        page_size: u32,
+    ) -> Result<(Vec<ClipEntryDto>, u32), String> {
+        let (rows, total) =
+            clipboard_repository::list_image_entries(search.as_deref(), page, page_size)?;
+        let dtos = rows
+            .into_iter()
+            .map(|r| ClipEntryDto {
+                id: r.id,
+                content: r.content,
+                process_name: r.process_name,
+                window_title: r.window_title,
+                length: r.char_count,
+                word_count: r.word_count,
+                created_at: r.created_at_unix_ms.to_string(),
+                entry_type: r.entry_type,
+                mime_type: r.mime_type,
+                image_path: r.image_path,
+                thumb_path: r.thumb_path,
+                image_width: r.image_width,
+                image_height: r.image_height,
+                image_bytes: r.image_bytes,
+                parent_id: r.parent_id,
+                metadata: r.metadata,
+            })
+            .collect();
+        Ok((dtos, total))
+    }
+
+    async fn get_child_entries(self, parent_id: u32) -> Result<Vec<ClipEntryDto>, String> {
+        let rows = clipboard_repository::get_child_entries(parent_id)?;
+        Ok(rows
+            .into_iter()
+            .map(|r| ClipEntryDto {
+                id: r.id,
+                content: r.content,
+                process_name: r.process_name,
+                window_title: r.window_title,
+                length: r.char_count,
+                word_count: r.word_count,
+                created_at: r.created_at_unix_ms.to_string(),
+                entry_type: r.entry_type,
+                mime_type: r.mime_type,
+                image_path: r.image_path,
+                thumb_path: r.thumb_path,
+                image_width: r.image_width,
+                image_height: r.image_height,
+                image_bytes: r.image_bytes,
+                parent_id: r.parent_id,
+                metadata: r.metadata,
+            })
+            .collect())
     }
 
     async fn get_copy_to_clipboard_config(self) -> Result<CopyToClipboardConfigDto, String> {
@@ -2011,11 +2326,15 @@ impl Api for ApiImpl {
                 },
             });
         }
-        let trimmed = if normalized.max_history_entries > 0 {
-            clipboard_repository::trim_to_depth(normalized.max_history_entries).unwrap_or(0)
+        let deleted_ids = if normalized.max_history_entries > 0 {
+            clipboard_repository::trim_to_depth(normalized.max_history_entries).unwrap_or_default()
         } else {
-            0
+            Vec::new()
         };
+        let trimmed = deleted_ids.len();
+        for id in deleted_ids {
+            let _ = kms_repository::delete_embeddings_for_entity("clipboard", &id.to_string());
+        }
         diag_log(
             "info",
             format!(
@@ -2096,6 +2415,28 @@ impl Api for ApiImpl {
         open_file_in_default_app(&image_path)?;
         diag_log("info", format!("[Clipboard][open.image] opened image id={id}"));
         Ok(())
+    }
+
+    async fn get_clip_entry_by_id(self, id: u32) -> Result<Option<ClipEntryDto>, String> {
+        let entry_opt = clipboard_repository::get_entry_by_id(id)?;
+        Ok(entry_opt.map(|r| ClipEntryDto {
+            id: r.id,
+            content: r.content,
+            process_name: r.process_name,
+            window_title: r.window_title,
+            length: r.char_count,
+            word_count: r.word_count,
+            created_at: r.created_at_unix_ms.to_string(),
+            entry_type: r.entry_type,
+            mime_type: r.mime_type,
+            image_path: r.image_path,
+            thumb_path: r.thumb_path,
+            image_width: r.image_width,
+            image_height: r.image_height,
+            image_bytes: r.image_bytes,
+            parent_id: r.parent_id,
+            metadata: r.metadata,
+        }))
     }
 
     async fn get_script_library_js(self) -> Result<String, String> {
@@ -4204,6 +4545,865 @@ end
         )
         .map(|v| v.into_iter().take(10).collect())
     }
+
+    async fn kms_launch(self) -> Result<(), String> {
+        let app = get_app(&self.app_handle);
+        let vault = self.get_vault_path();
+
+        if let Some(win) = app.get_webview_window("kms") {
+            let _ = win.show();
+            let _ = win.unminimize();
+            let _ = win.set_focus();
+        } else {
+            let _win = tauri::WebviewWindowBuilder::new(
+                &app,
+                "kms",
+                tauri::WebviewUrl::App("index.html".into()),
+            )
+            .title("DigiCore Knowledge Management Suite")
+            .inner_size(1000.0, 700.0)
+            .min_inner_size(800.0, 500.0)
+            .build()
+            .map_err(|e| e.to_string())?;
+        }
+
+        // Initialize DB if needed
+        kms_repository::init_database()?;
+        
+        // Background sync
+        let app_clone = app.clone();
+        tokio::spawn(async move {
+            let _ = sync_vault_files_to_db_internal(&app_clone, &vault).await;
+        });
+
+        Ok(())
+    }
+
+    async fn kms_initialize(self) -> Result<String, String> {
+        let app = get_app(&self.app_handle);
+        let vault_path = self.get_vault_path();
+
+        if !vault_path.exists() {
+            std::fs::create_dir_all(&vault_path).map_err(|e| e.to_string())?;
+            std::fs::create_dir_all(vault_path.join("notes")).map_err(|e| e.to_string())?;
+            std::fs::create_dir_all(vault_path.join("attachments")).map_err(|e| e.to_string())?;
+
+            // Create a welcome note
+            let welcome_content = "# Welcome to DigiCore KMS\n\nThis is your local-first knowledge base.\n\n- **Private**: All notes are stored as flat Markdown files.\n- **Connected**: Use `[[Links]]` to build your knowledge graph.\n- **Unified**: Access your snippets and clipboard history directly.";
+            std::fs::write(vault_path.join("notes").join("Welcome.md"), welcome_content)
+                .map_err(|e| e.to_string())?;
+        }
+
+        // Ensure repository is initialized
+        kms_repository::init_database()?;
+
+        // Background sync to avoid blocking app initialization
+        let app_clone = app.clone();
+        let vault_clone = vault_path.clone();
+        tokio::spawn(async move {
+            let _ = app_clone.emit("kms-sync-status", "Indexing...");
+            let _ = sync_vault_files_to_db_internal(&app_clone, &vault_clone).await;
+            let _ = app_clone.emit("kms-sync-status", "Idle");
+            let _ = app_clone.emit("kms-sync-complete", ());
+        });
+
+        // Initialize filesystem watcher
+        start_kms_watcher(app.clone(), vault_path.clone());
+
+        Ok(vault_path.to_string_lossy().to_string())
+    }
+
+    async fn kms_get_note_links(self, path: String) -> Result<KmsLinksDto, String> {
+        let path_buf = PathBuf::from(&path);
+        let rel_path = self.get_relative_path(&path_buf)?;
+        let (outgoing_rows, incoming_rows) = kms_repository::get_links_for_note(&rel_path)?;
+
+        let map_to_dto = |r: kms_repository::KmsNoteRow| {
+            let abs_path = self.resolve_absolute_path(&r.path).to_string_lossy().to_string();
+            KmsNoteDto {
+                id: r.id,
+                path: abs_path,
+                title: r.title,
+                preview: r.content_preview,
+                last_modified: r.last_modified,
+                is_favorite: r.is_favorite,
+                sync_status: r.sync_status,
+            }
+        };
+
+        Ok(KmsLinksDto {
+            outgoing: outgoing_rows.into_iter().map(map_to_dto).collect(),
+            incoming: incoming_rows.into_iter().map(map_to_dto).collect(),
+        })
+    }
+
+    async fn kms_list_notes(self) -> Result<Vec<KmsNoteDto>, String> {
+        let rows = kms_repository::list_notes()?;
+        Ok(rows
+            .into_iter()
+            .map(|r| {
+                // Return absolute path to UI for editor convenience, but DB uses relative
+                let abs_path = self.resolve_absolute_path(&r.path).to_string_lossy().to_string();
+                KmsNoteDto {
+                    id: r.id,
+                    path: abs_path,
+                    title: r.title,
+                    preview: r.content_preview,
+                    last_modified: r.last_modified,
+                    is_favorite: r.is_favorite,
+                    sync_status: r.sync_status,
+                }
+            })
+            .collect())
+    }
+
+    async fn kms_load_note(self, path: String) -> Result<String, String> {
+        let path_buf = PathBuf::from(&path);
+        if !path_buf.exists() {
+            return Err("Note file not found on disk".to_string());
+        }
+        std::fs::read_to_string(path_buf).map_err(|e| e.to_string())
+    }
+
+    async fn kms_save_note(self, path: String, content: String) -> Result<(), String> {
+        let app = get_app(&self.app_handle);
+        KmsService::save_note(&app, &path, &content)
+            .await
+            .map_err(|e| e.to_string())?;
+            
+        let path_buf = PathBuf::from(&path);
+        let rel_path = self.get_relative_path(&path_buf)?;
+        let title = path_buf.file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "Untitled".to_string());
+
+        sync_note_index_internal(&rel_path, &title, &content).await?;
+
+        // Background sync to ensure all backlinks/links are updated across the vault
+        let vault = self.get_vault_path();
+        tokio::spawn(async move {
+            let _ = sync_vault_files_to_db_internal(&app, &vault).await;
+        });
+            
+        Ok(())
+    }
+
+    async fn kms_delete_note(self, path: String) -> Result<(), String> {
+        let app = get_app(&self.app_handle);
+        KmsService::delete_note(&app, &path)
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    async fn kms_rename_note(self, old_path: String, new_name: String) -> Result<String, String> {
+        let app = get_app(&self.app_handle);
+        KmsService::rename_note(&app, &old_path, &new_name)
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    async fn kms_rename_folder(self, old_path: String, new_name: String) -> Result<String, String> {
+        let app = get_app(&self.app_handle);
+        KmsService::rename_folder(&app, &old_path, &new_name)
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    async fn kms_delete_folder(self, path: String) -> Result<(), String> {
+        let abs_path = PathBuf::from(&path);
+        if !abs_path.exists() {
+            return Err("Folder does not exist".to_string());
+        }
+        if !abs_path.is_dir() {
+            return Err("Path is not a folder".to_string());
+        }
+        
+        let rel_path = self.get_relative_path(&abs_path)?;
+        
+        kms_repository::delete_folder_recursive(&rel_path)?;
+        std::fs::remove_dir_all(&abs_path).map_err(|e| format!("Failed to delete folder: {e}"))?;
+        
+        Ok(())
+    }
+
+    async fn kms_move_item(self, path: String, new_parent_path: String) -> Result<String, String> {
+        let app = get_app(&self.app_handle);
+        KmsService::move_item(&app, &path, &new_parent_path)
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    async fn kms_get_logs(self, limit: u32) -> Result<Vec<KmsLogDto>, String> {
+        let logs = kms_repository::list_logs(limit)?;
+        Ok(logs.into_iter().map(|l| KmsLogDto {
+            id: l.id,
+            level: l.level,
+            message: l.message,
+            details: l.details,
+            timestamp: l.timestamp,
+        }).collect())
+    }
+
+    async fn kms_clear_logs(self) -> Result<(), String> {
+        kms_repository::clear_logs()
+    }
+
+    async fn kms_create_folder(self, path: String) -> Result<(), String> {
+        let path_buf = PathBuf::from(&path);
+        if path_buf.exists() {
+            return Err("Folder already exists".to_string());
+        }
+        std::fs::create_dir_all(&path_buf).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    async fn kms_get_vault_structure(self) -> Result<KmsFileSystemItemDto, String> {
+        let vault_root = self.get_vault_path();
+        if !vault_root.exists() {
+            return Err("Vault not initialized".to_string());
+        }
+
+        let db_notes = kms_repository::list_notes()?;
+        let mut note_map: HashMap<String, KmsNoteDto> = db_notes
+            .into_iter()
+            .map(|r| {
+                let abs_path = self.resolve_absolute_path(&r.path).to_string_lossy().to_string();
+                (
+                    r.path.replace('\\', "/"),
+                    KmsNoteDto {
+                        id: r.id,
+                        path: abs_path,
+                        title: r.title,
+                        preview: r.content_preview,
+                        last_modified: r.last_modified,
+                        is_favorite: r.is_favorite,
+                        sync_status: r.sync_status,
+                    },
+                )
+            })
+            .collect();
+
+        fn build_tree(
+            dir: &Path,
+            root: &Path,
+            note_map: &mut HashMap<String, KmsNoteDto>,
+        ) -> Vec<KmsFileSystemItemDto> {
+            let mut items = Vec::new();
+            if let Ok(entries) = std::fs::read_dir(dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                    if name.starts_with('.') {
+                        continue;
+                    }
+
+                    if path.is_dir() {
+                        let children = build_tree(&path, root, note_map);
+                        let rel_path = path.strip_prefix(root).unwrap_or(&path).to_string_lossy().replace('\\', "/");
+                        items.push(KmsFileSystemItemDto {
+                            name,
+                            path: path.to_string_lossy().to_string(),
+                            rel_path,
+                            item_type: "directory".to_string(),
+                            children: Some(children),
+                            note: None,
+                        });
+                    } else if path.extension().map(|e| e == "md" || e == "markdown").unwrap_or(false) {
+                        let rel_path = path.strip_prefix(root).unwrap_or(&path).to_string_lossy().replace('\\', "/");
+                        let note = note_map.remove(&rel_path);
+                        items.push(KmsFileSystemItemDto {
+                            name,
+                            path: path.to_string_lossy().to_string(),
+                            rel_path,
+                            item_type: "file".to_string(),
+                            children: None,
+                            note,
+                        });
+                    }
+                }
+            }
+            // Sort: directories first, then alphabetically
+            items.sort_by(|a, b| {
+                if a.item_type != b.item_type {
+                    b.item_type.cmp(&a.item_type) // "directory" < "file" alphabetically, but we want dir first
+                } else {
+                    a.name.to_lowercase().cmp(&b.name.to_lowercase())
+                }
+            });
+            items
+        }
+
+        let children = build_tree(&vault_root, &vault_root, &mut note_map);
+        
+        Ok(KmsFileSystemItemDto {
+            name: "Vault".to_string(),
+            path: vault_root.to_string_lossy().to_string(),
+            rel_path: "".to_string(),
+            item_type: "directory".to_string(),
+            children: Some(children),
+            note: None,
+        })
+    }
+
+    async fn kms_search_semantic(
+        self,
+        query: String,
+        modality: Option<String>,
+        limit: u32,
+        search_mode: Option<String>,
+    ) -> Result<Vec<SearchResultDto>, String> {
+        let modality = modality.unwrap_or_else(|| "text".to_string());
+        let search_mode = search_mode.unwrap_or_else(|| "Hybrid".to_string());
+        
+        tokio::task::spawn_blocking(move || {
+            let vector = embedding_service::generate_text_embedding(&query, None)
+                .map_err(|e| format!("Embedding error: {e}"))?;
+
+            let results = kms_repository::search_hybrid(&query, &modality, vector, &search_mode, limit)?;
+            
+            Ok(results
+                .into_iter()
+                .map(|r| {
+                    // Resolve relative ID to absolute path for the UI convenience ONLY for notes
+                    let final_id = if r.entity_type == "note" {
+                        self.resolve_absolute_path(&r.entity_id).to_string_lossy().to_string()
+                    } else {
+                        r.entity_id
+                    };
+
+                    let mut snippet = None;
+                    if r.entity_type == "note" {
+                        if let Ok(content) = std::fs::read_to_string(&final_id) {
+                            snippet = Some(KmsService::extract_contextual_snippet(&content, &query));
+                        }
+                    } else if r.entity_type == "snippet" || r.entity_type == "clipboard" {
+                        // For snippets/clipboard, we always want to show the content
+                        if let Some(meta_str) = &r.metadata {
+                            if let Ok(meta_json) = serde_json::from_str::<serde_json::Value>(meta_str) {
+                                snippet = meta_json.get("content").and_then(|v| v.as_str()).map(|s| s.to_string());
+                            }
+                        }
+                        
+                        // Fallback if metadata extraction failed or snippet is still empty
+                        if snippet.is_none() {
+                            snippet = r.metadata.clone();
+                        }
+                    }
+
+                    SearchResultDto {
+                        entity_type: r.entity_type,
+                        entity_id: final_id,
+                        distance: r.distance,
+                        modality: r.modality,
+                        metadata: r.metadata,
+                        snippet,
+                    }
+                })
+                .collect())
+        }).await.map_err(|e| format!("Task execution error: {}", e))?
+    }
+
+    async fn kms_reindex_all(self) -> Result<(), String> {
+        let app = get_app(&self.app_handle);
+        let service = app.state::<Arc<KmsIndexingService>>().inner().clone();
+        
+        let app_clone = app.clone();
+        tokio::spawn(async move {
+            let _ = service.index_all_providers(&app_clone).await;
+        });
+        
+        log::info!("[KMS] Global reindexing started in background.");
+        Ok(())
+    }
+
+    async fn kms_reindex_type(self, provider_id: String) -> Result<u32, String> {
+        let app = get_app(&self.app_handle);
+        let service = app.state::<Arc<indexing_service::KmsIndexingService>>();
+        
+        match service.index_provider_by_id(&app, &provider_id).await {
+            Ok(count) => Ok(count as u32),
+            Err(e) => Err(e),
+        }
+    }
+
+    async fn kms_get_indexing_status(self) -> Result<Vec<IndexingStatusDto>, String> {
+        let mut results = Vec::new();
+        let categories = ["notes", "snippets", "clipboard"];
+        
+        for cat in categories {
+            let (indexed, failed, total) = match kms_repository::get_category_counts(cat) {
+                Ok(counts) => counts,
+                Err(e) => {
+                    log::warn!("[Api] Failed to get counts for category '{}': {}. Returning zeros.", cat, e);
+                    (0, 0, 0)
+                }
+            };
+            
+            // For categories with failures, try to get the last error
+            let last_error = if failed > 0 {
+                kms_repository::get_detailed_status(cat).ok()
+                    .and_then(|details| details.first().and_then(|r| r.error.clone()))
+            } else {
+                None
+            };
+
+            results.push(IndexingStatusDto {
+                category: cat.to_string(),
+                indexed_count: indexed,
+                failed_count: failed,
+                total_count: total,
+                last_error,
+            });
+        }
+        
+        Ok(results)
+    }
+
+    async fn kms_get_indexing_details(self, provider_id: String) -> Result<Vec<KmsIndexStatusRow>, String> {
+        let rows = kms_repository::get_detailed_status(&provider_id)?;
+        Ok(rows.into_iter().map(|r| KmsIndexStatusRow {
+            entity_type: r.entity_type,
+            entity_id: r.entity_id,
+            status: r.status,
+            error: r.error,
+            updated_at: r.updated_at,
+        }).collect())
+    }
+
+    async fn kms_retry_item(self, provider_id: String, entity_id: String) -> Result<(), String> {
+        let app = get_app(&self.app_handle);
+        let service = app.state::<Arc<indexing_service::KmsIndexingService>>();
+        
+        service.index_single_item(&app, &provider_id, &entity_id).await?;
+        Ok(())
+    }
+
+    async fn kms_retry_failed(self, provider_id: String) -> Result<(), String> {
+        let app = get_app(&self.app_handle);
+        let service = app.state::<Arc<indexing_service::KmsIndexingService>>();
+        
+        let failures = kms_repository::get_detailed_status(&provider_id)?;
+        for fail in failures {
+            let _ = service.index_single_item(&app, &provider_id, &fail.entity_id).await;
+        }
+        Ok(())
+    }
+
+    async fn kms_repair_database(self) -> Result<(), String> {
+        kms_repository::repair_database()?;
+        Ok(())
+    }
+
+    async fn kms_reindex_note(self, rel_path: String) -> Result<(), String> {
+        let abs_path = self.resolve_absolute_path(&rel_path);
+        
+        if !abs_path.exists() {
+            return Err("File not found on disk".into());
+        }
+        
+        let current_title = abs_path.file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "Untitled".to_string());
+            
+        // Mark as pending
+        let _ = kms_repository::upsert_note(&rel_path, &current_title, "", "pending", None);
+        
+        let app = get_app(&self.app_handle);
+        let _ = app.emit("kms-sync-status", "Indexing...");
+        let _ = app.emit("kms-sync-complete", ()); // To update UI immediately to pending state
+        
+        match std::fs::read_to_string(&abs_path) {
+            Ok(content) => {
+                if let Err(e) = sync_note_index_internal(&rel_path, &current_title, &content).await {
+                     log::error!("[KMS][Sync] Failed to reindex note {}: {}", rel_path, e);
+                     let _ = kms_repository::upsert_note(&rel_path, &current_title, "", "failed", Some(&e));
+                }
+            }
+            Err(e) => {
+                let _ = kms_repository::upsert_note(&rel_path, &current_title, "", "failed", Some(&e.to_string()));
+            }
+        }
+        
+        let _ = app.emit("kms-sync-complete", ());
+        let _ = app.emit("kms-sync-status", "Idle");
+        Ok(())
+    }
+
+    async fn kms_get_vault_path(self) -> Result<String, String> {
+        Ok(self.get_vault_path().to_string_lossy().to_string())
+    }
+
+    async fn kms_set_vault_path(self, new_path: String, migrate: bool) -> Result<(), String> {
+        let app = get_app(&self.app_handle);
+        let old_path = self.get_vault_path();
+        let new_path_buf = PathBuf::from(&new_path);
+        
+        if migrate && old_path.exists() && old_path != new_path_buf {
+            // Perform physical migration
+            if !new_path_buf.exists() {
+                std::fs::create_dir_all(&new_path_buf).map_err(|e| e.to_string())?;
+            }
+            
+            // Perform physical migration recursively
+            fn move_recursive(src: &Path, dest: &Path) -> std::io::Result<()> {
+                if src.is_dir() {
+                    if !dest.exists() {
+                        return std::fs::rename(src, dest);
+                    }
+                    for entry in std::fs::read_dir(src)? {
+                        let entry = entry?;
+                        move_recursive(&entry.path(), &dest.join(entry.file_name()))?;
+                    }
+                } else if !dest.exists() {
+                    std::fs::rename(src, dest)?;
+                }
+                Ok(())
+            }
+
+            if let Ok(entries) = std::fs::read_dir(&old_path) {
+                for entry in entries.flatten() {
+                    let src = entry.path();
+                    let file_name = entry.file_name();
+                    let dest = new_path_buf.join(&file_name);
+                    
+                    if file_name.to_string_lossy().starts_with('.') {
+                        continue;
+                    }
+
+                    let _ = move_recursive(&src, &dest);
+                }
+            }
+        }
+        
+        // Update AppState
+        {
+            let app_state = app.state::<Arc<Mutex<AppState>>>();
+            let mut state = app_state.lock().unwrap();
+            state.kms_vault_path = new_path.clone();
+            
+            // Persist to storage
+            let mut storage = JsonFileStorageAdapter::load();
+            storage.set(storage_keys::KMS_VAULT_PATH, &new_path);
+            let _ = storage.persist();
+        }
+        
+        // Trigger sync with new path
+        let app_clone = app.clone();
+        let sync_path = new_path_buf.clone();
+        tokio::spawn(async move {
+            let _ = app_clone.emit("kms-sync-status", "Indexing...");
+            let _ = sync_vault_files_to_db_internal(&app_clone, &sync_path).await;
+            let _ = app_clone.emit("kms-sync-status", "Idle");
+            let _ = app_clone.emit("kms-sync-complete", ());
+        });
+        
+        // Re-initialize filesystem watcher
+        start_kms_watcher(app.clone(), new_path_buf);
+
+        // Emit event to frontend
+        let _ = app.emit("kms-vault-path-changed", new_path);
+        
+        Ok(())
+    }
+}
+
+static KMS_WATCHER: OnceLock<Mutex<Option<notify::RecommendedWatcher>>> = OnceLock::new();
+
+fn stop_kms_watcher() {
+    if let Some(guard_mutex) = KMS_WATCHER.get() {
+        if let Ok(mut guard) = guard_mutex.lock() {
+            *guard = None;
+        }
+    }
+}
+
+pub(crate) fn start_kms_watcher(app: tauri::AppHandle, path: PathBuf) {
+    stop_kms_watcher();
+    
+    let (tx, mut rx) = tokio::sync::mpsc::channel(100);
+    
+    // Watcher thread
+    let watcher_res = notify::RecommendedWatcher::new(move |res: notify::Result<Event>| {
+        if let Ok(_) = res {
+            let _ = tx.blocking_send(());
+        }
+    }, Config::default());
+
+    if let Ok(mut watcher) = watcher_res {
+        let _ = watcher.watch(&path, RecursiveMode::Recursive);
+        
+        let watcher_mutex = KMS_WATCHER.get_or_init(|| Mutex::new(None));
+        if let Ok(mut guard) = watcher_mutex.lock() {
+            *guard = Some(watcher);
+        }
+
+        // Debounce task
+        tokio::spawn(async move {
+            let mut last_event = std::time::Instant::now();
+            let mut pending = false;
+            
+            loop {
+                tokio::select! {
+                    res = rx.recv() => {
+                        if res.is_none() { break; }
+                        last_event = std::time::Instant::now();
+                        pending = true;
+                    }
+                    _ = tokio::time::sleep(std::time::Duration::from_millis(500)) => {
+                        if pending && last_event.elapsed() >= std::time::Duration::from_millis(1000) {
+                            log::info!("[KMS][Watcher] Change detected, triggering sync...");
+                            let _ = app.emit("kms-sync-status", "Syncing...");
+                            let _ = sync_vault_files_to_db_internal(&app, &path).await;
+                            let _ = app.emit("kms-sync-status", "Idle");
+                            let _ = app.emit("kms-sync-complete", ());
+                            pending = false;
+                        }
+                    }
+                }
+            }
+        });
+    }
+}
+
+pub(crate) async fn sync_note_index_internal(rel_path_raw: &str, title: &str, content: &str) -> Result<(), String> {
+    let rel_path = &rel_path_raw.replace('\\', "/");
+    let preview = content.chars().take(200).collect::<String>();
+    
+    KmsDiagnosticService::debug(&format!("Indexing note: {}", rel_path), None);
+    
+    kms_repository::upsert_note(rel_path, title, &preview, "indexed", None)?;
+
+    // Link Extraction & Resolution
+    let _ = kms_repository::delete_links_for_source(rel_path);
+    let candidates = extract_links_from_markdown(content);
+    
+    if !candidates.is_empty() {
+        if let Ok(all_notes) = kms_repository::list_notes() {
+            // Build title-to-path and path-to-path maps for resolution
+            let title_map: HashMap<String, String> = all_notes.iter()
+                .map(|n| (n.title.to_lowercase(), n.path.clone())).collect();
+            let path_map: HashSet<String> = all_notes.iter()
+                .map(|n| n.path.replace('\\', "/")).collect();
+
+            let source_path = PathBuf::from(rel_path.replace('\\', "/"));
+            let source_parent = source_path.parent().unwrap_or(Path::new(""));
+
+            for candidate in candidates {
+                match candidate {
+                    LinkCandidate::Wiki(target_title) => {
+                        if let Some(target_path) = title_map.get(&target_title.to_lowercase()) {
+                            let _ = kms_repository::upsert_link(rel_path, target_path);
+                        }
+                    }
+                    LinkCandidate::Path(mut target_path_str) => {
+                        // Strip anchors
+                        if let Some(hash_idx) = target_path_str.find('#') {
+                            target_path_str.truncate(hash_idx);
+                        }
+                        
+                        // Normalize target_path_str separators
+                        let target_path_str = target_path_str.replace('\\', "/");
+                        if target_path_str.is_empty() { continue; }
+
+                        // Resolve relative paths if necessary
+                        let resolved_path = if target_path_str.starts_with("./") || target_path_str.starts_with("../") {
+                            source_parent.join(&target_path_str)
+                                .components()
+                                .fold(PathBuf::new(), |mut acc, comp| {
+                                    match comp {
+                                        std::path::Component::CurDir => {}
+                                        std::path::Component::ParentDir => { acc.pop(); }
+                                        std::path::Component::Normal(c) => { acc.push(c); }
+                                        _ => { acc.push(comp); }
+                                    }
+                                    acc
+                                })
+                        } else {
+                            PathBuf::from(&target_path_str)
+                        };
+
+                        let resolved_str = resolved_path.to_string_lossy().replace('\\', "/");
+                        
+                        // Check if it exists in our known paths (case-insensitive for convenience)
+                        if path_map.contains(&resolved_str) {
+                             let _ = kms_repository::upsert_link(rel_path, &resolved_str);
+                        } else {
+                            // Try title-based resolution as fallback (sometimes people link to MD but target title matters)
+                            let stem = resolved_path.file_stem()
+                                .map(|s| s.to_string_lossy().to_string().to_lowercase())
+                                .unwrap_or_default();
+                            if let Some(target_path) = title_map.get(&stem) {
+                                let _ = kms_repository::upsert_link(rel_path, target_path);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Embedding (OFFLOADED to prevent IPC hangups)
+    let content_to_embed = content.to_string();
+    let rel_path_clone = rel_path.to_string();
+    tokio::task::spawn_blocking(move || {
+        if let Ok(vector) = embedding_service::generate_text_embedding(&content_to_embed, None) {
+            let _ = kms_repository::upsert_embedding("text", "note", &rel_path_clone, vector, None);
+        }
+    });
+    
+    Ok(())
+}
+
+enum LinkCandidate {
+    Wiki(String),
+    Path(String),
+}
+
+fn extract_links_from_markdown(content: &str) -> Vec<LinkCandidate> {
+    let mut candidates = Vec::new();
+
+    // Wikilinks: [[Link]] or [[Link|Alias]]
+    let wiki_re = Regex::new(r"\[\[([^\]|]+)(?:\|[^\]]+)?\]\]").unwrap();
+    for cap in wiki_re.captures_iter(content) {
+        candidates.push(LinkCandidate::Wiki(cap[1].trim().to_string()));
+    }
+
+    // Standard Links: [Text](Path)
+    let md_re = Regex::new(r"(?i)\[[^\]]+\]\(([^\)]+)\)").unwrap();
+    for cap in md_re.captures_iter(content) {
+        let path = cap[1].trim().to_string();
+        // Skip external links
+        if !path.starts_with("http") && !path.starts_with("mailto:") {
+            candidates.push(LinkCandidate::Path(path));
+        }
+    }
+
+    candidates
+}
+
+/// Robustly synchronizes the local filesystem vault with the database index.
+/// Scans for new files, removes stale records, and refreshes AI embeddings.
+pub(crate) async fn sync_vault_files_to_db_internal(_app: &tauri::AppHandle, vault_path: &Path) -> Result<(), String> {
+    if !vault_path.exists() {
+        return Ok(());
+    }
+
+    // 1. Get current DB state
+    let db_notes = kms_repository::list_notes()?;
+    let mut db_paths: HashMap<String, (String, String, Option<String>)> = db_notes.into_iter()
+        .map(|n| (n.path, (n.title, n.sync_status, n.last_modified))).collect();
+
+    // 2. Scan disk recursively
+    let mut disk_files = Vec::new();
+    fn scan_recursive(dir: &Path, root: &Path, files: &mut Vec<(PathBuf, String)>) {
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    scan_recursive(&path, root, files);
+                } else if path.extension()
+                    .and_then(|s| s.to_str())
+                    .map(|s| s.eq_ignore_ascii_case("md") || s.eq_ignore_ascii_case("markdown"))
+                    .unwrap_or(false) 
+                {
+                    if let Ok(rel) = path.strip_prefix(root) {
+                        let rel_str = rel.to_string_lossy().replace('\\', "/");
+                        files.push((path, rel_str));
+                    }
+                }
+            }
+        }
+    }
+    scan_recursive(vault_path, vault_path, &mut disk_files);
+
+    for (abs_path, rel_path) in disk_files {
+        let current_title = abs_path.file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "Untitled".to_string());
+
+        let db_info = db_paths.get(&rel_path);
+        let status = db_info.map(|i| i.1.as_str()).unwrap_or("");
+        let db_last_modified = db_info.and_then(|i| i.2.as_ref());
+
+        // External change detection: Check if disk file is newer than DB record
+        let mut disk_newer = false;
+        if let Ok(metadata) = abs_path.metadata() {
+            if let Ok(modified) = metadata.modified() {
+                let disk_time: chrono::DateTime<chrono::Utc> = modified.into();
+                let disk_time_str = disk_time.to_rfc3339();
+                if let Some(db_time_str) = db_last_modified {
+                    if disk_time_str > *db_time_str {
+                        log::info!("[KMS][Sync] External change detected for: {}. Disk: {}, DB: {}", rel_path, disk_time_str, db_time_str);
+                        disk_newer = true;
+                    }
+                }
+            }
+        }
+
+        let needs_index = db_info.is_none() || status == "failed" || status == "pending" || disk_newer;
+        let needs_rename = db_info.map(|t| t.0 != current_title).unwrap_or(false);
+
+        if needs_index || needs_rename {
+            KmsDiagnosticService::info(&format!("Syncing: {}", rel_path), None);
+            
+            // 1. Mark as pending in DB first (so user sees it's being worked on)
+            let _ = kms_repository::upsert_note(&rel_path, &current_title, "", "pending", None);
+
+            // 2. Attempt to read content
+            match std::fs::read_to_string(&abs_path) {
+                Ok(content) => {
+                    if let Err(e) = sync_note_index_internal(&rel_path, &current_title, &content).await {
+                         KmsDiagnosticService::error(&format!("Failed to sync {}: {}", rel_path, e), None);
+                    }
+                }
+                Err(e) => {
+                    KmsDiagnosticService::error(&format!("Failed to read {}: {}", rel_path, e), None);
+                    // Mark as failed in DB so user sees it
+                    let _ = kms_repository::upsert_note(&rel_path, &current_title, "", "failed", Some(&e.to_string()));
+                }
+            }
+        }
+        
+        // Mark as found on disk (prevent stale cleanup)
+        db_paths.remove(&rel_path);
+    }
+
+    // 3. Cleanup stale records (files deleted on disk)
+    for (stale_rel_path, _) in db_paths {
+        log::info!("[KMS][Sync] Cleaning up stale DB record: {}", stale_rel_path);
+        let _ = kms_repository::delete_note(&stale_rel_path);
+    }
+
+    Ok(())
+}
+
+/// Synchronizes a single note file to the database.
+pub(crate) async fn sync_single_note_to_db_internal(_app: &tauri::AppHandle, abs_path: &Path) -> Result<(), String> {
+    let vault_path = kms_repository::get_vault_path()?;
+    let rel_path = abs_path
+        .strip_prefix(&vault_path)
+        .map(|p| p.to_string_lossy().replace('\\', "/"))
+        .map_err(|_| format!("Path {} is not in vault {}", abs_path.display(), vault_path.display()))?;
+
+    let current_title = abs_path.file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "Untitled".to_string());
+
+    // 1. Mark as pending
+    let _ = kms_repository::upsert_note(&rel_path, &current_title, "", "pending", None);
+
+    // 2. Attempt to read content
+    match std::fs::read_to_string(abs_path) {
+        Ok(content) => {
+            sync_note_index_internal(&rel_path, &current_title, &content).await?;
+            Ok(())
+        }
+        Err(e) => {
+            log::warn!("[KMS][Sync] Failed to read {}: {}. Marking as failed.", rel_path, e);
+            kms_repository::upsert_note(&rel_path, &current_title, "", "failed", Some(&e.to_string()))?;
+            Err(e.to_string())
+        }
+    }
 }
 
 #[cfg(test)]
@@ -4442,5 +5642,20 @@ mod tests {
 
         let fallback = normalize_clipboard_path_or_default("   ", out.clone());
         assert_eq!(fallback, out);
+    }
+
+    #[test]
+    fn test_extract_links_from_markdown() {
+        let content = "Check [[WikiLink]] and [StandardLink](./Note.md#anchor) and [External](https://google.com)";
+        let candidates = super::extract_links_from_markdown(content);
+        assert_eq!(candidates.len(), 2);
+        match &candidates[0] {
+            super::LinkCandidate::Wiki(t) => assert_eq!(t, "WikiLink"),
+            _ => panic!("Expected WikiLink"),
+        }
+        match &candidates[1] {
+            super::LinkCandidate::Path(p) => assert_eq!(p, "./Note.md#anchor"),
+            _ => panic!("Expected Path"),
+        }
     }
 }

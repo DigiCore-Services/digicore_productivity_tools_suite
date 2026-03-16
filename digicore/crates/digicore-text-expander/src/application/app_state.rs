@@ -60,8 +60,9 @@ pub struct SnippetTestVarState {
 /// Used by all UI adapters (egui, Tauri, Iced).
 pub struct AppState {
     // Library
-    pub library_path: String,
     pub library: HashMap<String, Vec<Snippet>>,
+    pub library_path: String,
+    pub kms_vault_path: String,
     pub categories: Vec<String>,
     pub selected_category: Option<usize>,
     pub status: String,
@@ -132,10 +133,17 @@ pub struct AppState {
     pub extraction_char_width_factor: f32,
     pub extraction_bridged_threshold: f32,
     pub extraction_word_spacing_factor: f32,
+    pub extraction_layout_row_lookback: usize,
+    pub extraction_layout_table_break_threshold: f32,
+    pub extraction_layout_paragraph_break_threshold: f32,
+    pub extraction_layout_max_space_clamp: usize,
 
     pub extraction_footer_triggers: String,
     pub extraction_table_min_contiguous_rows: usize,
     pub extraction_table_min_avg_segments: f32,
+    pub extraction_tables_column_jitter_tolerance: f32,
+    pub extraction_tables_merge_y_gap_max: f32,
+    pub extraction_tables_merge_y_gap_min: f32,
 
     pub extraction_adaptive_plaintext_cluster_factor: f32,
     pub extraction_adaptive_plaintext_gap_gate: f32,
@@ -143,6 +151,9 @@ pub struct AppState {
     pub extraction_adaptive_table_gap_gate: f32,
     pub extraction_adaptive_column_cluster_factor: f32,
     pub extraction_adaptive_column_gap_gate: f32,
+    pub extraction_adaptive_plaintext_cross_factor: f32,
+    pub extraction_adaptive_table_cross_factor: f32,
+    pub extraction_adaptive_column_cross_factor: f32,
 
     pub extraction_refinement_entropy_threshold: f32,
     pub extraction_refinement_cluster_threshold_modifier: f32,
@@ -217,8 +228,9 @@ pub struct AppState {
 impl Default for AppState {
     fn default() -> Self {
         Self {
-            library_path: String::new(),
             library: HashMap::new(),
+            library_path: String::new(),
+            kms_vault_path: String::new(),
             categories: Vec::new(),
             selected_category: None,
             status: "Ready".to_string(),
@@ -264,7 +276,7 @@ impl Default for AppState {
 
             // Extraction Config Defaults
             extraction_row_overlap_tolerance: 0.6,
-            extraction_cluster_threshold_factor: 0.35,
+            extraction_cluster_threshold_factor: 0.45,
             extraction_zone_proximity: 15.0,
             extraction_cross_zone_gap_factor: 0.25,
             extraction_same_zone_gap_factor: 0.8,
@@ -272,27 +284,37 @@ impl Default for AppState {
             extraction_char_width_factor: 0.45,
             extraction_bridged_threshold: 0.4,
             extraction_word_spacing_factor: 0.2,
+            extraction_layout_row_lookback: 5,
+            extraction_layout_table_break_threshold: 3.0,
+            extraction_layout_paragraph_break_threshold: 3.0,
+            extraction_layout_max_space_clamp: 6,
 
             extraction_footer_triggers: "total,sum,subtotal,balance".to_string(),
             extraction_table_min_contiguous_rows: 4,
-            extraction_table_min_avg_segments: 1.5,
+            extraction_table_min_avg_segments: 3.1,
+            extraction_tables_column_jitter_tolerance: 20.0,
+            extraction_tables_merge_y_gap_max: 100.0,
+            extraction_tables_merge_y_gap_min: 40.0,
 
-            extraction_adaptive_plaintext_cluster_factor: 0.6,
+            extraction_adaptive_plaintext_cluster_factor: 1.1,
             extraction_adaptive_plaintext_gap_gate: 0.5,
-            extraction_adaptive_table_cluster_factor: 0.35,
+            extraction_adaptive_table_cluster_factor: 0.45,
             extraction_adaptive_table_gap_gate: 1.2,
             extraction_adaptive_column_cluster_factor: 0.45,
             extraction_adaptive_column_gap_gate: 0.8,
+            extraction_adaptive_plaintext_cross_factor: 1.0,
+            extraction_adaptive_table_cross_factor: 0.25,
+            extraction_adaptive_column_cross_factor: 0.8,
 
             extraction_refinement_entropy_threshold: 50.0,
             extraction_refinement_cluster_threshold_modifier: 0.8,
             extraction_refinement_cross_zone_gap_modifier: 1.2,
 
-            extraction_classifier_gutter_weight: 5.0,
-            extraction_classifier_density_weight: 20.0,
+            extraction_classifier_gutter_weight: 15.0,
+            extraction_classifier_density_weight: 10.0,
             extraction_classifier_multicolumn_density_max: 0.4,
-            extraction_classifier_table_density_min: 0.5,
-            extraction_classifier_table_entropy_min: 15.0,
+            extraction_classifier_table_density_min: 1.0,
+            extraction_classifier_table_entropy_min: 40.0,
 
             extraction_columns_min_contiguous_rows: 3,
             extraction_columns_gutter_gap_factor: 5.0,

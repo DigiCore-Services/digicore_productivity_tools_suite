@@ -12,6 +12,8 @@ import {
   Droplets,
   BarChart3,
   FileText,
+  Image as ImageIcon,
+  Book,
 } from "lucide-react";
 import type { AppState, PendingVariableInput, Snippet } from "./types";
 import { normalizeAppState, normalizePendingInput } from "./lib/normalizeState";
@@ -34,6 +36,12 @@ const AnalyticsTab = lazy(() =>
 const LogTab = lazy(() =>
   import("./components/LogTab").then((m) => ({ default: m.LogTab }))
 );
+const ImageLibraryTab = lazy(() =>
+  import("./components/ImageLibraryTab").then((m) => ({ default: m.ImageLibraryTab }))
+);
+const ImageViewerModal = lazy(() =>
+  import("./components/modals/ImageViewerModal").then((m) => ({ default: m.ImageViewerModal }))
+);
 const SnippetEditor = lazy(() =>
   import("./components/modals/SnippetEditor").then((m) => ({
     default: m.SnippetEditor,
@@ -53,6 +61,7 @@ import {
   notifyDiscoverySuggestion,
 } from "./lib/notifications";
 import { syncLibraryToSqlite } from "./lib/sqliteSync";
+import { Toaster } from "./components/ui/toaster";
 
 const DEFAULT_COLUMNS = [
   "Profile",
@@ -109,7 +118,12 @@ function App() {
 
   const [commandPaletteVisible, setCommandPaletteVisible] = useState(false);
 
+  const [imageViewerVisible, setImageViewerVisible] = useState(false);
+  const [imageViewerCurrent, setImageViewerCurrent] = useState<any>(null);
+  const [imageViewerContext, setImageViewerContext] = useState<any[]>([]);
+
   const [clipboardRefreshTrigger, setClipboardRefreshTrigger] = useState(0);
+  const [imageLibraryRefreshTrigger, setImageLibraryRefreshTrigger] = useState(0);
 
   const [discoveryBanner, setDiscoveryBanner] = useState<{
     phrase: string;
@@ -193,7 +207,7 @@ function App() {
   );
 
   const restoreGhostFollowerAlwaysOnTop = useCallback(() => {
-    getTaurpc().ghost_follower_restore_always_on_top().catch(() => {});
+    getTaurpc().ghost_follower_restore_always_on_top().catch(() => { });
   }, []);
 
   const closeSnippetEditor = useCallback(() => {
@@ -221,7 +235,7 @@ function App() {
           );
         }
         await getTaurpc().save_library();
-        await getTaurpc().save_settings().catch(() => {});
+        await getTaurpc().save_settings().catch(() => { });
         closeSnippetEditor();
         const state = await loadAppState();
         if (state) {
@@ -254,7 +268,7 @@ function App() {
   }, []);
 
   const openClipEntryDeleteConfirm = useCallback((idx: number) => {
-    setActiveTab(2);
+    setActiveTab(1);
     setClipEntryDeleteConfirmIdx(idx);
     setClipEntryDeleteConfirmVisible(true);
   }, []);
@@ -263,7 +277,7 @@ function App() {
     try {
       await getTaurpc().delete_snippet(deleteConfirmCat, deleteConfirmIdx);
       await getTaurpc().save_library();
-      await getTaurpc().save_settings().catch(() => {});
+      await getTaurpc().save_settings().catch(() => { });
       setDeleteConfirmVisible(false);
       const state = await loadAppState();
       if (state) {
@@ -474,11 +488,11 @@ function App() {
     const resolved =
       pref === "system"
         ? (window.matchMedia("(prefers-color-scheme: dark)").matches
-            ? "dark"
-            : "light")
+          ? "dark"
+          : "light")
         : pref;
     document.documentElement.dataset.theme = resolved;
-    emit("digicore-theme-changed", { theme: resolved }).catch(() => {});
+    emit("digicore-theme-changed", { theme: resolved }).catch(() => { });
   }, []);
 
   useEffect(() => {
@@ -512,13 +526,13 @@ function App() {
     listen<
       | string
       | {
-          content?: string;
-          source?: "pinned" | "clipboard";
-          category?: string;
-          snippetIdx?: number;
-          index?: number;
-          trigger?: string;
-        }
+        content?: string;
+        source?: "pinned" | "clipboard";
+        category?: string;
+        snippetIdx?: number;
+        index?: number;
+        trigger?: string;
+      }
     >("ghost-follower-view-full", async (e) => {
       await bringMainToForeground();
       const payload = e.payload;
@@ -786,7 +800,7 @@ function App() {
   const handleCliArgs = useCallback(
     (args: string[]) => {
       if (args.some((a) => a === "--open-settings" || a === "-s")) {
-        setActiveTab(1);
+        setActiveTab(4);
       } else if (args.some((a) => a === "--add-snippet" || a === "-a")) {
         setActiveTab(0);
         const cats = appState?.categories ?? ["General"];
@@ -827,7 +841,7 @@ function App() {
         try {
           const u = new URL(url);
           if (u.pathname === "/open/settings" || u.pathname === "/settings") {
-            setActiveTab(1);
+            setActiveTab(4);
           } else if (u.pathname === "/open/snippet" && u.searchParams.has("trigger")) {
             const trigger = u.searchParams.get("trigger") ?? "";
             setActiveTab(0);
@@ -861,7 +875,7 @@ function App() {
           if (!cols.includes(c)) cols.push(c);
         }
         setColumnOrder(cols);
-        const lastTab = Math.min(0 | (prefs.last_tab ?? 0), 6);
+        const lastTab = Math.min(0 | (prefs.last_tab ?? 0), 4);
         setActiveTab(lastTab);
       } catch {
         /* ignore */
@@ -869,7 +883,7 @@ function App() {
       const state = await loadAppState();
       const lib = state?.library ?? {};
       if (Object.keys(lib).length > 0) {
-        syncLibraryToSqlite(lib as Record<string, Snippet[]>).catch(() => {});
+        syncLibraryToSqlite(lib as Record<string, Snippet[]>).catch(() => { });
       }
     })();
   }, [loadAppState]);
@@ -878,19 +892,17 @@ function App() {
 
   const tabs = [
     { id: "library", label: "Text Expansion Library", icon: Library },
-    { id: "config", label: "Configurations and Settings", icon: Settings },
     { id: "clipboard", label: "Clipboard History", icon: ClipboardList },
+    { id: "images", label: "Image Library", icon: ImageIcon },
     { id: "script", label: "Scripting Engine Library", icon: Code },
-    { id: "appearance", label: "Appearance", icon: Droplets },
-    { id: "analytics", label: "Statistics", icon: BarChart3 },
-    { id: "log", label: "Log", icon: FileText },
+    { id: "config", label: "Configurations and Settings", icon: Settings },
   ];
 
   const handleTabClick = useCallback(
     async (idx: number) => {
       setActiveTab(idx);
       handleSaveUiPrefs(idx, columnOrder);
-      if (idx === 1) {
+      if (idx === 4) {
         const state = await loadAppState();
         if (state) setAppState(state);
       }
@@ -908,44 +920,55 @@ function App() {
   const deleteConfirmMessage =
     appState?.library?.[deleteConfirmCat]?.[deleteConfirmIdx]
       ? `Delete snippet "${(
-          appState.library[deleteConfirmCat][deleteConfirmIdx].trigger || ""
-        ).slice(0, 30)}${(appState.library[deleteConfirmCat][deleteConfirmIdx].trigger || "").length > 30 ? "..." : ""}"?`
+        appState.library[deleteConfirmCat][deleteConfirmIdx].trigger || ""
+      ).slice(0, 30)}${(appState.library[deleteConfirmCat][deleteConfirmIdx].trigger || "").length > 30 ? "..." : ""}"?`
       : "Are you sure you want to delete this snippet?";
 
   return (
     <div className="flex min-h-screen flex-col bg-[var(--dc-bg)] text-[var(--dc-text)] font-sans">
       <div className="sticky top-0 z-20 bg-[var(--dc-bg)] border-b border-[var(--dc-border)] p-5 pt-4 pb-4">
-      <nav
-        className="flex gap-1 flex-wrap"
-        role="tablist"
-        aria-label="Main navigation"
-      >
-        {tabs.map((tab, idx) => {
-          const Icon = tab.icon;
-          return (
-            <motion.button
-              key={tab.id}
-              type="button"
-              role="tab"
-              aria-selected={activeTab === idx}
-              aria-controls={`panel-${tab.id}`}
-              id={`tab-${tab.id}`}
-              tabIndex={activeTab === idx ? 0 : -1}
-              onClick={() => handleTabClick(idx)}
-              className={`inline-flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-                activeTab === idx
+        <nav
+          className="flex gap-1 flex-wrap"
+          role="tablist"
+          aria-label="Main navigation"
+        >
+          {tabs.map((tab, idx) => {
+            const Icon = tab.icon;
+            return (
+              <motion.button
+                key={tab.id}
+                type="button"
+                role="tab"
+                aria-selected={activeTab === idx}
+                aria-controls={`panel-${tab.id}`}
+                id={`tab-${tab.id}`}
+                tabIndex={activeTab === idx ? 0 : -1}
+                onClick={() => handleTabClick(idx)}
+                className={`inline-flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors ${activeTab === idx
                   ? "bg-[var(--dc-accent)] text-white shadow-sm"
                   : "bg-[var(--dc-bg-alt)] text-[var(--dc-text)] border border-[var(--dc-border)] hover:bg-[var(--dc-bg-tertiary)]"
-              }`}
-              whileHover={{ scale: 1.02 }}
-              whileTap={{ scale: 0.98 }}
-            >
-              <Icon className="w-4 h-4" aria-hidden />
-              {tab.label}
-            </motion.button>
-          );
-        })}
-      </nav>
+                  }`}
+                whileHover={{ scale: 1.02 }}
+                whileTap={{ scale: 0.98 }}
+              >
+                <Icon className="w-4 h-4" aria-hidden />
+                {tab.label}
+              </motion.button>
+            );
+          })}
+
+          <div className="flex-1" />
+
+          <motion.button
+            whileHover={{ scale: 1.02 }}
+            whileTap={{ scale: 0.98 }}
+            onClick={() => getTaurpc().kms_launch()}
+            className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium bg-[var(--dc-bg-secondary)] border border-[var(--dc-border)] hover:bg-[var(--dc-bg-hover)] transition-colors shadow-sm ml-2 self-center"
+          >
+            <Book size={16} className="text-[var(--dc-accent)]" />
+            <span className="hidden sm:inline font-semibold">Knowledge Hub</span>
+          </motion.button>
+        </nav>
       </div>
       {discoveryBanner && (
         <div className="mx-5 mt-2 mb-0 p-3 rounded-lg bg-[var(--dc-accent)]/10 border border-[var(--dc-accent)]/30 flex items-center justify-between gap-4">
@@ -1013,243 +1036,235 @@ function App() {
         </div>
       )}
       <div className="flex-1 overflow-auto p-5 pt-4">
-      <AnimatePresence mode="wait">
-        {activeTab === 0 && (
-        <motion.div
-          key="library"
-          id="panel-library"
-          role="tabpanel"
-          aria-labelledby="tab-library"
-          initial={{ opacity: 0, x: -10 }}
-          animate={{ opacity: 1, x: 0 }}
-          exit={{ opacity: 0, x: 10 }}
-          transition={{ duration: 0.2 }}
-        >
-        <LibraryTab
-          appState={appState}
-          onAppStateChange={setAppState}
-          setStatus={setLibraryStatusFn}
-          libraryStatus={libraryStatus}
-          libraryStatusError={libraryStatusError}
-          onOpenViewFull={openViewFull}
-          onOpenSnippetEditor={openSnippetEditor}
-          onOpenDeleteConfirm={openDeleteConfirm}
-          columnOrder={columnOrder}
-          sortColumn={sortColumn}
-          sortAsc={sortAsc}
-          onColumnOrderChange={setColumnOrder}
-          onSortChange={(col, asc) => {
-            setSortColumn(col);
-            setSortAsc(asc);
+        <AnimatePresence mode="wait">
+          {activeTab === 0 && (
+            <motion.div
+              key="library"
+              id="panel-library"
+              role="tabpanel"
+              aria-labelledby="tab-library"
+              initial={{ opacity: 0, x: -10 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: 10 }}
+              transition={{ duration: 0.2 }}
+            >
+              <LibraryTab
+                appState={appState}
+                onAppStateChange={setAppState}
+                setStatus={setLibraryStatusFn}
+                libraryStatus={libraryStatus}
+                libraryStatusError={libraryStatusError}
+                onOpenViewFull={openViewFull}
+                onOpenSnippetEditor={openSnippetEditor}
+                onOpenDeleteConfirm={openDeleteConfirm}
+                columnOrder={columnOrder}
+                sortColumn={sortColumn}
+                sortAsc={sortAsc}
+                onColumnOrderChange={setColumnOrder}
+                onSortChange={(col, asc) => {
+                  setSortColumn(col);
+                  setSortAsc(asc);
+                }}
+                onColumnDrag={handleColumnDrag}
+              />
+            </motion.div>
+          )}
+          {activeTab === 1 && (
+            <motion.div
+              key="clipboard"
+              id="panel-clipboard"
+              role="tabpanel"
+              aria-labelledby="tab-clipboard"
+              initial={{ opacity: 0, x: -10 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: 10 }}
+              transition={{ duration: 0.2 }}
+            >
+              <Suspense fallback={<div className="py-8 text-[var(--dc-text-muted)]">Loading...</div>}>
+                <ClipboardTab
+                  appState={appState}
+                  refreshTrigger={clipboardRefreshTrigger}
+                  onOpenViewFull={openViewFull}
+                  onOpenSnippetEditor={openSnippetEditor}
+                  onOpenClipClearConfirm={() => setClipClearConfirmVisible(true)}
+                  onOpenClipEntryDeleteConfirm={openClipEntryDeleteConfirm}
+                />
+              </Suspense>
+            </motion.div>
+          )}
+          {activeTab === 2 && (
+            <motion.div
+              key="images"
+              id="panel-images"
+              role="tabpanel"
+              aria-labelledby="tab-images"
+              initial={{ opacity: 0, x: -10 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: 10 }}
+              transition={{ duration: 0.2 }}
+            >
+              <Suspense fallback={<div className="py-8 text-[var(--dc-text-muted)]">Loading...</div>}>
+                <ImageLibraryTab
+                  refreshTrigger={imageLibraryRefreshTrigger}
+                  onOpenImage={(img, context) => {
+                    setImageViewerCurrent(img);
+                    setImageViewerContext(context);
+                    setImageViewerVisible(true);
+                  }}
+                />
+              </Suspense>
+            </motion.div>
+          )}
+          {activeTab === 3 && (
+            <motion.div
+              key="script"
+              id="panel-script"
+              role="tabpanel"
+              aria-labelledby="tab-script"
+              initial={{ opacity: 0, x: -10 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: 10 }}
+              transition={{ duration: 0.2 }}
+            >
+              <Suspense fallback={<div className="py-8 text-[var(--dc-text-muted)]">Loading...</div>}>
+                <ScriptTab appState={appState} />
+              </Suspense>
+            </motion.div>
+          )}
+          {activeTab === 4 && (
+            <motion.div
+              key="config"
+              id="panel-config"
+              role="tabpanel"
+              aria-labelledby="tab-config"
+              initial={{ opacity: 0, x: -10 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: 10 }}
+              transition={{ duration: 0.2 }}
+            >
+              <Suspense fallback={<div className="py-8 text-[var(--dc-text-muted)]">Loading...</div>}>
+                <ConfigTab appState={appState} onConfigLoaded={(state) => setAppState(state)} />
+              </Suspense>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {snippetEditorVisible && (
+          <Suspense fallback={null}>
+            <SnippetEditor
+              visible={snippetEditorVisible}
+              mode={snippetEditorMode}
+              category={snippetEditorCategory}
+              snippetIdx={snippetEditorIdx}
+              initialSnippet={getInitialSnippet()}
+              prefill={snippetEditorPrefill}
+              onSave={handleSnippetSave}
+              onCancel={closeSnippetEditor}
+            />
+          </Suspense>
+        )}
+
+        <DeleteConfirm
+          visible={deleteConfirmVisible}
+          message={deleteConfirmMessage}
+          onConfirm={handleDeleteConfirm}
+          onCancel={() => {
+            setDeleteConfirmVisible(false);
+            restoreGhostFollowerAlwaysOnTop();
           }}
-          onColumnDrag={handleColumnDrag}
         />
-        </motion.div>
-      )}
-      {activeTab === 1 && (
-        <motion.div
-          key="config"
-          id="panel-config"
-          role="tabpanel"
-          aria-labelledby="tab-config"
-          initial={{ opacity: 0, x: -10 }}
-          animate={{ opacity: 1, x: 0 }}
-          exit={{ opacity: 0, x: 10 }}
-          transition={{ duration: 0.2 }}
-        >
-          <Suspense fallback={<div className="py-8 text-[var(--dc-text-muted)]">Loading...</div>}>
-            <ConfigTab appState={appState} onConfigLoaded={(state) => setAppState(state)} />
-          </Suspense>
-        </motion.div>
-      )}
-      {activeTab === 2 && (
-        <motion.div
-          key="clipboard"
-          id="panel-clipboard"
-          role="tabpanel"
-          aria-labelledby="tab-clipboard"
-          initial={{ opacity: 0, x: -10 }}
-          animate={{ opacity: 1, x: 0 }}
-          exit={{ opacity: 0, x: 10 }}
-          transition={{ duration: 0.2 }}
-        >
-          <Suspense fallback={<div className="py-8 text-[var(--dc-text-muted)]">Loading...</div>}>
-          <ClipboardTab
-            appState={appState}
-            refreshTrigger={clipboardRefreshTrigger}
-            onOpenViewFull={openViewFull}
-            onOpenSnippetEditor={openSnippetEditor}
-            onOpenClipClearConfirm={() => setClipClearConfirmVisible(true)}
-            onOpenClipEntryDeleteConfirm={openClipEntryDeleteConfirm}
-          />
-          </Suspense>
-        </motion.div>
-      )}
-      {activeTab === 3 && (
-        <motion.div
-          key="script"
-          id="panel-script"
-          role="tabpanel"
-          aria-labelledby="tab-script"
-          initial={{ opacity: 0, x: -10 }}
-          animate={{ opacity: 1, x: 0 }}
-          exit={{ opacity: 0, x: 10 }}
-          transition={{ duration: 0.2 }}
-        >
-          <Suspense fallback={<div className="py-8 text-[var(--dc-text-muted)]">Loading...</div>}>
-            <ScriptTab appState={appState} />
-          </Suspense>
-        </motion.div>
-      )}
-      {activeTab === 4 && (
-        <motion.div
-          key="appearance"
-          id="panel-appearance"
-          role="tabpanel"
-          aria-labelledby="tab-appearance"
-          initial={{ opacity: 0, x: -10 }}
-          animate={{ opacity: 1, x: 0 }}
-          exit={{ opacity: 0, x: 10 }}
-          transition={{ duration: 0.2 }}
-        >
-          <Suspense fallback={<div className="py-8 text-[var(--dc-text-muted)]">Loading...</div>}>
-            <AppearanceTab />
-          </Suspense>
-        </motion.div>
-      )}
-      {activeTab === 5 && (
-        <motion.div
-          key="analytics"
-          initial={{ opacity: 0, x: -10 }}
-          animate={{ opacity: 1, x: 0 }}
-          exit={{ opacity: 0, x: 10 }}
-          transition={{ duration: 0.2 }}
-        >
-          <Suspense fallback={<div className="py-8 text-[var(--dc-text-muted)]">Loading...</div>}>
-            <AnalyticsTab />
-          </Suspense>
-        </motion.div>
-      )}
-      {activeTab === 6 && (
-        <motion.div
-          key="log"
-          id="panel-log"
-          role="tabpanel"
-          aria-labelledby="tab-log"
-          initial={{ opacity: 0, x: -10 }}
-          animate={{ opacity: 1, x: 0 }}
-          exit={{ opacity: 0, x: 10 }}
-          transition={{ duration: 0.2 }}
-        >
-          <Suspense fallback={<div className="py-8 text-[var(--dc-text-muted)]">Loading...</div>}>
-            <LogTab />
-          </Suspense>
-        </motion.div>
-      )}
-      </AnimatePresence>
 
-      {snippetEditorVisible && (
-        <Suspense fallback={null}>
-          <SnippetEditor
-            visible={snippetEditorVisible}
-            mode={snippetEditorMode}
-            category={snippetEditorCategory}
-            snippetIdx={snippetEditorIdx}
-            initialSnippet={getInitialSnippet()}
-            prefill={snippetEditorPrefill}
-            onSave={handleSnippetSave}
-            onCancel={closeSnippetEditor}
-          />
-        </Suspense>
-      )}
-
-      <DeleteConfirm
-        visible={deleteConfirmVisible}
-        message={deleteConfirmMessage}
-        onConfirm={handleDeleteConfirm}
-        onCancel={() => {
-          setDeleteConfirmVisible(false);
-          restoreGhostFollowerAlwaysOnTop();
-        }}
-      />
-
-      <ViewFull
-        visible={viewFullVisible}
-        content={viewFullContent}
-        onClose={() => {
-          setViewFullVisible(false);
-          setViewFullEditMeta(null);
-          setViewFullClipboardMeta(null);
-          restoreGhostFollowerAlwaysOnTop();
-        }}
-        onEdit={
-          viewFullEditMeta
-            ? (cat, idx) => {
+        <ViewFull
+          visible={viewFullVisible}
+          content={viewFullContent}
+          onClose={() => {
+            setViewFullVisible(false);
+            setViewFullEditMeta(null);
+            setViewFullClipboardMeta(null);
+            restoreGhostFollowerAlwaysOnTop();
+          }}
+          onEdit={
+            viewFullEditMeta
+              ? (cat, idx) => {
                 openSnippetEditor("edit", cat, idx);
                 setViewFullVisible(false);
                 setViewFullEditMeta(null);
               }
-            : undefined
-        }
-        editMeta={viewFullEditMeta}
-        onPromote={viewFullClipboardMeta ? handleViewFullPromote : undefined}
-        onPin={
-          viewFullClipboardMeta && !viewFullClipboardMeta.canPromote
-            ? handleViewFullPinPromoted
-            : undefined
-        }
-        onUnpin={
-          viewFullEditMeta?.source === "ghost-pinned"
-            ? handleViewFullUnpinSnippet
-            : undefined
-        }
-        onCopy={handleViewFullCopy}
-        onDelete={
-          viewFullClipboardMeta
-            ? handleViewFullDelete
-            : viewFullEditMeta
-            ? handleViewFullDeleteSnippet
-            : undefined
-        }
-        canPin={(() => {
-          const match = findSnippetByContent(viewFullContent);
-          return !match?.pinned;
-        })()}
-        canPromote={viewFullClipboardMeta?.canPromote ?? true}
-      />
+              : undefined
+          }
+          editMeta={viewFullEditMeta}
+          onPromote={viewFullClipboardMeta ? handleViewFullPromote : undefined}
+          onPin={
+            viewFullClipboardMeta && !viewFullClipboardMeta.canPromote
+              ? handleViewFullPinPromoted
+              : undefined
+          }
+          onUnpin={
+            viewFullEditMeta?.source === "ghost-pinned"
+              ? handleViewFullUnpinSnippet
+              : undefined
+          }
+          onCopy={handleViewFullCopy}
+          onDelete={
+            viewFullClipboardMeta
+              ? handleViewFullDelete
+              : viewFullEditMeta
+                ? handleViewFullDeleteSnippet
+                : undefined
+          }
+          canPin={(() => {
+            const match = findSnippetByContent(viewFullContent);
+            return !match?.pinned;
+          })()}
+          canPromote={viewFullClipboardMeta?.canPromote ?? true}
+        />
 
-      <ClipClearConfirm
-        visible={clipClearConfirmVisible}
-        onConfirm={handleClipClearConfirm}
-        onCancel={() => setClipClearConfirmVisible(false)}
-      />
+        <ClipClearConfirm
+          visible={clipClearConfirmVisible}
+          onConfirm={handleClipClearConfirm}
+          onCancel={() => setClipClearConfirmVisible(false)}
+        />
 
-      <ClipEntryDeleteConfirm
-        visible={clipEntryDeleteConfirmVisible}
-        message="Are you sure you want to delete this clipboard entry?"
-        onConfirm={handleClipEntryDeleteConfirm}
-        onCancel={() => {
-          setClipEntryDeleteConfirmVisible(false);
-          setClipEntryDeleteConfirmIdx(-1);
-          restoreGhostFollowerAlwaysOnTop();
-        }}
-      />
+        <ClipEntryDeleteConfirm
+          visible={clipEntryDeleteConfirmVisible}
+          message="Are you sure you want to delete this clipboard entry?"
+          onConfirm={handleClipEntryDeleteConfirm}
+          onCancel={() => {
+            setClipEntryDeleteConfirmVisible(false);
+            setClipEntryDeleteConfirmIdx(-1);
+            restoreGhostFollowerAlwaysOnTop();
+          }}
+        />
 
-      <VariableInput
-        visible={variableInputVisible}
-        data={variableInputData}
-        onOk={handleVariableInputOk}
-        onCancel={handleVariableInputCancel}
-      />
+        <VariableInput
+          visible={variableInputVisible}
+          data={variableInputData}
+          onOk={handleVariableInputOk}
+          onCancel={handleVariableInputCancel}
+        />
 
-      <CommandPalette
-        visible={commandPaletteVisible}
-        appState={appState}
-        onClose={() => setCommandPaletteVisible(false)}
-        onOpenSnippetEditor={openSnippetEditor}
-      />
+        <CommandPalette
+          visible={commandPaletteVisible}
+          appState={appState}
+          onClose={() => setCommandPaletteVisible(false)}
+          onOpenSnippetEditor={openSnippetEditor}
+        />
       </div>
-    </div>
+      <Suspense fallback={null}>
+        <ImageViewerModal
+          isOpen={imageViewerVisible}
+          onClose={() => setImageViewerVisible(false)}
+          currentImage={imageViewerCurrent}
+          allImages={imageViewerContext}
+          onNavigate={(img: any) => setImageViewerCurrent(img)}
+          onDeleteSuccess={() => {
+            setImageLibraryRefreshTrigger(n => n + 1);
+            setClipboardRefreshTrigger(n => n + 1);
+          }}
+        />
+        <Toaster />
+      </Suspense>
+    </div >
   );
 }
 

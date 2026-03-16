@@ -13,6 +13,8 @@
   --dc-text-muted: #6b7280;
   --dc-border: #e5e7eb;
   --dc-border-strong: #d1d5db;
+  --dc-bg-secondary: #f3f4f6;
+  --dc-bg-hover: #e5e7eb;
   --dc-accent: #2563eb;
   --dc-accent-hover: #1d4ed8;
   --dc-error: #dc2626;
@@ -27,13 +29,16 @@
   --dc-text-muted: #9ca3af;
   --dc-border: #4b5563;
   --dc-border-strong: #6b7280;
+  --dc-bg-secondary: #111827;
+  --dc-bg-hover: #374151;
   --dc-accent: #2563eb;
   --dc-accent-hover: #3b82f6;
   --dc-error: #ef4444;
 }
 
 /* Transparent for Windows Mica/Acrylic; content uses bg-[var(--dc-bg)] */
-html, body {
+html,
+body {
   background: transparent;
 }
 
@@ -46,6 +51,7 @@ body {
 
 /* Accessibility: respect reduced motion preference */
 @media (prefers-reduced-motion: reduce) {
+
   *,
   *::before,
   *::after {
@@ -66,6 +72,7 @@ body {
     --dc-border: #111827;
     --dc-border-strong: #111827;
   }
+
   [data-theme="dark"] {
     --dc-border: #f9fafb;
     --dc-border-strong: #f9fafb;

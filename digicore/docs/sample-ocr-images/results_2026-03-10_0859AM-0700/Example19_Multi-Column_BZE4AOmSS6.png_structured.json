@@ -1,0 +1,41 @@
+[
+  {
+    "y_top": 696.0,
+    "y_bottom": 976.0,
+    "column_centers": [
+      84.0,
+      899.5,
+      1716.5,
+      2535.5
+    ],
+    "headers": [
+      [
+        "A plan for anyone who",
+        "Leverage Antigravity as",
+        "For software",
+        "Fully enterprise-grade"
+      ]
+    ],
+    "body": [
+      [
+        "wants to build.",
+        "your daily driver via your",
+        "development teams,",
+        "solution for organizations"
+      ],
+      [
+        "",
+        "Google Al Pro or Ultra",
+        "higher rate limits via",
+        "at scale."
+      ],
+      [
+        "",
+        "subscription.",
+        "Google Workspace Al",
+        ""
+      ]
+    ],
+    "footers": []
+  }
+]

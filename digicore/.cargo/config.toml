@@ -1,6 +1,0 @@
-# DigiCore - Cargo configuration
-# Tests use shared static state (clipboard_history, discovery, ghost_suggestor, ghost_follower).
-# For reliable results, use: cargo test-all (runs with --test-threads=1)
-
-[alias]
-test-all = "test -- --test-threads=1"

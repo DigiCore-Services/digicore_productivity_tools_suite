@@ -162,7 +162,22 @@ export function ScriptTab({ appState }: ScriptTabProps) {
   const [status, setStatus] = useState("");
   const [activeSubTab, setActiveSubTab] = useState<
     "javascript" | "python" | "lua" | "http" | "dsl" | "run" | "diagnostics"
-  >("javascript");
+  >(() => {
+    const saved = localStorage.getItem("digicore-script-subtab");
+    const validTabs = [
+      "javascript",
+      "python",
+      "lua",
+      "http",
+      "dsl",
+      "run",
+      "diagnostics",
+    ];
+    if (saved && validTabs.includes(saved)) {
+      return saved as any;
+    }
+    return "javascript";
+  });
   const [runDisabled, setRunDisabled] = useState(false);
   const [runAllowlist, setRunAllowlist] = useState("");
   const [jsContent, setJsContent] = useState("");
@@ -201,6 +216,10 @@ export function ScriptTab({ appState }: ScriptTabProps) {
   const [trustOnFirstUse, setTrustOnFirstUse] = useState(false);
   const [trustedSignerListText, setTrustedSignerListText] = useState("");
   const [blockedSignerListText, setBlockedSignerListText] = useState("");
+
+  useEffect(() => {
+    localStorage.setItem("digicore-script-subtab", activeSubTab);
+  }, [activeSubTab]);
 
   useEffect(() => {
     if (appState) {
@@ -670,8 +689,7 @@ export function ScriptTab({ appState }: ScriptTabProps) {
       setEngineProfileDryRun(null);
       setEngineProfileWarningsAcknowledged(false);
       pushStatus(
-        `Engine profile import complete: applied ${result.applied_groups.length} group${
-          result.applied_groups.length === 1 ? "" : "s"
+        `Engine profile import complete: applied ${result.applied_groups.length} group${result.applied_groups.length === 1 ? "" : "s"
         }, warnings ${result.warnings.length}, schema=${result.schema_version_used}, signature_valid=${result.signature_valid}.`
       );
     } catch (e) {
@@ -842,14 +860,14 @@ export function ScriptTab({ appState }: ScriptTabProps) {
     id: "javascript" | "python" | "lua" | "http" | "dsl" | "run" | "diagnostics";
     label: string;
   }> = [
-    { id: "javascript", label: "JavaScript" },
-    { id: "python", label: "Python" },
-    { id: "lua", label: "Lua" },
-    { id: "http", label: "HTTP/Weather" },
-    { id: "dsl", label: "DSL" },
-    { id: "run", label: "Run Security" },
-    { id: "diagnostics", label: "Diagnostics" },
-  ];
+      { id: "javascript", label: "JavaScript" },
+      { id: "python", label: "Python" },
+      { id: "lua", label: "Lua" },
+      { id: "http", label: "HTTP/Weather" },
+      { id: "dsl", label: "DSL" },
+      { id: "run", label: "Run Security" },
+      { id: "diagnostics", label: "Diagnostics" },
+    ];
 
   return (
     <div className="p-4 border border-[var(--dc-border)] rounded mt-2">
@@ -887,11 +905,10 @@ export function ScriptTab({ appState }: ScriptTabProps) {
           <button
             key={tab.id}
             onClick={() => setActiveSubTab(tab.id)}
-            className={`px-3 py-1.5 rounded border border-[var(--dc-border)] ${
-              activeSubTab === tab.id
-                ? "bg-[var(--dc-accent)] text-white"
-                : "bg-[var(--dc-bg)] text-[var(--dc-text)]"
-            }`}
+            className={`px-3 py-1.5 rounded border border-[var(--dc-border)] ${activeSubTab === tab.id
+              ? "bg-[var(--dc-accent)] text-white"
+              : "bg-[var(--dc-bg)] text-[var(--dc-text)]"
+              }`}
           >
             {tab.label}
           </button>
@@ -950,7 +967,7 @@ export function ScriptTab({ appState }: ScriptTabProps) {
             </button>
           </div>
           <pre className="mt-2 text-xs whitespace-pre-wrap bg-[var(--dc-bg-alt)] border border-[var(--dc-border)] rounded p-2">
-{`Syntax Guide:
+            {`Syntax Guide:
 Use {js: greet("World")}
 Global library functions become available in all snippets.`}
           </pre>
@@ -1031,7 +1048,7 @@ Global library functions become available in all snippets.`}
             </button>
           </div>
           <pre className="mt-2 text-xs whitespace-pre-wrap bg-[var(--dc-bg-alt)] border border-[var(--dc-border)] rounded p-2">
-{`Syntax Guide:
+            {`Syntax Guide:
 Use {py: py_greet("World")}
 Library is prepended before expression/script execution.`}
           </pre>
@@ -1112,7 +1129,7 @@ Library is prepended before expression/script execution.`}
             </button>
           </div>
           <pre className="mt-2 text-xs whitespace-pre-wrap bg-[var(--dc-bg-alt)] border border-[var(--dc-border)] rounded p-2">
-{`Syntax Guide:
+            {`Syntax Guide:
 Use {lua: lua_greet("World")}
 Library code is prepended before snippet Lua code.`}
           </pre>
@@ -1216,7 +1233,7 @@ Library code is prepended before snippet Lua code.`}
             </pre>
           )}
           <pre className="mt-2 text-xs whitespace-pre-wrap bg-[var(--dc-bg-alt)] border border-[var(--dc-border)] rounded p-2">
-{`Syntax Guide:
+            {`Syntax Guide:
 HTTP: {http:https://api.example.com/data|path.to.value}
 Weather: {weather:city=Tokyo|country=JP|state=Tokyo|format=summary}`}
           </pre>
@@ -1264,7 +1281,7 @@ Weather: {weather:city=Tokyo|country=JP|state=Tokyo|format=summary}`}
             Save DSL Setting
           </button>
           <pre className="mt-2 text-xs whitespace-pre-wrap bg-[var(--dc-bg-alt)] border border-[var(--dc-border)] rounded p-2">
-{`Syntax Guide:
+            {`Syntax Guide:
 Use {dsl: expression}
 Example: {dsl:(10 + 5) * 2}`}
           </pre>
@@ -1317,7 +1334,7 @@ Example: {dsl:(10 + 5) * 2}`}
             </button>
           </div>
           <pre className="mt-2 text-xs whitespace-pre-wrap bg-[var(--dc-bg-alt)] border border-[var(--dc-border)] rounded p-2">
-{`Syntax Guide:
+            {`Syntax Guide:
 Use {run: command}
 Always prefer allowlisted commands only.`}
           </pre>
