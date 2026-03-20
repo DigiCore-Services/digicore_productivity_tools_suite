@@ -107,12 +107,19 @@ pub fn collect_interactive_vars(content: &str) -> Vec<InteractiveVar> {
 
 fn parse_interactive_var(s: &str) -> Option<(String, usize)> {
     let end = s.find('}')?;
-    let inner = &s[1..end];
+    let inner = s[1..end].trim();
     let full_len = end + 1;
+    
+    // Resilience: skip leading '{' if present (e.g. {{var:Loc})
+    let inner = inner.trim_start_matches('{');
+    
     if let Some(label) = inner.strip_prefix("var:") {
         return Some((format!("{{var:{}}}", label.trim()), full_len));
     }
     if let Some(raw) = inner.strip_prefix("choice:") {
+        return Some((format!("{{choice:{}}}", raw.trim()), full_len));
+    }
+    if let Some(raw) = inner.strip_prefix("dropdown:") {
         return Some((format!("{{choice:{}}}", raw.trim()), full_len));
     }
     if let Some(raw) = inner.strip_prefix("checkbox:") {
@@ -128,15 +135,17 @@ fn parse_interactive_var(s: &str) -> Option<(String, usize)> {
 }
 
 fn tag_to_interactive_var(tag: &str) -> InteractiveVar {
-    if let Some(inner) = tag.strip_prefix("{var:").and_then(|s| s.strip_suffix('}')) {
+    let inner = tag.trim_start_matches('{').trim_end_matches('}');
+    
+    if let Some(label) = inner.strip_prefix("var:") {
         return InteractiveVar {
             tag: tag.to_string(),
-            label: inner.trim().to_string(),
+            label: label.trim().to_string(),
             var_type: InteractiveVarType::Edit,
             options: Vec::new(),
         };
     }
-    if let Some(inner) = tag.strip_prefix("{choice:").and_then(|s| s.strip_suffix('}')) {
+    if let Some(inner) = tag.strip_prefix("{choice:").or_else(|| tag.strip_prefix("{dropdown:")).and_then(|s| s.strip_suffix('}')) {
         let parts: Vec<&str> = inner.split('|').map(|s| s.trim()).collect();
         let (label, options) = if parts.len() >= 2 {
             (parts[0].to_string(), parts[1..].iter().map(|s| (*s).to_string()).collect())
@@ -362,7 +371,8 @@ fn resolve_simple_placeholder(
     } else if inner == "time" {
         Local::now().format(&config.time_format).to_string()
     } else if let Some(fmt) = inner.strip_prefix("time:") {
-        Local::now().format(fmt.trim()).to_string()
+        let mapped_fmt = map_simple_time_format(fmt.trim());
+        Local::now().format(&mapped_fmt).to_string()
     } else if inner == "clipboard" {
         current_clipboard.unwrap_or("").to_string()
     } else if let Some(n_str) = inner.strip_prefix("clip:") {
@@ -424,6 +434,25 @@ fn resolve_simple_placeholder(
     };
 
     Some(replacement)
+}
+
+fn map_simple_time_format(fmt: &str) -> String {
+    if fmt.contains('%') {
+        return fmt.to_string();
+    }
+    // Map common AHK-style/natural tokens to chrono % formats
+    fmt.replace("YYYY", "%Y")
+        .replace("YY", "%y")
+        .replace("MM", "%m")
+        .replace("DD", "%d")
+        .replace("HH", "%H")
+        .replace("hh", "%I")
+        .replace("mm", "%M")
+        .replace("SS", "%S")
+        .replace("MS", "%3f")
+        .replace("ms", "%3f")
+        .replace("am/pm", "%p")
+        .replace("AM/PM", "%p")
 }
 
 #[cfg(test)]

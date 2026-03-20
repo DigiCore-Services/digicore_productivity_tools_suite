@@ -15,7 +15,6 @@ use crate::application::ghost_suggestor;
 use crate::application::template_processor;
 use crate::application::variable_input;
 use crate::platform::windows_keyboard;
-use digicore_core::adapters::platform::clipboard::ArboardClipboardAdapter;
 use digicore_core::adapters::platform::input::EnigoInputAdapter;
 use digicore_core::adapters::platform::window::WindowsWindowAdapter;
 use digicore_core::domain::ports::{ClipboardPort, InputPort, Key, WindowContextPort};
@@ -38,7 +37,7 @@ struct HotstringState {
     library: HashMap<String, Vec<Snippet>>,
     buffer: String,
     input: EnigoInputAdapter,
-    clipboard: ArboardClipboardAdapter,
+    clipboard: Box<dyn ClipboardPort>,
     window: WindowsWindowAdapter,
     corpus_service: Option<Arc<crate::application::corpus_generator::CorpusService>>,
 }
@@ -56,7 +55,11 @@ pub fn start_listener(
     }
 
     let input = EnigoInputAdapter::new()?;
-    let clipboard = ArboardClipboardAdapter::new()?;
+    #[cfg(target_os = "windows")]
+    let clipboard: Box<dyn ClipboardPort> = Box::new(digicore_core::adapters::platform::clipboard_windows::WindowsRichClipboardAdapter::new());
+    #[cfg(not(target_os = "windows"))]
+    let clipboard: Box<dyn ClipboardPort> = Box::new(ArboardClipboardAdapter::new()?);
+
     let library_clone = library.clone();
     let state = Arc::new(Mutex::new(HotstringState {
         library,
@@ -208,7 +211,9 @@ fn do_request_expansion(content: String, target_hwnd: Option<isize>) {
                         0,
                     );
                     let saved = g.clipboard.get_text().ok();
-                    if g.clipboard.set_text(&content).is_ok() {
+                    // Note: request_expansion currently only passes plain text 'content'. 
+                    // Future: pass rich text if available from Ghost Follower.
+                    if g.clipboard.set_multi(&content, None, None).is_ok() {
                         if g.input.send_ctrl_v().is_ok() {
                             let _ = saved.as_ref().map(|s| g.clipboard.set_text(s));
                         } else {
@@ -222,7 +227,7 @@ fn do_request_expansion(content: String, target_hwnd: Option<isize>) {
                     } else {
                         expansion_diagnostics::push(
                             "warn",
-                            "[QuickSearchInsert] clipboard set_text failed; fallback type_text".to_string(),
+                            "[QuickSearchInsert] clipboard set_multi failed; fallback type_text".to_string(),
                         );
                         let _ = g.input.type_text(&content);
                     }
@@ -467,16 +472,22 @@ fn on_key(state: Arc<Mutex<HotstringState>>, vk_code: u16, ch: Option<char>) -> 
         ghost_suggestor::on_buffer_changed(&guard.buffer, &process);
         debug_log(&format!("key: vk={} ch={:?} buffer={:?}", vk_code, ch, guard.buffer));
 
-        // Check for trigger match
+        // Check for trigger match using TriggerMatcher
         let process_name = guard.window.get_active().map(|c| c.process_name.clone()).unwrap_or_default();
-        if let Some((snippet, _)) = find_snippet(&guard.library, &guard.buffer, &guard.window) {
+        if let Some(res) = crate::application::trigger_matcher::TriggerMatcher::find_match(&guard.library, &guard.buffer, &process_name) {
+            let snippet = res.snippet;
             expansion_diagnostics::push(
                 "info",
-                format!("Expanded: trigger '{}' in process '{}'", snippet.trigger, process_name),
+                format!("Expanded: trigger '{}' in process '{}' (type: {:?})", snippet.trigger, process_name, snippet.trigger_type),
             );
             debug_log(&format!("MATCH: trigger={} expanding", snippet.trigger));
-            let trigger_len = snippet.trigger.len();
-            let content = snippet.content.clone();
+            let trigger_len = res.trigger_length;
+            let mut content = snippet.content.clone();
+            
+            // Expand regex captures if present
+            if let Some(caps) = res.captures {
+                content = crate::application::trigger_matcher::TriggerMatcher::expand_captures(&content, &caps);
+            }
 
             if variable_input::has_interactive_vars(&content) {
                 // Defer to main thread for VariableInputModal; do not block hook
@@ -486,6 +497,8 @@ fn on_key(state: Arc<Mutex<HotstringState>>, vk_code: u16, ch: Option<char>) -> 
                 let target_hwnd: Option<isize> = None;
 
                 let trigger = snippet.trigger.clone();
+                let expected_title = guard.window.get_active().map(|c| c.title.clone()).unwrap_or_default();
+
                 let (tx, rx) = std::sync::mpsc::channel();
                 variable_input::set_pending_from_hotstring(content, trigger_len, target_hwnd, tx);
                 drop(guard);
@@ -496,7 +509,7 @@ fn on_key(state: Arc<Mutex<HotstringState>>, vk_code: u16, ch: Option<char>) -> 
                         if let Some(hwnd) = target_hwnd {
                             crate::platform::windows_window::restore_foreground_window(hwnd);
                         }
-                        do_expand(state_clone, trigger_len, &expansion, Some(&trigger));
+                        do_expand(state_clone, trigger_len, &expansion, Some(&trigger), None, None, Some(&expected_title));
                     }
                 });
                 return false;
@@ -513,12 +526,15 @@ fn on_key(state: Arc<Mutex<HotstringState>>, vk_code: u16, ch: Option<char>) -> 
                 &clip_history,
             );
             let trigger = snippet.trigger.clone();
+            let html = snippet.html_content.clone();
+            let rtf = snippet.rtf_content.clone();
+            let expected_title = guard.window.get_active().map(|c| c.title.clone()).unwrap_or_default();
             drop(guard);
 
             let state_clone = state.clone();
             std::thread::spawn(move || {
                 crate::application::clipboard_history::suppress_for_duration(std::time::Duration::from_secs(2));
-                do_expand(state_clone, trigger_len, &expansion, Some(&trigger));
+                do_expand(state_clone, trigger_len, &expansion, Some(&trigger), html.as_deref(), rtf.as_deref(), Some(&expected_title));
             });
         } else {
             expansion_diagnostics::push(
@@ -547,7 +563,26 @@ fn do_expand(
     trigger_len: usize,
     expansion: &str,
     trigger: Option<&str>,
+    html: Option<&str>,
+    rtf: Option<&str>,
+    expected_window_title: Option<&str>,
 ) {
+    if let Some(expected) = expected_window_title {
+        // Safety check: verify window hasn't changed since match
+        let current = if let Ok(g) = state.lock() {
+            g.window.get_active().map(|c| c.title.clone()).unwrap_or_default()
+        } else {
+            String::new()
+        };
+        if !current.is_empty() && !expected.is_empty() && current != expected {
+            expansion_diagnostics::push(
+                "warn",
+                format!("Expansion aborted: window changed from '{}' to '{}'", expected, current),
+            );
+            return;
+        }
+    }
+
     crate::application::expansion_stats::record_expansion(
         trigger,
         expansion.len(),
@@ -562,7 +597,7 @@ fn do_expand(
         }
         std::thread::sleep(std::time::Duration::from_millis(20));
         let saved = g.clipboard.get_text().ok();
-        if g.clipboard.set_text(expansion).is_ok() {
+        if g.clipboard.set_multi(expansion, html, rtf).is_ok() {
             if g.input.send_ctrl_v().is_ok() {
                 let _ = saved.as_ref().map(|s| g.clipboard.set_text(s));
             } else {
@@ -591,7 +626,7 @@ fn expand_suggestion(state: Arc<Mutex<HotstringState>>, trigger_len: usize, cont
                 if let Some(hwnd) = target_hwnd {
                     crate::platform::windows_window::restore_foreground_window(hwnd);
                 }
-                do_expand(state, trigger_len, &expansion, None);
+                do_expand(state, trigger_len, &expansion, None, None, None, None);
             }
         });
         return;
@@ -606,55 +641,19 @@ fn expand_suggestion(state: Arc<Mutex<HotstringState>>, trigger_len: usize, cont
         .map(|e| e.content.clone())
         .collect();
     let expansion = template_processor::process(&content, current_clip.as_deref(), &clip_history);
-    std::thread::spawn(move || do_expand(state, trigger_len, &expansion, None));
+    // Suggestion expansion happens after external interaction; window title may remain the same or change.
+    // For now, allow expansion even if title changes slightly if it's a suggestion.
+    std::thread::spawn(move || do_expand(state, trigger_len, &expansion, None, None, None, None));
 }
 
-fn find_snippet<'a>(
+/// Find snippet by trigger. Returns (snippet, category) if found and app-lock passes.
+pub fn find_snippet<'a>(
     library: &'a HashMap<String, Vec<Snippet>>,
     buffer: &str,
     window: &WindowsWindowAdapter,
-) -> Option<(&'a Snippet, &'a str)> {
+) -> Option<crate::application::trigger_matcher::MatchResult<'a>> {
     let ctx = window.get_active().ok()?;
-    find_snippet_for_process(library, buffer, &ctx.process_name)
-}
-
-/// Find snippet by buffer suffix and process name. Testable without platform deps.
-pub(crate) fn find_snippet_for_process<'a>(
-    library: &'a HashMap<String, Vec<Snippet>>,
-    buffer: &str,
-    process_name: &str,
-) -> Option<(&'a Snippet, &'a str)> {
-    let process = process_name.to_lowercase();
-
-    for (category, snippets) in library {
-        for snip in snippets {
-            if buffer.len() >= snip.trigger.len()
-                && buffer[buffer.len() - snip.trigger.len()..].eq_ignore_ascii_case(&snip.trigger)
-            {
-                if !snip.app_lock.is_empty() {
-                    let allowed: Vec<&str> = snip.app_lock.split(',').map(|s| s.trim()).collect();
-                    if !allowed.is_empty()
-                        && !allowed
-                            .iter()
-                            .any(|a| process.contains(&a.to_lowercase()))
-                    {
-                        expansion_diagnostics::push(
-                            "warn",
-                            format!(
-                                "AppLock: trigger '{}' requires app in [{}], current process '{}'",
-                                snip.trigger,
-                                snip.app_lock,
-                                process_name
-                            ),
-                        );
-                        continue;
-                    }
-                }
-                return Some((snip, category));
-            }
-        }
-    }
-    None
+    crate::application::trigger_matcher::TriggerMatcher::find_match(library, buffer, &ctx.process_name)
 }
 
 /// Fallback: map virtual key code to char for US QWERTY (no Shift).
@@ -694,56 +693,60 @@ mod tests {
     use std::collections::HashMap;
 
     #[test]
-    fn test_find_snippet_for_process_match_no_app_lock() {
+    fn test_find_snippet_match_no_app_lock() {
         let mut library = HashMap::new();
         library.insert(
             "Cat".to_string(),
             vec![Snippet::new("dyf", "Did you find")],
         );
 
-        let result = find_snippet_for_process(&library, "dyf", "sublime_text.exe");
+        let window = WindowsWindowAdapter::mock("sublime_text.exe", "test");
+        let result = find_snippet(&library, "dyf", &window);
         assert!(result.is_some());
-        let (snip, cat) = result.unwrap();
-        assert_eq!(snip.trigger, "dyf");
-        assert_eq!(snip.content, "Did you find");
-        assert_eq!(cat, "Cat");
+        let res = result.unwrap();
+        assert_eq!(res.snippet.trigger, "dyf");
+        assert_eq!(res.snippet.content, "Did you find");
+        assert_eq!(res.category, "Cat");
     }
 
     #[test]
-    fn test_find_snippet_for_process_match_buffer_suffix() {
+    fn test_find_snippet_match_buffer_suffix() {
         let mut library = HashMap::new();
         library.insert(
             "Cat".to_string(),
             vec![Snippet::new("sig", "Best regards")],
         );
 
-        let result = find_snippet_for_process(&library, "prefix sig", "notepad.exe");
+        let window = WindowsWindowAdapter::mock("notepad.exe", "test");
+        let result = find_snippet(&library, "prefix sig", &window);
         assert!(result.is_some());
-        assert_eq!(result.unwrap().0.trigger, "sig");
+        assert_eq!(result.unwrap().snippet.trigger, "sig");
     }
 
     #[test]
-    fn test_find_snippet_for_process_case_insensitive() {
+    fn test_find_snippet_case_insensitive() {
         let mut library = HashMap::new();
         library.insert(
             "Cat".to_string(),
             vec![Snippet::new("DYF", "Did you find")],
         );
 
-        let result = find_snippet_for_process(&library, "dyf", "sublime_text.exe");
+        let window = WindowsWindowAdapter::mock("sublime_text.exe", "test");
+        let result = find_snippet(&library, "dyf", &window);
         assert!(result.is_some());
-        assert_eq!(result.unwrap().0.trigger, "DYF");
+        assert_eq!(result.unwrap().snippet.trigger, "DYF");
     }
 
     #[test]
-    fn test_find_snippet_for_process_app_lock_allowed() {
+    fn test_find_snippet_app_lock_allowed() {
         let mut snip = Snippet::new("sig", "Best regards");
         snip.app_lock = "notepad.exe".to_string();
 
         let mut library = HashMap::new();
         library.insert("Cat".to_string(), vec![snip]);
 
-        let result = find_snippet_for_process(&library, "sig", "notepad.exe");
+        let window = WindowsWindowAdapter::mock("notepad.exe", "test");
+        let result = find_snippet(&library, "sig", &window);
         assert!(result.is_some());
     }
 
@@ -760,38 +763,39 @@ mod tests {
     }
 
     #[test]
-    fn test_find_snippet_for_process_app_lock_multi_allowed() {
+    #[test]
+    fn test_find_snippet_app_lock_multi_allowed() {
         let mut snip = Snippet::new("sig", "Best regards");
         snip.app_lock = "notepad.exe, sublime_text.exe".to_string();
 
         let mut library = HashMap::new();
         library.insert("Cat".to_string(), vec![snip]);
 
-        assert!(find_snippet_for_process(&library, "sig", "sublime_text.exe").is_some());
-        assert!(find_snippet_for_process(&library, "sig", "notepad.exe").is_some());
+        assert!(find_snippet(&library, "sig", &WindowsWindowAdapter::mock("sublime_text.exe", "test")).is_some());
+        assert!(find_snippet(&library, "sig", &WindowsWindowAdapter::mock("notepad.exe", "test")).is_some());
     }
 
     #[test]
-    fn test_find_snippet_for_process_no_match() {
+    fn test_find_snippet_no_match() {
         let mut library = HashMap::new();
         library.insert(
             "Cat".to_string(),
             vec![Snippet::new("dyf", "Did you find")],
         );
 
-        let result = find_snippet_for_process(&library, "xyz", "sublime_text.exe");
+        let result = find_snippet(&library, "xyz", &WindowsWindowAdapter::mock("sublime_text.exe", "test"));
         assert!(result.is_none());
     }
 
     #[test]
-    fn test_find_snippet_for_process_buffer_shorter_than_trigger() {
+    fn test_find_snippet_buffer_shorter_than_trigger() {
         let mut library = HashMap::new();
         library.insert(
             "Cat".to_string(),
             vec![Snippet::new("dyf", "Did you find")],
         );
 
-        let result = find_snippet_for_process(&library, "dy", "sublime_text.exe");
+        let result = find_snippet(&library, "dy", &WindowsWindowAdapter::mock("sublime_text.exe", "test"));
         assert!(result.is_none());
     }
 
