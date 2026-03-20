@@ -3,7 +3,7 @@ import { getTaurpc } from "../lib/taurpc";
 import { normalizeAppState } from "../lib/normalizeState";
 import { open, confirm } from "@tauri-apps/plugin-dialog";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { FolderOpen, Save, Search, Plus, Pencil, Trash2, FolderSearch, Pin } from "lucide-react";
+import { FolderOpen, Save, Search, Plus, Pencil, Trash2, FolderSearch, Pin, FileCode, FileType } from "lucide-react";
 import { showNativeContextMenu } from "../lib/nativeContextMenu";
 import { notify } from "../lib/notifications";
 import { syncLibraryToSqlite } from "../lib/sqliteSync";
@@ -90,7 +90,7 @@ export function LibraryTab({
     try {
       const count = await getTaurpc().load_library();
       setStatus(`Loaded ${count} categories`);
-      await getTaurpc().save_settings().catch(() => {});
+      await getTaurpc().save_settings().catch(() => { });
       const state = await loadAppState();
       if (state?.library && Object.keys(state.library).length > 0) {
         await syncLibraryToSqlite(state.library);
@@ -157,7 +157,7 @@ export function LibraryTab({
           pinned: newPinned,
         });
         await getTaurpc().save_library();
-        await getTaurpc().save_settings().catch(() => {});
+        await getTaurpc().save_settings().catch(() => { });
         const state = await loadAppState();
         const lib = state?.library ?? {};
         if (Object.keys(lib).length > 0) {
@@ -400,63 +400,140 @@ export function LibraryTab({
           <p>No snippets loaded. Set library path and click Load.</p>
         ) : useVirtual ? (
           <>
-          <div
-            ref={tableContainerRef}
-            className="border border-[var(--dc-border)] overflow-x-auto overflow-y-auto flex-1 min-h-0 hide-h-scrollbar"
-            style={{ maxHeight: 420 }}
-            onScroll={syncBarFromTable}
-          >
             <div
-              className="grid border-b border-[var(--dc-border)] bg-[var(--dc-bg-tertiary)] sticky top-0 z-10"
-              style={{
-                gridTemplateColumns: `28px repeat(${columnOrder.length}, minmax(80px, 1fr)) 120px`,
-              }}
+              ref={tableContainerRef}
+              className="border border-[var(--dc-border)] overflow-x-auto overflow-y-auto flex-1 min-h-0 hide-h-scrollbar"
+              style={{ maxHeight: 420 }}
+              onScroll={syncBarFromTable}
             >
-              <div className="border-r border-[var(--dc-border)] p-1.5 flex items-center justify-center" title="Pinned">
-                <Pin className="w-3.5 h-3.5 text-[var(--dc-text-muted)]" aria-hidden />
-              </div>
-              {columnOrder.map((col) => (
-                <div
-                  key={col}
-                  data-col={col}
-                  draggable
-                  onDragStart={() => handleColDragStart(col)}
-                  onDragOver={handleColDragOver}
-                  onDrop={() => handleColDrop(col)}
-                  onDragEnd={handleColDragEnd}
-                  className={`border-r border-[var(--dc-border)] p-1.5 cursor-pointer select-none whitespace-nowrap last:border-r-0 ${
-                    draggedCol === col ? "opacity-50" : ""
-                  } ${(sortColumn || "Trigger") === col ? (sortAsc ? "sort-asc" : "sort-desc") : ""}`}
-                  onClick={() => handleColClick(col)}
-                >
-                  {col}
-                  {(sortColumn || "Trigger") === col && (
-                    <span className="text-[0.7em] ml-1">
-                      {sortAsc ? " \u25B2" : " \u25BC"}
-                    </span>
-                  )}
+              <div
+                className="grid border-b border-[var(--dc-border)] bg-[var(--dc-bg-tertiary)] sticky top-0 z-10"
+                style={{
+                  gridTemplateColumns: `28px repeat(${columnOrder.length}, minmax(80px, 1fr)) 120px`,
+                }}
+              >
+                <div className="border-r border-[var(--dc-border)] p-1.5 flex items-center justify-center" title="Pinned">
+                  <Pin className="w-3.5 h-3.5 text-[var(--dc-text-muted)]" aria-hidden />
                 </div>
-              ))}
-              <div className="p-1.5">Actions</div>
-            </div>
-            <div
-              style={{
-                height: `${rowVirtualizer.getTotalSize()}px`,
-                width: "100%",
-                position: "relative",
-              }}
-            >
-              {rowVirtualizer.getVirtualItems().map((virtualRow) => {
-                let row = effectiveRows[virtualRow.index];
-                if (useSqlitePartial && !row) {
-                  const pageIndex = Math.floor(
-                    virtualRow.index / SQLITE_PAGE_SIZE
-                  );
-                  fetchSqlitePage(pageIndex);
+                {columnOrder.map((col) => (
+                  <div
+                    key={col}
+                    data-col={col}
+                    draggable
+                    onDragStart={() => handleColDragStart(col)}
+                    onDragOver={handleColDragOver}
+                    onDrop={() => handleColDrop(col)}
+                    onDragEnd={handleColDragEnd}
+                    className={`border-r border-[var(--dc-border)] p-1.5 cursor-pointer select-none whitespace-nowrap last:border-r-0 ${draggedCol === col ? "opacity-50" : ""
+                      } ${(sortColumn || "Trigger") === col ? (sortAsc ? "sort-asc" : "sort-desc") : ""}`}
+                    onClick={() => handleColClick(col)}
+                  >
+                    {col}
+                    {(sortColumn || "Trigger") === col && (
+                      <span className="text-[0.7em] ml-1">
+                        {sortAsc ? " \u25B2" : " \u25BC"}
+                      </span>
+                    )}
+                  </div>
+                ))}
+                <div className="p-1.5">Actions</div>
+              </div>
+              <div
+                style={{
+                  height: `${rowVirtualizer.getTotalSize()}px`,
+                  width: "100%",
+                  position: "relative",
+                }}
+              >
+                {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+                  let row = effectiveRows[virtualRow.index];
+                  if (useSqlitePartial && !row) {
+                    const pageIndex = Math.floor(
+                      virtualRow.index / SQLITE_PAGE_SIZE
+                    );
+                    fetchSqlitePage(pageIndex);
+                    return (
+                      <div
+                        key={`loading-${virtualRow.index}`}
+                        className="grid border-b border-[var(--dc-border)] items-center"
+                        style={{
+                          gridTemplateColumns: `28px repeat(${columnOrder.length}, minmax(80px, 1fr)) 120px`,
+                          position: "absolute",
+                          top: 0,
+                          left: 0,
+                          width: "100%",
+                          height: `${virtualRow.size}px`,
+                          transform: `translateY(${virtualRow.start}px)`,
+                          backgroundColor:
+                            virtualRow.index % 2 === 0
+                              ? "var(--dc-bg-alt)"
+                              : "var(--dc-bg)",
+                        }}
+                      >
+                        <div
+                          className="col-span-full p-2 text-[var(--dc-text-muted)] text-sm"
+                        >
+                          Loading...
+                        </div>
+                      </div>
+                    );
+                  }
+                  if (!row) return null;
                   return (
                     <div
-                      key={`loading-${virtualRow.index}`}
-                      className="grid border-b border-[var(--dc-border)] items-center"
+                      key={`${row.cat}-${row.idx}-${virtualRow.index}`}
+                      className="grid border-b border-[var(--dc-border)] cursor-context-menu"
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        const isPinned = (row.s.pinned || "false") === "true";
+                        showNativeContextMenu(e.clientX, e.clientY, [
+                          {
+                            id: "view-full",
+                            icon: "👁",
+                            text: "View Full Snippet Content",
+                            onClick: () =>
+                              onOpenViewFull(row.s.content || "", {
+                                category: row.cat,
+                                snippetIdx: row.idx,
+                              }),
+                          },
+                          {
+                            id: "pin",
+                            icon: isPinned ? "📌" : "📍",
+                            text: isPinned ? "Unpin Snippet" : "Pin Snippet",
+                            onClick: () => handleTogglePin(row.cat, row.idx),
+                          },
+                          {
+                            id: "copy",
+                            icon: "⧉",
+                            text: "Copy Full Content to Clipboard",
+                            onClick: async () => {
+                              try {
+                                await getTaurpc().copy_to_clipboard(
+                                  row.s.content || ""
+                                );
+                                setStatus("Copied to clipboard");
+                              } catch (err) {
+                                setStatus("Copy failed: " + String(err), true);
+                              }
+                            },
+                          },
+                          {
+                            id: "edit",
+                            icon: "✎",
+                            text: "Edit Snippet",
+                            onClick: () =>
+                              onOpenSnippetEditor("edit", row.cat, row.idx),
+                          },
+                          {
+                            id: "delete",
+                            icon: "🗑",
+                            text: "Delete Snippet",
+                            onClick: () =>
+                              onOpenDeleteConfirm(row.cat, row.idx),
+                          },
+                        ]);
+                      }}
                       style={{
                         gridTemplateColumns: `28px repeat(${columnOrder.length}, minmax(80px, 1fr)) 120px`,
                         position: "absolute",
@@ -472,148 +549,86 @@ export function LibraryTab({
                       }}
                     >
                       <div
-                        className="col-span-full p-2 text-[var(--dc-text-muted)] text-sm"
+                        className="border-r border-[var(--dc-border)] p-1.5 flex items-center justify-center cursor-pointer"
+                        onClick={() => handleTogglePin(row.cat, row.idx)}
+                        title={
+                          (row.s.pinned || "false").toLowerCase() === "true"
+                            ? "Unpin Snippet"
+                            : "Pin Snippet"
+                        }
                       >
-                        Loading...
+                        {(row.s.pinned || "false").toLowerCase() === "true" ? (
+                          <span title="Pinned"><Pin className="w-3.5 h-3.5 text-amber-500 fill-amber-500" aria-hidden /></span>
+                        ) : (
+                          <span className="w-3.5 h-3.5" aria-hidden />
+                        )}
                       </div>
-                    </div>
-                  );
-                }
-                if (!row) return null;
-                return (
-                  <div
-                    key={`${row.cat}-${row.idx}-${virtualRow.index}`}
-                    className="grid border-b border-[var(--dc-border)] cursor-context-menu"
-                    onContextMenu={(e) => {
-                      e.preventDefault();
-                      const isPinned = (row.s.pinned || "false") === "true";
-                      showNativeContextMenu(e.clientX, e.clientY, [
-                        {
-                          id: "view-full",
-                          icon: "👁",
-                          text: "View Full Snippet Content",
-                          onClick: () =>
-                            onOpenViewFull(row.s.content || "", {
-                              category: row.cat,
-                              snippetIdx: row.idx,
-                            }),
-                        },
-                        {
-                          id: "pin",
-                          icon: isPinned ? "📌" : "📍",
-                          text: isPinned ? "Unpin Snippet" : "Pin Snippet",
-                          onClick: () => handleTogglePin(row.cat, row.idx),
-                        },
-                        {
-                          id: "copy",
-                          icon: "⧉",
-                          text: "Copy Full Content to Clipboard",
-                          onClick: async () => {
-                            try {
-                              await getTaurpc().copy_to_clipboard(
-                                row.s.content || ""
-                              );
-                              setStatus("Copied to clipboard");
-                            } catch (err) {
-                              setStatus("Copy failed: " + String(err), true);
-                            }
-                          },
-                        },
-                        {
-                          id: "edit",
-                          icon: "✎",
-                          text: "Edit Snippet",
-                          onClick: () =>
-                            onOpenSnippetEditor("edit", row.cat, row.idx),
-                        },
-                        {
-                          id: "delete",
-                          icon: "🗑",
-                          text: "Delete Snippet",
-                          onClick: () =>
-                            onOpenDeleteConfirm(row.cat, row.idx),
-                        },
-                      ]);
-                    }}
-                    style={{
-                          gridTemplateColumns: `28px repeat(${columnOrder.length}, minmax(80px, 1fr)) 120px`,
-                          position: "absolute",
-                          top: 0,
-                          left: 0,
-                          width: "100%",
-                          height: `${virtualRow.size}px`,
-                          transform: `translateY(${virtualRow.start}px)`,
-                          backgroundColor:
-                            virtualRow.index % 2 === 0
-                              ? "var(--dc-bg-alt)"
-                              : "var(--dc-bg)",
-                        }}
-                      >
+                      {columnOrder.map((col) => (
                         <div
-                          className="border-r border-[var(--dc-border)] p-1.5 flex items-center justify-center cursor-pointer"
-                          onClick={() => handleTogglePin(row.cat, row.idx)}
-                          title={
-                            (row.s.pinned || "false").toLowerCase() === "true"
-                              ? "Unpin Snippet"
-                              : "Pin Snippet"
-                          }
+                          key={col}
+                          className="border-r border-[var(--dc-border)] p-1.5 last:border-r-0 flex items-center gap-1 overflow-hidden"
                         >
-                          {(row.s.pinned || "false").toLowerCase() === "true" ? (
-                            <span title="Pinned"><Pin className="w-3.5 h-3.5 text-amber-500 fill-amber-500" aria-hidden /></span>
-                          ) : (
-                            <span className="w-3.5 h-3.5" aria-hidden />
+                          {col === "Trigger" && (row.s.htmlContent || row.s.rtfContent) && (
+                            <div className="flex gap-0.5 mr-1 shrink-0">
+                              {row.s.htmlContent && (
+                                <span title="Contains HTML">
+                                  <FileCode className="w-2.5 h-2.5 text-blue-400" />
+                                </span>
+                              )}
+                              {row.s.rtfContent && (
+                                <span title="Contains RTF">
+                                  <FileType className="w-2.5 h-2.5 text-green-400" />
+                                </span>
+                              )}
+                            </div>
                           )}
-                        </div>
-                        {columnOrder.map((col) => (
-                          <div
-                            key={col}
-                            className="border-r border-[var(--dc-border)] p-1.5 last:border-r-0"
-                          >
+                          <span className="truncate">
                             {col === "Category"
                               ? row.cat
                               : getCellValue(row.s, col)}
-                          </div>
-                        ))}
-                        <div className="p-1.5 flex gap-1">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() =>
-                              onOpenSnippetEditor("edit", row.cat, row.idx)
-                            }
-                            className="h-7 px-2"
-                          >
-                            <Pencil className="w-3 h-3 mr-1" />
-                            Edit
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() =>
-                              onOpenDeleteConfirm(row.cat, row.idx)
-                            }
-                            className="h-7 px-2 text-[var(--dc-error)]"
-                          >
-                            <Trash2 className="w-3 h-3 mr-1" />
-                            Delete
-                          </Button>
+                          </span>
                         </div>
+                      ))}
+                      <div className="p-1.5 flex gap-1">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() =>
+                            onOpenSnippetEditor("edit", row.cat, row.idx)
+                          }
+                          className="h-7 px-2"
+                        >
+                          <Pencil className="w-3 h-3 mr-1" />
+                          Edit
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() =>
+                            onOpenDeleteConfirm(row.cat, row.idx)
+                          }
+                          className="h-7 px-2 text-[var(--dc-error)]"
+                        >
+                          <Trash2 className="w-3 h-3 mr-1" />
+                          Delete
+                        </Button>
                       </div>
-                );
-              })}
+                    </div>
+                  );
+                })}
+              </div>
             </div>
-          </div>
-          <div
-            ref={hScrollBarRef}
-            className="flex-shrink-0"
-            style={{
-              overflowX: "auto",
-              overflowY: "hidden",
-            }}
-            onScroll={syncTableFromBar}
-          >
-            <div ref={spacerRef} style={{ height: 1, minWidth: "100%" }} />
-          </div>
+            <div
+              ref={hScrollBarRef}
+              className="flex-shrink-0"
+              style={{
+                overflowX: "auto",
+                overflowY: "hidden",
+              }}
+              onScroll={syncTableFromBar}
+            >
+              <div ref={spacerRef} style={{ height: 1, minWidth: "100%" }} />
+            </div>
           </>
         ) : (
           <div
@@ -635,122 +650,121 @@ export function LibraryTab({
               }}
               onScroll={syncBarFromTable}
             >
-            <table className="w-full border-collapse border border-[var(--dc-border)]">
-              <thead>
-                <tr>
-                  <th
-                    className="sticky top-0 z-10 border border-[var(--dc-border)] p-1.5 w-[28px] bg-[var(--dc-bg-tertiary)]"
-                    style={{ backgroundColor: "var(--dc-bg-tertiary)" }}
-                    title="Pinned"
-                  >
-                    <Pin className="w-3.5 h-3.5 mx-auto text-[var(--dc-text-muted)]" aria-hidden />
-                  </th>
-                  {columnOrder.map((col) => (
+              <table className="w-full border-collapse border border-[var(--dc-border)]">
+                <thead>
+                  <tr>
                     <th
-                      key={col}
-                      data-col={col}
-                      draggable
-                      onDragStart={() => handleColDragStart(col)}
-                      onDragOver={handleColDragOver}
-                      onDrop={() => handleColDrop(col)}
-                      onDragEnd={handleColDragEnd}
-                      className={`sticky top-0 z-10 border border-[var(--dc-border)] p-1.5 text-left bg-[var(--dc-bg-tertiary)] cursor-pointer select-none whitespace-nowrap ${
-                        draggedCol === col ? "opacity-50" : ""
-                      } ${sortColumn === col ? (sortAsc ? "sort-asc" : "sort-desc") : ""}`}
+                      className="sticky top-0 z-10 border border-[var(--dc-border)] p-1.5 w-[28px] bg-[var(--dc-bg-tertiary)]"
                       style={{ backgroundColor: "var(--dc-bg-tertiary)" }}
-                    onClick={() => handleColClick(col)}
-                  >
-                    {col}
-                    {(sortColumn || "Trigger") === col && (
-                        <span className="text-[0.7em] ml-1">
-                          {sortAsc ? " \u25B2" : " \u25BC"}
-                        </span>
-                      )}
+                      title="Pinned"
+                    >
+                      <Pin className="w-3.5 h-3.5 mx-auto text-[var(--dc-text-muted)]" aria-hidden />
                     </th>
+                    {columnOrder.map((col) => (
+                      <th
+                        key={col}
+                        data-col={col}
+                        draggable
+                        onDragStart={() => handleColDragStart(col)}
+                        onDragOver={handleColDragOver}
+                        onDrop={() => handleColDrop(col)}
+                        onDragEnd={handleColDragEnd}
+                        className={`sticky top-0 z-10 border border-[var(--dc-border)] p-1.5 text-left bg-[var(--dc-bg-tertiary)] cursor-pointer select-none whitespace-nowrap ${draggedCol === col ? "opacity-50" : ""
+                          } ${sortColumn === col ? (sortAsc ? "sort-asc" : "sort-desc") : ""}`}
+                        style={{ backgroundColor: "var(--dc-bg-tertiary)" }}
+                        onClick={() => handleColClick(col)}
+                      >
+                        {col}
+                        {(sortColumn || "Trigger") === col && (
+                          <span className="text-[0.7em] ml-1">
+                            {sortAsc ? " \u25B2" : " \u25BC"}
+                          </span>
+                        )}
+                      </th>
+                    ))}
+                    <th
+                      className="sticky top-0 z-10 border border-[var(--dc-border)] p-1.5 text-left bg-[var(--dc-bg-tertiary)]"
+                      style={{ backgroundColor: "var(--dc-bg-tertiary)" }}
+                    >
+                      Actions
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map(({ cat, s, idx }) => (
+                    <tr
+                      key={`${cat}-${idx}`}
+                      className="even:bg-[var(--dc-bg-alt)] odd:bg-[var(--dc-bg)] cursor-context-menu"
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        const isPinned = (s.pinned || "false") === "true";
+                        showNativeContextMenu(e.clientX, e.clientY, [
+                          {
+                            id: "view-full",
+                            icon: "👁",
+                            text: "View Full Snippet Content",
+                            onClick: () =>
+                              onOpenViewFull(s.content || "", {
+                                category: cat,
+                                snippetIdx: idx,
+                              }),
+                          },
+                          {
+                            id: "pin",
+                            icon: isPinned ? "📌" : "📍",
+                            text: isPinned ? "Unpin Snippet" : "Pin Snippet",
+                            onClick: () => handleTogglePin(cat, idx),
+                          },
+                          {
+                            id: "copy",
+                            icon: "⧉",
+                            text: "Copy Full Content to Clipboard",
+                            onClick: async () => {
+                              try {
+                                await getTaurpc().copy_to_clipboard(
+                                  s.content || ""
+                                );
+                                setStatus("Copied to clipboard");
+                              } catch (err) {
+                                setStatus("Copy failed: " + String(err), true);
+                              }
+                            },
+                          },
+                          {
+                            id: "edit",
+                            icon: "✎",
+                            text: "Edit Snippet",
+                            onClick: () => onOpenSnippetEditor("edit", cat, idx),
+                          },
+                          {
+                            id: "delete",
+                            icon: "🗑",
+                            text: "Delete Snippet",
+                            onClick: () => onOpenDeleteConfirm(cat, idx),
+                          },
+                        ]);
+                      }}
+                    >
+                      <td
+                        className="border border-[var(--dc-border)] p-1.5 w-[28px] text-center cursor-pointer"
+                        onClick={() => handleTogglePin(cat, idx)}
+                        title={
+                          (s.pinned || "false").toLowerCase() === "true"
+                            ? "Unpin Snippet"
+                            : "Pin Snippet"
+                        }
+                      >
+                        {(s.pinned || "false").toLowerCase() === "true" ? (
+                          <span title="Pinned"><Pin className="w-3.5 h-3.5 mx-auto text-amber-500 fill-amber-500" aria-hidden /></span>
+                        ) : (
+                          <span className="w-3.5 h-3.5 inline-block" aria-hidden />
+                        )}
+                      </td>
+                      {renderRow({ cat, s, idx }, "")}
+                    </tr>
                   ))}
-                  <th
-                    className="sticky top-0 z-10 border border-[var(--dc-border)] p-1.5 text-left bg-[var(--dc-bg-tertiary)]"
-                    style={{ backgroundColor: "var(--dc-bg-tertiary)" }}
-                  >
-                    Actions
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-              {rows.map(({ cat, s, idx }) => (
-                <tr
-                  key={`${cat}-${idx}`}
-                  className="even:bg-[var(--dc-bg-alt)] odd:bg-[var(--dc-bg)] cursor-context-menu"
-                  onContextMenu={(e) => {
-                    e.preventDefault();
-                    const isPinned = (s.pinned || "false") === "true";
-                    showNativeContextMenu(e.clientX, e.clientY, [
-                      {
-                        id: "view-full",
-                        icon: "👁",
-                        text: "View Full Snippet Content",
-                        onClick: () =>
-                          onOpenViewFull(s.content || "", {
-                            category: cat,
-                            snippetIdx: idx,
-                          }),
-                      },
-                      {
-                        id: "pin",
-                        icon: isPinned ? "📌" : "📍",
-                        text: isPinned ? "Unpin Snippet" : "Pin Snippet",
-                        onClick: () => handleTogglePin(cat, idx),
-                      },
-                      {
-                        id: "copy",
-                        icon: "⧉",
-                        text: "Copy Full Content to Clipboard",
-                        onClick: async () => {
-                          try {
-                            await getTaurpc().copy_to_clipboard(
-                              s.content || ""
-                            );
-                            setStatus("Copied to clipboard");
-                          } catch (err) {
-                            setStatus("Copy failed: " + String(err), true);
-                          }
-                        },
-                      },
-                      {
-                        id: "edit",
-                        icon: "✎",
-                        text: "Edit Snippet",
-                        onClick: () => onOpenSnippetEditor("edit", cat, idx),
-                      },
-                      {
-                        id: "delete",
-                        icon: "🗑",
-                        text: "Delete Snippet",
-                        onClick: () => onOpenDeleteConfirm(cat, idx),
-                      },
-                    ]);
-                  }}
-                >
-                  <td
-                    className="border border-[var(--dc-border)] p-1.5 w-[28px] text-center cursor-pointer"
-                    onClick={() => handleTogglePin(cat, idx)}
-                    title={
-                      (s.pinned || "false").toLowerCase() === "true"
-                        ? "Unpin Snippet"
-                        : "Pin Snippet"
-                    }
-                  >
-                    {(s.pinned || "false").toLowerCase() === "true" ? (
-                      <span title="Pinned"><Pin className="w-3.5 h-3.5 mx-auto text-amber-500 fill-amber-500" aria-hidden /></span>
-                    ) : (
-                      <span className="w-3.5 h-3.5 inline-block" aria-hidden />
-                    )}
-                  </td>
-                  {renderRow({ cat, s, idx }, "")}
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                </tbody>
+              </table>
             </div>
             <div
               ref={hScrollBarRef}
@@ -767,9 +781,8 @@ export function LibraryTab({
         )}
       </div>
       <p
-        className={`text-sm mt-2 ${
-          libraryStatusError ? "text-[var(--dc-error)]" : "text-[var(--dc-text-muted)]"
-        }`}
+        className={`text-sm mt-2 ${libraryStatusError ? "text-[var(--dc-error)]" : "text-[var(--dc-text-muted)]"
+          }`}
       >
         {libraryStatus || appState?.status || "Ready"}
       </p>

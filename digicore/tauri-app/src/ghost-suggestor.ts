@@ -65,11 +65,6 @@ async function refresh() {
       if (state?.has_suggestions) {
         console.log("[GhostSuggestor] refresh: calling w.show()");
         await w.show();
-        try {
-          await w.setFocus();
-        } catch (e) {
-          console.warn("[GhostSuggestor] refresh: setFocus failed", e);
-        }
       } else {
         await w.hide();
       }
@@ -89,7 +84,7 @@ async function init() {
   applyThemeToDocument(resolveTheme(pref));
   listen<{ theme: "dark" | "light" }>("digicore-theme-changed", (e) => {
     applyThemeToDocument(e.payload.theme);
-  }).catch(() => {});
+  }).catch(() => { });
 
   const btnSnooze = document.getElementById("btn-snooze");
   const btnPromote = document.getElementById("btn-promote");

@@ -9,7 +9,21 @@ export function normalizeAppState(dto: AppStateDto): AppState {
   const lib = dto.library ?? {};
   const library: Record<string, Snippet[]> = {};
   for (const [k, v] of Object.entries(lib)) {
-    if (v) library[k] = v;
+    if (v) {
+      library[k] = v.map((s) => ({
+        trigger: s.trigger,
+        trigger_type: (s.trigger_type ?? 'suffix') as 'suffix' | 'regex',
+        content: s.content,
+        htmlContent: s.htmlContent ?? null,
+        rtfContent: s.rtfContent ?? null,
+        options: s.options ?? '',
+        category: s.category ?? '',
+        profile: s.profile ?? 'Default',
+        appLock: s.appLock ?? '',
+        pinned: s.pinned ?? 'false',
+        lastModified: s.lastModified ?? '',
+      }));
+    }
   }
   return { ...dto, library } as AppState;
 }

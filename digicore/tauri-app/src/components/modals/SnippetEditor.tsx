@@ -4,6 +4,13 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
 import { open } from "@tauri-apps/plugin-dialog";
+import {
+  Clipboard,
+  ChevronDown,
+  ChevronUp,
+  FileCode,
+  FileType
+} from "lucide-react";
 import { getTaurpc } from "../../lib/taurpc";
 import type { InteractiveVarDto, SnippetLogicTestResultDto } from "../../bindings";
 import type { Snippet } from "../../types";
@@ -36,6 +43,9 @@ export function SnippetEditor({
   const [content, setContent] = useState("");
   const [appLock, setAppLock] = useState("");
   const [pinned, setPinned] = useState(false);
+  const [triggerType, setTriggerType] = useState<"suffix" | "regex">("suffix");
+  const [htmlContent, setHtmlContent] = useState<string | null>(null);
+  const [rtfContent, setRtfContent] = useState<string | null>(null);
   const [testError, setTestError] = useState("");
   const [testResult, setTestResult] = useState("");
   const [testing, setTesting] = useState(false);
@@ -43,6 +53,7 @@ export function SnippetEditor({
   const [promptVars, setPromptVars] = useState<InteractiveVarDto[]>([]);
   const [promptValues, setPromptValues] = useState<Record<string, string>>({});
   const [showPrompt, setShowPrompt] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [testStatus, setTestStatus] = useState("");
   const [citySuggestionsByTag, setCitySuggestionsByTag] = useState<
     Record<string, string[]>
@@ -69,8 +80,11 @@ export function SnippetEditor({
         setOptions(initialSnippet.options || "*:");
         setSnippetCategory(initialSnippet.category || category);
         setContent(initialSnippet.content || "");
-        setAppLock(initialSnippet.app_lock || "");
+        setAppLock(initialSnippet.appLock || "");
         setPinned((initialSnippet.pinned || "").toLowerCase() === "true");
+        setTriggerType(initialSnippet.trigger_type || "suffix");
+        setHtmlContent(initialSnippet.htmlContent ?? null);
+        setRtfContent(initialSnippet.rtfContent ?? null);
       } else if (mode === "add" && prefill) {
         setTrigger(prefill.trigger || "");
         setContent(prefill.content || "");
@@ -79,6 +93,9 @@ export function SnippetEditor({
         setSnippetCategory(category || "General");
         setAppLock("");
         setPinned(false);
+        setTriggerType("suffix");
+        setHtmlContent(null);
+        setRtfContent(null);
       } else {
         setTrigger("");
         setProfile("Default");
@@ -87,6 +104,9 @@ export function SnippetEditor({
         setContent("");
         setAppLock("");
         setPinned(false);
+        setTriggerType("suffix");
+        setHtmlContent(null);
+        setRtfContent(null);
       }
       setTestError("");
       setTestResult("");
@@ -95,6 +115,7 @@ export function SnippetEditor({
       setShowPrompt(false);
       setCopyStatus("");
       setTestStatus("");
+      setShowAdvanced(!!initialSnippet?.htmlContent || !!initialSnippet?.rtfContent);
       setCitySuggestionsByTag({});
       setCitySuggestLoadingTag("");
       setCitySuggestError("");
@@ -115,8 +136,8 @@ export function SnippetEditor({
     if (!testResult) return;
     const panel = resultPanelRef.current as
       | (HTMLDivElement & {
-          scrollIntoView?: (options?: ScrollIntoViewOptions) => void;
-        })
+        scrollIntoView?: (options?: ScrollIntoViewOptions) => void;
+      })
       | null;
     if (panel && typeof panel.scrollIntoView === "function") {
       panel.scrollIntoView({
@@ -130,13 +151,16 @@ export function SnippetEditor({
   const handleSave = () => {
     const snippet: Snippet = {
       trigger: trigger.trim(),
+      trigger_type: triggerType,
       content,
+      htmlContent,
+      rtfContent,
       options: options.trim() || "*:",
       category: snippetCategory.trim(),
       profile: profile.trim() || "Default",
-      app_lock: appLock.trim(),
+      appLock: appLock.trim(),
       pinned: pinned ? "true" : "false",
-      last_modified: "",
+      lastModified: "",
     };
     onSave(snippet);
   };
@@ -261,9 +285,9 @@ export function SnippetEditor({
   ) => {
     const normalizedValues = values
       ? Object.keys(values)
-          .sort()
-          .map((k) => `${k}=${values[k]}`)
-          .join("|")
+        .sort()
+        .map((k) => `${k}=${values[k]}`)
+        .join("|")
       : "";
     return `${snippetContent}||${normalizedValues}`;
   };
@@ -410,6 +434,30 @@ export function SnippetEditor({
     });
   };
 
+  const handleCaptureRichText = async () => {
+    try {
+      setTestStatus("Capturing rich text...");
+      const rich = await getTaurpc().get_clipboard_rich_text();
+      if (!rich.plain && !rich.html && !rich.rtf) {
+        setTestError("Clipboard is empty or does not contain text.");
+        setTestStatus("");
+        return;
+      }
+      setContent(rich.plain);
+      setHtmlContent(rich.html || null);
+      setRtfContent(rich.rtf || null);
+      if (rich.html || rich.rtf) {
+        setShowAdvanced(true);
+      }
+      setTestStatus("Captured from clipboard successfully.");
+      setTimeout(() => setTestStatus(""), 3000);
+      setTestError("");
+    } catch (e) {
+      setTestError("Failed to capture from clipboard: " + String(e));
+      setTestStatus("");
+    }
+  };
+
   return (
     <AnimatePresence>
       {visible && (
@@ -442,6 +490,17 @@ export function SnippetEditor({
                 />
               </div>
               <div>
+                <Label className="mb-1 block">Trigger Type</Label>
+                <select
+                  value={triggerType}
+                  onChange={(e) => setTriggerType(e.target.value as "suffix" | "regex")}
+                  className="flex h-10 w-full rounded-md border border-[var(--dc-border)] bg-[var(--dc-bg)] px-3 py-2 text-sm"
+                >
+                  <option value="suffix">Suffix (Normal)</option>
+                  <option value="regex">Regex (Advanced)</option>
+                </select>
+              </div>
+              <div>
                 <Label className="mb-1 block">Profile</Label>
                 <Input
                   value={profile}
@@ -466,13 +525,66 @@ export function SnippetEditor({
                 />
               </div>
               <div>
-                <Label className="mb-1 block">Content</Label>
+                <div className="flex items-center justify-between mb-1">
+                  <Label>Content</Label>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 px-2 text-[10px] uppercase tracking-wider font-bold flex gap-1 items-center hover:bg-[var(--dc-bg-hover)]"
+                    onClick={handleCaptureRichText}
+                  >
+                    <Clipboard className="w-3 h-3" />
+                    Capture from Clipboard
+                  </Button>
+                </div>
                 <textarea
                   value={content}
                   onChange={(e) => setContent(e.target.value)}
                   placeholder="Snippet content..."
                   className="flex min-h-[120px] w-full rounded-md border border-[var(--dc-border)] bg-[var(--dc-bg)] px-3 py-2 text-sm"
                 />
+              </div>
+
+              <div className="pt-2 border-t border-[var(--dc-border)]">
+                <button
+                  type="button"
+                  onClick={() => setShowAdvanced(!showAdvanced)}
+                  className="flex items-center gap-1 text-[11px] font-semibold text-[var(--dc-text-muted)] hover:text-[var(--dc-text)] transition-colors uppercase tracking-tight"
+                >
+                  {showAdvanced ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                  {showAdvanced ? "Hide Rich Text / HTML" : "Show Rich Text / HTML (Advanced)"}
+                </button>
+
+                {showAdvanced && (
+                  <motion.div
+                    initial={{ height: 0, opacity: 0 }}
+                    animate={{ height: "auto", opacity: 1 }}
+                    className="space-y-4 mt-4 overflow-hidden"
+                  >
+                    <div>
+                      <Label className="mb-1 block flex items-center gap-1 text-xs font-mono text-[var(--dc-text-muted)]">
+                        <FileCode className="w-3 h-3" /> HTML Content
+                      </Label>
+                      <textarea
+                        value={htmlContent || ""}
+                        onChange={(e) => setHtmlContent(e.target.value || null)}
+                        placeholder="HTML representation (optional)..."
+                        className="flex min-h-[80px] w-full rounded-md border border-[var(--dc-border)] bg-[var(--dc-bg)] px-3 py-2 text-xs font-mono"
+                      />
+                    </div>
+                    <div>
+                      <Label className="mb-1 block flex items-center gap-1 text-xs font-mono text-[var(--dc-text-muted)]">
+                        <FileType className="w-3 h-3" /> RTF Content
+                      </Label>
+                      <textarea
+                        value={rtfContent || ""}
+                        onChange={(e) => setRtfContent(e.target.value || null)}
+                        placeholder="RTF representation (optional)..."
+                        className="flex min-h-[80px] w-full rounded-md border border-[var(--dc-border)] bg-[var(--dc-bg)] px-3 py-2 text-xs font-mono"
+                      />
+                    </div>
+                  </motion.div>
+                )}
               </div>
               <div>
                 <Label className="mb-1 block">AppLock</Label>

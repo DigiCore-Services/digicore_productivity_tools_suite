@@ -14,12 +14,16 @@ export type LibraryRow = { cat: string; s: Snippet; idx: number };
 function rowToSnippet(r: SnippetRow): Snippet {
   return {
     trigger: r.trigger,
+    trigger_type: r.trigger_type,
     content: r.content,
+    htmlContent: r.html_content,
+    rtfContent: r.rtf_content,
     options: r.options,
+    category: r.category,
     profile: r.profile,
-    app_lock: r.app_lock,
+    appLock: r.app_lock,
     pinned: r.pinned,
-    last_modified: r.last_modified,
+    lastModified: r.last_modified,
   };
 }
 
