@@ -82,9 +82,9 @@ fn run_listener(on_clip: std::sync::Arc<std::sync::Mutex<Box<dyn Fn(String, Stri
             0,
             0,
             0,
-            HWND_MESSAGE,
-            HMENU::default(),
-            instance,
+            Some(HWND_MESSAGE),
+            Some(HMENU::default()),
+            Some(instance.into()),
             None,
         )
         .map_err(|e| anyhow::anyhow!("CreateWindowExW: {:?}", e))?;
@@ -99,7 +99,7 @@ fn run_listener(on_clip: std::sync::Arc<std::sync::Mutex<Box<dyn Fn(String, Stri
 
         let mut msg = MSG::default();
         loop {
-            let ret = GetMessageW(&mut msg, HWND::default(), 0, 0);
+            let ret = GetMessageW(&mut msg, None, 0, 0);
             if ret.as_bool() {
                 if ret.0 == -1 {
                     break;
