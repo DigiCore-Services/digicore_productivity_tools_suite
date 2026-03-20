@@ -2,4 +2,4 @@
 
 pub mod snippet;
 
-pub use snippet::Snippet;
+pub use snippet::{Snippet, TriggerType};

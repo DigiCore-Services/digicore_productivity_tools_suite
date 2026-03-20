@@ -1906,7 +1906,7 @@ dependencies = [
  "specta",
  "tempfile",
  "thiserror 1.0.69",
- "windows 0.58.0",
+ "windows 0.61.3",
 ]
 
 [[package]]
@@ -1941,7 +1941,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "uuid",
- "windows 0.58.0",
+ "windows 0.61.3",
  "winreg 0.52.0",
  "winrt-toast-reborn",
 ]
