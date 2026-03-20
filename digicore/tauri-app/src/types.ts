@@ -1,12 +1,15 @@
 export interface Snippet {
   trigger: string;
+  trigger_type: 'suffix' | 'regex';
   content: string;
-  options?: string;
-  category?: string;
-  profile?: string;
-  app_lock?: string;
-  pinned?: string;
-  last_modified?: string;
+  htmlContent: string | null;
+  rtfContent: string | null;
+  options: string;
+  category: string;
+  profile: string;
+  appLock: string;
+  pinned: string;
+  lastModified: string;
 }
 
 export interface AppState {
@@ -111,6 +114,8 @@ export interface AppState {
 export interface ClipEntry {
   id: number;
   content: string;
+  html_content?: string | null;
+  rtf_content?: string | null;
   process_name: string;
   window_title: string;
   length: number;

@@ -2,7 +2,7 @@
   "$schema": "https://schema.tauri.app/config/2/capability",
   "identifier": "ghost-windows",
   "description": "Capabilities for overlay and quick-search windows",
-  "windows": ["ghost-suggestor", "ghost-follower", "quick-search"],
+  "windows": ["ghost-suggestor", "ghost-follower", "quick-search", "variable-input"],
   "permissions": [
     "core:default",
     "core:event:default",
