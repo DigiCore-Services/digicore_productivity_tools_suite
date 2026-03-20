@@ -2,6 +2,21 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Trigger types for snippets.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(rename_all = "lowercase")]
+pub enum TriggerType {
+    Suffix,
+    Regex,
+}
+
+impl Default for TriggerType {
+    fn default() -> Self {
+        Self::Suffix
+    }
+}
+
 /// A text expansion snippet.
 ///
 /// Matches the JSON format from text_expansion_library.json:
@@ -10,7 +25,13 @@ use serde::{Deserialize, Serialize};
 #[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct Snippet {
     pub trigger: String,
+    #[serde(default)]
+    pub trigger_type: TriggerType,
     pub content: String,
+    #[serde(default, rename = "htmlContent")]
+    pub html_content: Option<String>,
+    #[serde(default, rename = "rtfContent")]
+    pub rtf_content: Option<String>,
     #[serde(default)]
     pub options: String,
     #[serde(default)]
@@ -30,7 +51,10 @@ impl Snippet {
     pub fn new(trigger: impl Into<String>, content: impl Into<String>) -> Self {
         Self {
             trigger: trigger.into(),
+            trigger_type: TriggerType::Suffix,
             content: content.into(),
+            html_content: None,
+            rtf_content: None,
             options: String::new(),
             category: String::new(),
             profile: "Default".into(),
