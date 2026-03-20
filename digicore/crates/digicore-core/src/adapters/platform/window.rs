@@ -40,7 +40,7 @@ impl WindowContextPort for WindowsWindowAdapter {
             let process_name = if pid != 0 {
                 if let Ok(handle) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) {
                     let mut path = [0u16; 260];
-                    let len = GetModuleFileNameExW(handle, None, &mut path) as usize;
+                    let len = GetModuleFileNameExW(Some(handle), None, &mut path) as usize;
                     let _ = CloseHandle(handle);
                     let path_str = String::from_utf16_lossy(if len > 0 { &path[..len] } else { &[] });
                     path_str.rsplit('\\').next().unwrap_or("").to_string()

@@ -25,18 +25,7 @@ impl Default for EnigoInputAdapter {
     }
 }
 
-impl EnigoInputAdapter {
-    /// Send Ctrl+V (paste). More reliable than type_text for editors like Sublime.
-    pub fn send_ctrl_v(&self) -> Result<()> {
-        use enigo::Key as EnigoKey;
-        let mut enigo = self.enigo.lock().unwrap();
-        enigo.key(EnigoKey::Control, Direction::Press).map_err(|e| anyhow::anyhow!("Enigo ctrl: {}", e))?;
-        enigo.key(EnigoKey::Unicode('v'), Direction::Press).map_err(|e| anyhow::anyhow!("Enigo v: {}", e))?;
-        enigo.key(EnigoKey::Unicode('v'), Direction::Release).map_err(|e| anyhow::anyhow!("Enigo v: {}", e))?;
-        enigo.key(EnigoKey::Control, Direction::Release).map_err(|e| anyhow::anyhow!("Enigo ctrl: {}", e))?;
-        Ok(())
-    }
-}
+// send_ctrl_v moved to trait impl below
 
 impl InputPort for EnigoInputAdapter {
     fn type_text(&self, text: &str) -> Result<()> {
@@ -59,6 +48,16 @@ impl InputPort for EnigoInputAdapter {
                 _ => {}
             }
         }
+        Ok(())
+    }
+
+    fn send_ctrl_v(&self) -> Result<()> {
+        use enigo::Key as EnigoKey;
+        let mut enigo = self.enigo.lock().unwrap();
+        enigo.key(EnigoKey::Control, Direction::Press).map_err(|e| anyhow::anyhow!("Enigo ctrl: {}", e))?;
+        enigo.key(EnigoKey::Unicode('v'), Direction::Press).map_err(|e| anyhow::anyhow!("Enigo v: {}", e))?;
+        enigo.key(EnigoKey::Unicode('v'), Direction::Release).map_err(|e| anyhow::anyhow!("Enigo v: {}", e))?;
+        enigo.key(EnigoKey::Control, Direction::Release).map_err(|e| anyhow::anyhow!("Enigo ctrl: {}", e))?;
         Ok(())
     }
 }
