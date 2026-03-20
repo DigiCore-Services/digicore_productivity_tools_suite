@@ -10,7 +10,7 @@ import { Eye, Code, Save, Trash2, Sparkles, ChevronRight, ChevronLeft, FileText,
 import { getTaurpc } from "../../lib/taurpc";
 import { KmsNoteDto, SearchResultDto, KmsLinksDto } from "../../bindings";
 import { Tooltip } from "../ui/tooltip";
-import { cn } from "@/lib/utils";
+import { cn } from "../../lib/utils";
 
 interface KmsEditorProps {
     path: string;

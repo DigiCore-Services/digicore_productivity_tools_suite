@@ -497,10 +497,10 @@ function App() {
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
-    listen("show-variable-input", () => {
-      showVariableInputModal();
+    listen("show-main-window", async () => {
+      await bringMainToForeground();
     }).then((fn) => {
-      unlisten = fn;
+      // Note: intentionally sharing unlisten or ignoring here for toggle
     });
     return () => {
       unlisten?.();

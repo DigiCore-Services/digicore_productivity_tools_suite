@@ -31,7 +31,7 @@ pub fn get_caret_screen_position() -> Option<(i32, i32)> {
                 y: info.rcCaret.bottom,
             },
         ];
-        if MapWindowPoints(info.hwndCaret, None, &mut pts) == 0 {
+        if MapWindowPoints(Some(info.hwndCaret), None, &mut pts) == 0 {
             return get_cursor_fallback();
         }
         Some((pts[0].x, pts[0].y))

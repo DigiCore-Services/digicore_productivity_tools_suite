@@ -32,6 +32,7 @@ static VIEWPORT_MODAL: Mutex<Option<ViewportModalState>> = Mutex::new(None);
 
 /// Set viewport modal state (called when taking pending expansion).
 pub fn set_viewport_modal(state: ViewportModalState) {
+    log::info!("[VariableInput] set_viewport_modal: content_len={}, vars_count={}", state.content.len(), state.vars.len());
     if let Ok(mut g) = VIEWPORT_MODAL.lock() {
         *g = Some(state);
     }
@@ -40,7 +41,9 @@ pub fn set_viewport_modal(state: ViewportModalState) {
 /// Check if viewport modal is active.
 pub fn has_viewport_modal() -> bool {
     if let Ok(g) = VIEWPORT_MODAL.lock() {
-        g.is_some()
+        let active = g.is_some();
+        log::debug!("[VariableInput] has_viewport_modal check: {}", active);
+        active
     } else {
         false
     }
@@ -56,6 +59,7 @@ pub fn get_viewport_modal_display() -> Option<(
 )> {
     if let Ok(g) = VIEWPORT_MODAL.lock() {
         if let Some(ref s) = *g {
+            log::info!("[VariableInput] get_viewport_modal_display: returning state for {}", s.content.len());
             return Some((
                 s.content.clone(),
                 s.vars.clone(),
@@ -63,6 +67,8 @@ pub fn get_viewport_modal_display() -> Option<(
                 s.choice_indices.clone(),
                 s.checkbox_checked.clone(),
             ));
+        } else {
+            log::warn!("[VariableInput] get_viewport_modal_display called but VIEWPORT_MODAL is None");
         }
     }
     None

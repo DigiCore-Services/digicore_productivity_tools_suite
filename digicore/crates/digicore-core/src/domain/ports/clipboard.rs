@@ -12,6 +12,13 @@ pub trait ClipboardPort: Send + Sync {
     /// Write text to clipboard.
     fn set_text(&self, text: &str) -> Result<()>;
 
+    /// Write multiple formats to clipboard simultaneously (e.g. Plain + HTML + RTF).
+    /// This ensures that the expansion preserves formatting in apps that support it.
+    fn set_multi(&self, plain: &str, html: Option<&str>, rtf: Option<&str>) -> Result<()>;
+
+    /// Read multiple formats from clipboard simultaneously (Plain, HTML, RTF).
+    fn get_rich_text(&self) -> Result<(String, Option<String>, Option<String>)>;
+
     /// Check if clipboard contains text.
     fn has_text(&self) -> Result<bool> {
         Ok(!self.get_text()?.is_empty())

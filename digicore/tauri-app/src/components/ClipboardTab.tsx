@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { getTaurpc } from "@/lib/taurpc";
-import { showNativeContextMenu } from "@/lib/nativeContextMenu";
+import { getTaurpc } from "../lib/taurpc";
+import { showNativeContextMenu } from "../lib/nativeContextMenu";
 import { ArrowUpToLine, Check, Copy, Eye, Image as ImageIcon, Search, Trash2 } from "lucide-react";
 import { save } from "@tauri-apps/plugin-dialog";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import type { NativeContextMenuAction } from "@/lib/nativeContextMenu";
+import type { NativeContextMenuAction } from "../lib/nativeContextMenu";
 import type { AppState, ClipEntry } from "../types";
 
 interface ClipboardTabProps {

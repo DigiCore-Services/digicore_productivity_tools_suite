@@ -16,4 +16,5 @@ pub mod scripting;
 pub mod template_processor;
 pub mod variable_input;
 pub mod corpus_generator;
+pub mod trigger_matcher;
 

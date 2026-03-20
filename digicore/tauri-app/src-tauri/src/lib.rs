@@ -15,7 +15,10 @@ mod embedding_service;
 mod indexing_service;
 
 use crate::api::{save_all_on_exit, Api};
+
 use digicore_core::domain::Snippet;
+use digicore_core::adapters::platform::clipboard_windows::WindowsRichClipboardAdapter;
+use digicore_core::domain::ports::ClipboardPort;
 use digicore_text_expander::adapters::storage::JsonFileStorageAdapter;
 use digicore_text_expander::application::app_state::AppState;
 use digicore_text_expander::application::clipboard_history::{self, ClipboardHistoryConfig};
@@ -31,7 +34,7 @@ use digicore_text_expander::drivers::hotstring::{
 use digicore_text_expander::ports::{storage_keys, StoragePort};
 use digicore_text_expander::services::sync_service::SyncResult;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tauri::menu::{Menu, MenuItem};
 use tauri::{Emitter, Listener, Manager};
@@ -49,6 +52,7 @@ pub struct AppStateDto {
     pub sync_url: String,
     pub sync_status: String,
     pub expansion_paused: bool,
+    pub dummy_field_for_regeneration: Option<String>,
     pub template_date_format: String,
     pub template_time_format: String,
     pub discovery_enabled: bool,
@@ -165,6 +169,7 @@ fn app_state_to_dto(state: &AppState) -> AppStateDto {
         sync_url: state.sync_url.clone(),
         sync_status: sync_result_to_string(&state.sync_status),
         expansion_paused: state.expansion_paused,
+        dummy_field_for_regeneration: None,
         template_date_format: state.template_date_format.clone(),
         template_time_format: state.template_time_format.clone(),
         discovery_enabled: state.discovery_enabled,
@@ -585,6 +590,7 @@ pub fn run() {
             excluded_window_titles: parse_comma_list(&app_state.discovery_excluded_window_titles),
         },
     );
+    let clipboard: Arc<dyn ClipboardPort> = Arc::new(WindowsRichClipboardAdapter::new());
     let app_handle: Arc<Mutex<Option<tauri::AppHandle>>> = Arc::new(Mutex::new(None));
     let app_handle_for_setup = app_handle.clone();
 
@@ -866,6 +872,25 @@ pub fn run() {
                             "#,
                             kind: MigrationKind::Up,
                         },
+                        Migration {
+                            version: 11,
+                            description: "snippets_add_trigger_type_and_rich_text",
+                            sql: r#"
+                                ALTER TABLE snippets ADD COLUMN trigger_type TEXT NOT NULL DEFAULT 'suffix';
+                                ALTER TABLE snippets ADD COLUMN html_content TEXT;
+                                ALTER TABLE snippets ADD COLUMN rtf_content TEXT;
+                            "#,
+                            kind: MigrationKind::Up,
+                        },
+                        Migration {
+                            version: 12,
+                            description: "clipboard_history_add_rich_text",
+                            sql: r#"
+                                ALTER TABLE clipboard_history ADD COLUMN html_content TEXT;
+                                ALTER TABLE clipboard_history ADD COLUMN rtf_content TEXT;
+                            "#,
+                            kind: MigrationKind::Up,
+                        },
                     ],
                 )
                 .build(),
@@ -904,42 +929,11 @@ pub fn run() {
                         let _ = app.emit("show-quick-search", ());
                         return;
                     }
-                    if s != "F11" {
-                        return;
-                    }
-                    if variable_input::has_viewport_modal() {
-                        return;
-                    }
-                    if let Some(pending) = variable_input::take_pending_expansion() {
-                        let vars = template_processor::collect_interactive_vars(&pending.content);
-                        if vars.is_empty() {
-                            return;
-                        }
-                        let mut values = HashMap::new();
-                        let mut choice_indices = HashMap::new();
-                        let mut checkbox_checked = HashMap::new();
-                        for v in &vars {
-                            values.insert(v.tag.clone(), String::new());
-                            if matches!(v.var_type, InteractiveVarType::Choice)
-                                && !v.options.is_empty()
-                            {
-                                choice_indices.insert(v.tag.clone(), 0);
-                                values.insert(v.tag.clone(), v.options[0].clone());
-                            }
-                            if matches!(v.var_type, InteractiveVarType::Checkbox) {
-                                checkbox_checked.insert(v.tag.clone(), false);
-                            }
-                        }
-                        variable_input::set_viewport_modal(variable_input::ViewportModalState {
-                            content: pending.content,
-                            vars,
-                            values,
-                            choice_indices,
-                            checkbox_checked,
-                            target_hwnd: pending.target_hwnd,
-                            response_tx: pending.response_tx,
-                        });
-                        let _ = app.emit("show-variable-input", ());
+                    if s == "F11" {
+                         // F11 now just brings window to front if not visible, 
+                         // or we can just leave it as manual override if needed.
+                         // But for auto-popup, we don't need logic here.
+                         let _ = app.emit("show-main-window", ());
                     }
                 })
                 .build(),
@@ -981,6 +975,7 @@ pub fn run() {
                 // T+1s: Database and Script Libraries
                 tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                 log::info!("[Startup] Initializing repositories and scripts");
+                spawn_variable_input_poller(handle_for_init.clone());
                 load_and_apply_script_libraries();
                 let db_path = clipboard_repository::default_db_path();
                 if let Err(e) = clipboard_repository::init(db_path.clone()) {
@@ -1143,8 +1138,8 @@ pub fn run() {
                     )
                     .title("Ghost Suggestor")
                     .inner_size(320.0, 260.0)
-                    .decorations(true)
-                    .transparent(false)
+                    .decorations(false)
+                    .transparent(true)
                     .always_on_top(true)
                     .visible(false)
                     .build()?;
@@ -1212,6 +1207,26 @@ pub fn run() {
                         }
                         let _ = handle_quick.emit("quick-search-refresh", ());
                     });
+
+                    let variable_input = tauri::WebviewWindowBuilder::new(
+                        &handle_for_ghost,
+                        "variable-input",
+                         WebviewUrl::App("variable-input.html".into()),
+                    )
+                    .title("Snippet Input Required")
+                    .inner_size(460.0, 520.0)
+                    .decorations(false)
+                    .transparent(true)
+                    .always_on_top(true)
+                    .shadow(true)
+                    .visible(false)
+                    .build()?;
+
+                    let _ = variable_input.set_resizable(false);
+                    let _ = variable_input.set_maximizable(false);
+                    let _ = variable_input.set_minimizable(false);
+                    let _ = variable_input.hide();
+                    log::info!("[VariableInput] window created from Rust");
 
                     Ok(())
                 })();
@@ -1288,6 +1303,7 @@ pub fn run() {
             api::ApiImpl {
                 state: app_state,
                 app_handle,
+                clipboard: clipboard.clone(),
             }
             .into_handler(),
         ))
@@ -1729,6 +1745,8 @@ pub struct DiagnosticEntryDto {
     pub message: String,
 }
 
+
+
 /// Clipboard entry DTO (Instant not serializable).
 #[taurpc::ipc_type]
 pub struct ClipEntryDto {
@@ -1748,4 +1766,52 @@ pub struct ClipEntryDto {
     pub image_bytes: Option<u32>,
     pub parent_id: Option<u32>,
     pub metadata: Option<String>,
+}
+fn spawn_variable_input_poller(app: tauri::AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            if variable_input::has_viewport_modal() {
+                continue;
+            }
+            if let Some(pending) = variable_input::take_pending_expansion() {
+                let vars = template_processor::collect_interactive_vars(&pending.content);
+                if vars.is_empty() {
+                    continue;
+                }
+                let mut values = HashMap::new();
+                let mut choice_indices = HashMap::new();
+                let mut checkbox_checked = HashMap::new();
+                for v in &vars {
+                    values.insert(v.tag.clone(), String::new());
+                    if matches!(v.var_type, InteractiveVarType::Choice)
+                        && !v.options.is_empty()
+                    {
+                        choice_indices.insert(v.tag.clone(), 0);
+                        values.insert(v.tag.clone(), v.options[0].clone());
+                    }
+                    if matches!(v.var_type, InteractiveVarType::Checkbox) {
+                        checkbox_checked.insert(v.tag.clone(), false);
+                    }
+                }
+                variable_input::set_viewport_modal(variable_input::ViewportModalState {
+                    content: pending.content,
+                    vars,
+                    values,
+                    choice_indices,
+                    checkbox_checked,
+                    target_hwnd: pending.target_hwnd,
+                    response_tx: pending.response_tx,
+                });
+                if let Some(win) = app.get_webview_window("variable-input") {
+                    let _ = win.show();
+                    let _ = win.unminimize();
+                    let _ = win.set_focus();
+                    let _ = win.set_always_on_top(true);
+                    let _ = win.center();
+                }
+                let _ = app.emit("variable-input-refresh", ());
+            }
+        }
+    });
 }

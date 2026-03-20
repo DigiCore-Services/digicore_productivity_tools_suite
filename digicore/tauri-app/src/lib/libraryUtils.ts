@@ -38,6 +38,8 @@ export interface SnippetLike {
   category?: string;
   app_lock?: string;
   options?: string;
+  htmlContent?: string | null;
+  rtfContent?: string | null;
 }
 
 /**

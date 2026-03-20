@@ -1,4 +1,4 @@
-import { useToast, Toast } from "@/components/ui/use-toast"
+import { useToast, Toast } from "./use-toast"
 import { motion, AnimatePresence } from "framer-motion"
 import { X, CheckCircle, AlertCircle } from "lucide-react"
 

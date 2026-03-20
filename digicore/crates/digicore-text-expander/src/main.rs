@@ -19,7 +19,7 @@ use digicore_text_expander::adapters::{EframeStorageAdapter, EguiWindowAdapter, 
 pub use digicore_text_expander::application::app_state::{AppState, ClipViewContent, SnippetEditorMode, SnippetTestVarState, Tab};
 use digicore_text_expander::ports::{storage_keys, FileDialogPort, TimerPort, ViewportCommand, WindowLevel, WindowPort, StoragePort};
 use digicore_core::domain::ports::WindowContextPort;
-use digicore_core::domain::{LastModified, Snippet};
+use digicore_core::domain::{LastModified, Snippet, TriggerType};
 use digicore_text_expander::application::discovery;
 #[cfg(target_os = "windows")]
 use digicore_text_expander::platform::windows_caret;
@@ -872,6 +872,9 @@ impl TextExpanderApp {
                 let snip = Snippet {
                     trigger: trigger.clone(),
                     content,
+                    trigger_type: if self.snippet_editor_trigger_type == "regex" { TriggerType::Regex } else { TriggerType::Suffix },
+                    html_content: self.snippet_editor_html_content.clone(),
+                    rtf_content: self.snippet_editor_rtf_content.clone(),
                     options: self.snippet_editor_options.trim().to_string(),
                     category: cat.clone(),
                     profile,
@@ -1211,12 +1214,18 @@ impl TextExpanderApp {
         Some(Snippet {
             trigger,
             content: row.get(1).cloned().unwrap_or_default(),
-            options: row.get(2).cloned().unwrap_or_default(),
-            category: row.get(3).cloned().unwrap_or_default(),
-            profile: row.get(4).cloned().unwrap_or_else(|| "Default".to_string()),
-            app_lock: row.get(5).cloned().unwrap_or_default(),
-            pinned: row.get(6).cloned().unwrap_or_else(|| "false".to_string()),
-            last_modified: row.get(7).cloned().unwrap_or_default(),
+            trigger_type: match row.get(2).map(|s| s.as_str()) {
+                Some("regex") => TriggerType::Regex,
+                _ => TriggerType::Suffix,
+            },
+            html_content: row.get(3).cloned(),
+            rtf_content: row.get(4).cloned(),
+            options: row.get(5).cloned().unwrap_or_default(),
+            category: row.get(6).cloned().unwrap_or_default(),
+            profile: row.get(7).cloned().unwrap_or_else(|| "Default".to_string()),
+            app_lock: row.get(8).cloned().unwrap_or_default(),
+            pinned: row.get(9).cloned().unwrap_or_else(|| "false".to_string()),
+            last_modified: row.get(10).cloned().unwrap_or_default(),
         })
     }
 

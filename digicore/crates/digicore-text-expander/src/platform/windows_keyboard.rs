@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
@@ -42,9 +42,9 @@ pub fn is_listener_running() -> bool {
 fn run_hook(callback: Arc<std::sync::Mutex<KeyCallback>>) -> anyhow::Result<()> {
     unsafe {
         let hook = SetWindowsHookExW(
-            WINDOWS_HOOK_ID(WH_KEYBOARD_LL.0),
+            WH_KEYBOARD_LL,
             Some(hook_proc),
-            GetModuleHandleW(None)?,
+            Some(GetModuleHandleW(None)?.into()),
             0,
         )
         .map_err(|e| anyhow::anyhow!("SetWindowsHookExW: {:?}", e))?;
@@ -60,7 +60,7 @@ fn run_hook(callback: Arc<std::sync::Mutex<KeyCallback>>) -> anyhow::Result<()> 
         // Message loop - PeekMessage + Sleep (GetMessage can block forever in worker threads)
         let mut msg = MSG::default();
         loop {
-            while PeekMessageW(&mut msg, HWND::default(), 0, 0, PM_REMOVE).as_bool() {
+            while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
                 if msg.message == WM_QUIT {
                     UnhookWindowsHookEx(hook)?;
                     HOOK_DATA.with(|cell| *cell.borrow_mut() = None);
@@ -89,18 +89,18 @@ unsafe extern "system" fn hook_proc(code: c_int, wparam: WPARAM, lparam: LPARAM)
 
     const HC_ACTION: c_int = 0;
     if code != HC_ACTION {
-        return CallNextHookEx(hhook, code, wparam, lparam);
+        return CallNextHookEx(Some(hhook), code, wparam, lparam);
     }
 
     const WM_KEYDOWN: usize = 0x0100;
     const WM_SYSKEYDOWN: usize = 0x0104;
     let wparam_val = wparam.0;
     if wparam_val != WM_KEYDOWN && wparam_val != WM_SYSKEYDOWN {
-        return CallNextHookEx(hhook, code, wparam, lparam);
+        return CallNextHookEx(Some(hhook), code, wparam, lparam);
     }
 
     if lparam.0 == 0 {
-        return CallNextHookEx(hhook, code, wparam, lparam);
+        return CallNextHookEx(Some(hhook), code, wparam, lparam);
     }
     let kb = &*(lparam.0 as *const KBDLLHOOKSTRUCT);
     let vk_code = kb.vkCode as u16;
@@ -120,7 +120,7 @@ unsafe extern "system" fn hook_proc(code: c_int, wparam: WPARAM, lparam: LPARAM)
     if consume {
         return LRESULT(1);
     }
-    CallNextHookEx(hhook, code, wparam, lparam)
+    CallNextHookEx(Some(hhook), code, wparam, lparam)
 }
 
 const VK_SHIFT: u16 = 0x10;
@@ -166,7 +166,7 @@ unsafe fn get_char_from_vk(vk_code: u16, scan_code: u16, _lparam: LPARAM) -> Opt
         &state,
         &mut buf,
         0,
-        layout,
+        Some(layout),
     );
 
     match len {

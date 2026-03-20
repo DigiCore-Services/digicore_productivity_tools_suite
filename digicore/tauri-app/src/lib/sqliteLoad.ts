@@ -7,7 +7,10 @@ import Database from "@tauri-apps/plugin-sql";
 export interface SnippetRow {
   category: string;
   trigger: string;
+  trigger_type: 'suffix' | 'regex';
   content: string;
+  html_content: string | null;
+  rtf_content: string | null;
   options: string;
   profile: string;
   app_lock: string;
@@ -53,7 +56,7 @@ export async function loadSnippetsPage(
     const limitOffset = searchPattern ? `LIMIT $2 OFFSET $3` : `LIMIT $1 OFFSET $2`;
 
     const sql = `
-      SELECT c.name as category, s.trigger, s.content, s.options, s.profile, s.app_lock, s.pinned, s.last_modified
+      SELECT c.name as category, s.trigger, s.trigger_type, s.content, s.html_content, s.rtf_content, s.options, s.profile, s.app_lock, s.pinned, s.last_modified
       FROM snippets s
       JOIN categories c ON s.category_id = c.id
       ${selectWhere}

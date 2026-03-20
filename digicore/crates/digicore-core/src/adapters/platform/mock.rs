@@ -31,12 +31,19 @@ impl InputPort for MockInputAdapter {
         self.keys_pressed.lock().unwrap().extend(keys.to_vec());
         Ok(())
     }
+
+    fn send_ctrl_v(&self) -> Result<()> {
+        // We could record this as a special key or just return Ok
+        Ok(())
+    }
 }
 
 /// Mock clipboard adapter - in-memory store for tests.
 #[derive(Debug, Default)]
 pub struct MockClipboardAdapter {
     content: Mutex<String>,
+    html: Mutex<Option<String>>,
+    rtf: Mutex<Option<String>>,
 }
 
 impl MockClipboardAdapter {
@@ -47,6 +54,8 @@ impl MockClipboardAdapter {
     pub fn with_content(s: &str) -> Self {
         Self {
             content: Mutex::new(s.to_string()),
+            html: Mutex::new(None),
+            rtf: Mutex::new(None),
         }
     }
 }
@@ -59,6 +68,21 @@ impl ClipboardPort for MockClipboardAdapter {
     fn set_text(&self, text: &str) -> Result<()> {
         *self.content.lock().unwrap() = text.to_string();
         Ok(())
+    }
+
+    fn set_multi(&self, plain: &str, html: Option<&str>, rtf: Option<&str>) -> Result<()> {
+        *self.content.lock().unwrap() = plain.to_string();
+        *self.html.lock().unwrap() = html.map(|s| s.to_string());
+        *self.rtf.lock().unwrap() = rtf.map(|s| s.to_string());
+        Ok(())
+    }
+
+    fn get_rich_text(&self) -> Result<(String, Option<String>, Option<String>)> {
+        Ok((
+            self.content.lock().unwrap().clone(),
+            self.html.lock().unwrap().clone(),
+            self.rtf.lock().unwrap().clone(),
+        ))
     }
 }
 

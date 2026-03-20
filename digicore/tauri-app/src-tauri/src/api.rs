@@ -1,4 +1,6 @@
 //! TauRPC API - type-safe IPC procedures for DigiCore Text Expander.
+// Triggering bindings regeneration.
+
 
 use crate::{
     clipboard_repository,
@@ -14,6 +16,7 @@ use crate::{
     ScriptingSignerRegistryDto, CopyToClipboardConfigDto, CopyToClipboardStatsDto,
     ScriptingPyConfigDto, SettingsBundlePreviewDto, SettingsImportResultDto, SnippetLogicTestResultDto,
     UiPrefsDto,
+
 };
 use digicore_core::domain::Snippet;
 use digicore_text_expander::adapters::storage::JsonFileStorageAdapter;
@@ -1272,11 +1275,27 @@ pub fn save_all_on_exit(state: &Arc<Mutex<AppState>>) {
     }
 }
 
+#[taurpc::ipc_type]
+pub struct RichTextDto {
+
+
+    pub plain: String,
+    pub html: Option<String>,
+    pub rtf: Option<String>,
+}
+
 // Export to frontend src/ (outside src-tauri) to avoid watcher rebuild loop
-#[taurpc::procedures(export_to = "../src/bindings.ts")]
+
+#[taurpc::procedures]
+
+
 pub trait Api {
+
     async fn greet(name: String) -> String;
+
+
     async fn get_app_state() -> Result<crate::AppStateDto, String>;
+
     async fn load_library() -> Result<u32, String>;
     async fn save_library() -> Result<(), String>;
     async fn set_library_path(path: String) -> Result<(), String>;
@@ -1300,6 +1319,7 @@ pub trait Api {
     async fn delete_clip_entry(index: u32) -> Result<(), String>;
     async fn delete_clip_entry_by_id(id: u32) -> Result<(), String>;
     async fn clear_clipboard_history() -> Result<(), String>;
+    async fn get_clipboard_rich_text() -> Result<RichTextDto, String>;
     async fn get_image_gallery(
         search: Option<String>,
         page: u32,
@@ -1491,6 +1511,7 @@ pub struct KmsIndexStatusRow {
 pub struct ApiImpl {
     pub state: Arc<Mutex<digicore_text_expander::application::app_state::AppState>>,
     pub app_handle: Arc<Mutex<Option<AppHandle>>>,
+    pub clipboard: Arc<dyn digicore_core::domain::ports::ClipboardPort>,
 }
 
 impl ApiImpl {
@@ -1749,11 +1770,14 @@ fn open_file_in_default_app(path: &str) -> Result<(), String> {
 
 #[taurpc::resolvers]
 impl Api for ApiImpl {
+
     async fn greet(self, name: String) -> String {
+
         format!("Hello, {}! DigiCore Text Expander backend ready.", name)
     }
 
     async fn get_app_state(self) -> Result<crate::AppStateDto, String> {
+
         let guard = self.state.lock().map_err(|e| e.to_string())?;
         Ok(app_state_to_dto(&guard))
     }
@@ -2219,6 +2243,11 @@ impl Api for ApiImpl {
         Ok(())
     }
 
+    async fn get_clipboard_rich_text(self) -> Result<RichTextDto, String> {
+        let (plain, html, rtf) = self.clipboard.get_rich_text().map_err(|e| e.to_string())?;
+        Ok(RichTextDto { plain, html, rtf })
+    }
+
     async fn get_image_gallery(
         self,
         search: Option<String>,
@@ -2356,11 +2385,8 @@ impl Api for ApiImpl {
     }
 
     async fn copy_to_clipboard(self, text: String) -> Result<(), String> {
-        arboard::Clipboard::new()
-            .map_err(|e| e.to_string())?
-            .set_text(&text)
-            .map_err(|e| e.to_string())?;
-        diag_log("info", "[Clipboard][copy] copied text to system clipboard");
+        self.clipboard.set_text(&text).map_err(|e| e.to_string())?;
+        diag_log("info", "[Clipboard][copy] copied text to system clipboard via adapter");
         Ok(())
     }
 
@@ -4377,9 +4403,10 @@ end
     }
 
     async fn get_pending_variable_input(self) -> Result<Option<PendingVarDto>, String> {
-        if let Some((content, vars, values, choice_indices, checkbox_checked)) =
-            variable_input::get_viewport_modal_display()
-        {
+        let display = variable_input::get_viewport_modal_display();
+        log::info!("[Api] get_pending_variable_input: has_display={}", display.is_some());
+        if let Some((content, vars, values, choice_indices, checkbox_checked)) = display {
+            log::info!("[Api] get_pending_variable_input: content_len={}, vars_count={}", content.len(), vars.len());
             Ok(Some(PendingVarDto {
                 content,
                 vars: vars

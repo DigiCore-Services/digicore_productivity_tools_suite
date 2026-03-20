@@ -6,7 +6,8 @@
 #![cfg(target_os = "windows")]
 
 use std::mem;
-use windows::Win32::Foundation::{BOOL, LPARAM, POINT, RECT};
+use windows::Win32::Foundation::{LPARAM, POINT, RECT};
+use windows::core::BOOL;
 use windows::Win32::Graphics::Gdi::{
     EnumDisplayMonitors, GetMonitorInfoW, MonitorFromPoint, HMONITOR, MONITORINFO,
     MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTOPRIMARY,

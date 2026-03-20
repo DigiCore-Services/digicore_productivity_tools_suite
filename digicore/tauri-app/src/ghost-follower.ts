@@ -95,7 +95,7 @@ const api = getTaurpc();
 /** Capture target window when mouse enters and we don't have focus (user moving from Sublime/Outlook). */
 function onPointerEnter() {
   if (!document.hasFocus()) {
-    api.ghost_follower_capture_target_window().catch(() => {});
+    api.ghost_follower_capture_target_window().catch(() => { });
   }
 }
 
@@ -108,7 +108,7 @@ function updateHoverKeepAlive() {
     !collapsed && (isPointerOverFollower || isPointerOverContextMenu);
   if (shouldKeepAlive && !hoverKeepAliveInterval) {
     hoverKeepAliveInterval = setInterval(() => {
-      api.ghost_follower_touch().catch(() => {});
+      api.ghost_follower_touch().catch(() => { });
     }, 500);
     return;
   }
@@ -152,7 +152,7 @@ async function setCollapsed(c: boolean) {
 
 async function expand() {
   if (collapsed) {
-    api.ghost_follower_touch().catch(() => {});
+    api.ghost_follower_touch().catch(() => { });
     await setCollapsed(false);
   }
 }
@@ -319,7 +319,7 @@ function render(state: { enabled?: boolean; pinned?: typeof pinnedItems; clip_hi
           },
         },
         promoted
-          ? { icon: "✓", text: "Promoted", disabled: true, onClick: () => {} }
+          ? { icon: "✓", text: "Promoted", disabled: true, onClick: () => { } }
           : { icon: "⬆", text: "Promote to Snippet", onClick: () => api.ghost_follower_request_promote(c.content, trigger) },
         { icon: "⧉", text: "Copy to Clipboard", onClick: () => api.copy_to_clipboard(c.content) },
         {
@@ -379,11 +379,6 @@ async function refresh() {
       if (SMOKE_TEST_CENTER) {
         await w.center();
         await w.show();
-        try {
-          await w.setFocus();
-        } catch {
-          /* ignore */
-        }
       } else {
         let positioned = false;
         if (positioner && state?.enabled && (state as { monitor_primary?: boolean }).monitor_primary) {
@@ -421,11 +416,6 @@ async function refresh() {
         }
         if (state?.enabled) {
           await w.show();
-          try {
-            await w.setFocus();
-          } catch {
-            /* ignore */
-          }
         } else if (state && !state.enabled) {
           await w.hide();
         }
@@ -458,7 +448,7 @@ async function init() {
   applyTheme(resolveTheme(pref));
   listen<{ theme: "dark" | "light" }>("digicore-theme-changed", (e) => {
     applyTheme(e.payload.theme);
-  }).catch(() => {});
+  }).catch(() => { });
 
   const pill = document.getElementById("pill-container");
   const pillWrapper = document.getElementById("pill-wrapper");
@@ -473,7 +463,7 @@ async function init() {
   if (pill) {
     pill.style.display = collapsed ? "flex" : "none";
     pill.addEventListener("mouseenter", () => {
-      api.ghost_follower_touch().catch(() => {});
+      api.ghost_follower_touch().catch(() => { });
       expand();
     });
   }
@@ -513,7 +503,7 @@ async function init() {
     ribbon.classList.toggle("expanded", !collapsed);
     ribbon.addEventListener("mouseenter", () => {
       isPointerOverFollower = true;
-      api.ghost_follower_touch().catch(() => {});
+      api.ghost_follower_touch().catch(() => { });
       updateHoverKeepAlive();
     });
     ribbon.addEventListener("mouseleave", () => {
@@ -539,11 +529,11 @@ async function init() {
       lastSearch = "";
       refresh();
     });
-    searchInput.addEventListener("focus", () => api.ghost_follower_touch().catch(() => {}));
+    searchInput.addEventListener("focus", () => api.ghost_follower_touch().catch(() => { }));
   }
 
-  document.getElementById("pinned-list")?.addEventListener("scroll", () => api.ghost_follower_touch().catch(() => {}));
-  document.getElementById("clip-list")?.addEventListener("scroll", () => api.ghost_follower_touch().catch(() => {}));
+  document.getElementById("pinned-list")?.addEventListener("scroll", () => api.ghost_follower_touch().catch(() => { }));
+  document.getElementById("clip-list")?.addEventListener("scroll", () => api.ghost_follower_touch().catch(() => { }));
   document.getElementById("ctx-menu")?.addEventListener("mouseenter", () => {
     isPointerOverContextMenu = true;
     updateHoverKeepAlive();
@@ -561,7 +551,7 @@ async function init() {
     w.onMoved(({ payload }) => {
       const x = Math.round(payload.x);
       const y = Math.round(payload.y);
-      api.ghost_follower_save_position(x, y).catch(() => {});
+      api.ghost_follower_save_position(x, y).catch(() => { });
     }).catch(() => { /* ignore */ });
   }
 

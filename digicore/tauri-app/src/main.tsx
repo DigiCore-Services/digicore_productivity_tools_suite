@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import App from "./App";
 import KmsApp from "./KmsApp";
+import VariableInputWindow from "./VariableInputWindow";
 import "./index.css";
 
 const Entry = () => {
@@ -20,6 +21,10 @@ const Entry = () => {
 
   if (label === "kms") {
     return <KmsApp />;
+  }
+
+  if (label === "variable-input") {
+    return <VariableInputWindow />;
   }
 
   return <App />;

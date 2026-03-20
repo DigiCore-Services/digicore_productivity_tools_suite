@@ -2,6 +2,7 @@ use crate::kms_repository;
 use serde::Serialize;
 
 #[derive(Debug, Serialize, Clone, Copy)]
+#[allow(dead_code)]
 pub enum LogLevel {
     Info,
     Warn,
@@ -42,6 +43,7 @@ impl KmsDiagnosticService {
         Self::log(LogLevel::Info, message, details);
     }
 
+    #[allow(dead_code)]
     pub fn warn(message: &str, details: Option<String>) {
         Self::log(LogLevel::Warn, message, details);
     }

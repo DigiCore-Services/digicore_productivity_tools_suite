@@ -1,7 +1,7 @@
 use thiserror::Error;
-use std::path::PathBuf;
 
 #[derive(Error, Debug)]
+#[allow(dead_code)]
 pub enum KmsError {
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),

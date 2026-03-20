@@ -84,11 +84,25 @@ where
     }
 
     /// Perform expansion: delete trigger (backspaces) and type content.
-    /// Caller is responsible for deleting the trigger; we only type the expansion.
+    /// Caller is responsible for deleting the trigger; we only type/paste the expansion.
     pub fn expand(&self, snippet: &Snippet) -> anyhow::Result<()> {
         if Self::is_paused() {
             return Ok(());
         }
+        
+        if snippet.html_content.is_some() || snippet.rtf_content.is_some() {
+            // Rich text expansion via clipboard swap
+            let saved = self._clipboard.get_text().ok();
+            if self._clipboard.set_multi(&snippet.content, snippet.html_content.as_deref(), snippet.rtf_content.as_deref()).is_ok() {
+                if self.input.send_ctrl_v().is_ok() {
+                    let _ = saved.as_ref().map(|s| self._clipboard.set_text(s));
+                    return Ok(());
+                }
+                // Fallback to typing plain text if Ctrl+V fails
+                let _ = saved.as_ref().map(|s| self._clipboard.set_text(s));
+            }
+        }
+
         self.input.type_text(&snippet.content)
     }
 

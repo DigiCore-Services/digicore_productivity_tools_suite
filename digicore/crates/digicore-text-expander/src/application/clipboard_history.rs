@@ -11,6 +11,8 @@ use std::time::{Duration, Instant};
 #[derive(Clone, Debug)]
 pub struct ClipEntry {
     pub content: String,
+    pub html_content: Option<String>,
+    pub rtf_content: Option<String>,
     pub process_name: String,
     pub window_title: String,
     pub timestamp: Instant,
@@ -75,6 +77,8 @@ pub fn start(config: ClipboardHistoryConfig) {
                             let len = text.len();
                             entries.push(ClipEntry {
                                 content: text.clone(),
+                                html_content: None,
+                                rtf_content: None,
                                 process_name: String::new(),
                                 window_title: String::new(),
                                 timestamp: Instant::now(),
@@ -162,9 +166,10 @@ fn run_poll_loop(state: Arc<Mutex<ClipboardHistoryState>>) {
                     Err(_) => break,
                 };
                 if guard.config.enabled {
-                    if guard.last_content.as_ref() != Some(&text) {
+                    if !is_fuzzy_duplicate(guard.last_content.as_deref().unwrap_or(""), &text) {
                         guard.last_content = Some(text.clone());
-                        add_entry_inner(&mut guard, text, String::new(), String::new());
+                        let (html, rtf) = get_rich_formats();
+                        add_entry_inner(&mut guard, text, html, rtf, String::new(), String::new());
                     }
                 }
             }
@@ -176,16 +181,24 @@ fn run_poll_loop(state: Arc<Mutex<ClipboardHistoryState>>) {
 fn add_entry_inner(
     state: &mut ClipboardHistoryState,
     content: String,
+    html_content: Option<String>,
+    rtf_content: Option<String>,
     process_name: String,
     window_title: String,
 ) {
-    if content != "[Image]" && state.entries.first().map(|e| e.content.as_str()) == Some(content.as_str()) {
-        return;
+    // Fuzzy deduplication check against the most recent entry
+    if let Some(first) = state.entries.first() {
+        if is_fuzzy_duplicate(&first.content, &content) {
+            return;
+        }
     }
+
     state.entries.insert(
         0,
         ClipEntry {
             content: content.clone(),
+            html_content,
+            rtf_content,
             process_name,
             window_title,
             timestamp: Instant::now(),
@@ -222,11 +235,87 @@ pub fn add_entry(content: String, process_name: &str, window_title: &str) {
         Ok(s) => s,
         Err(_) => return,
     };
-    if content != "[Image]" && s.last_content.as_ref() == Some(&content) {
-        return;
+    if !is_fuzzy_duplicate(s.last_content.as_deref().unwrap_or(""), &content) {
+        s.last_content = Some(content.clone());
+        let (html, rtf) = get_rich_formats();
+        add_entry_inner(&mut s, content, html, rtf, process_name.to_string(), window_title.to_string());
     }
-    s.last_content = Some(content.clone());
-    add_entry_inner(&mut s, content, process_name.to_string(), window_title.to_string());
+}
+
+fn is_fuzzy_duplicate(a: &str, b: &str) -> bool {
+    if a == "[Image]" || b == "[Image]" { return false; }
+    if a == b { return true; }
+    if a.is_empty() || b.is_empty() { return false; }
+    
+    // Quick check: if lengths are wildly different, not a fuzzy duplicate
+    let len_a = a.len();
+    let len_b = b.len();
+    let max_len = len_a.max(len_b);
+    let diff = (len_a as isize - len_b as isize).abs();
+    
+    if diff > (max_len as f32 * 0.1) as isize {
+        return false;
+    }
+
+    let dist = strsim::levenshtein(a, b);
+    let similarity = 1.0 - (dist as f32 / max_len as f32);
+    similarity > 0.92 // 92% similarity threshold
+}
+
+#[cfg(target_os = "windows")]
+fn get_rich_formats() -> (Option<String>, Option<String>) {
+    use windows::Win32::System::DataExchange::{OpenClipboard, CloseClipboard, GetClipboardData, RegisterClipboardFormatW};
+    use windows::Win32::System::Memory::{GlobalLock, GlobalUnlock};
+    use windows::Win32::Foundation::HGLOBAL;
+    use windows::core::PCWSTR;
+
+    unsafe {
+        if OpenClipboard(None).is_err() {
+            return (None, None);
+        }
+        
+        let html_name: Vec<u16> = "HTML Format\0".encode_utf16().collect();
+        let format_html = RegisterClipboardFormatW(PCWSTR(html_name.as_ptr()));
+        
+        let rtf_name: Vec<u16> = "Rich Text Format\0".encode_utf16().collect();
+        let format_rtf = RegisterClipboardFormatW(PCWSTR(rtf_name.as_ptr()));
+        
+        let mut html = None;
+        let mut rtf = None;
+        
+        if format_html != 0 {
+            if let Ok(h) = GetClipboardData(format_html) {
+                let h_glob = HGLOBAL(h.0);
+                let ptr = GlobalLock(h_glob);
+                if !ptr.is_null() {
+                    // C-style string reading (HTML Format is UTF-8)
+                    let bytes = std::ffi::CStr::from_ptr(ptr as *const i8).to_bytes();
+                    html = Some(String::from_utf8_lossy(bytes).into_owned());
+                    let _ = GlobalUnlock(h_glob);
+                }
+            }
+        }
+        
+        if format_rtf != 0 {
+            if let Ok(h) = GetClipboardData(format_rtf) {
+                let h_glob = HGLOBAL(h.0);
+                let ptr = GlobalLock(h_glob);
+                if !ptr.is_null() {
+                    let bytes = std::ffi::CStr::from_ptr(ptr as *const i8).to_bytes();
+                    rtf = Some(String::from_utf8_lossy(bytes).into_owned());
+                    let _ = GlobalUnlock(h_glob);
+                }
+            }
+        }
+        
+        let _ = CloseClipboard();
+        (html, rtf)
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn get_rich_formats() -> (Option<String>, Option<String>) {
+    (None, None)
 }
 
 /// Get clipboard history entries (most recent first).

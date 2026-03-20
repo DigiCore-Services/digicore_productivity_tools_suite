@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Button } from "@/components/ui/button";
+import { Button } from "../ui/button";
 import { ArrowUpToLine, Copy, Pencil, Pin, PinOff, Trash2 } from "lucide-react";
 
 interface ViewFullProps {

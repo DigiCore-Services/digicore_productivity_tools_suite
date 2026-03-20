@@ -11,6 +11,9 @@ pub trait InputPort: Send + Sync {
 
     /// Send a key press (for hotkeys, Tab, etc.).
     fn key_sequence(&self, keys: &[Key]) -> Result<()>;
+
+    /// Send Ctrl+V (paste).
+    fn send_ctrl_v(&self) -> Result<()>;
 }
 
 /// Key representation for cross-platform key events.

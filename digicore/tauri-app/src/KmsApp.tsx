@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, lazy, Suspense } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getTaurpc } from "./lib/taurpc";
 import { resolveTheme } from "./lib/theme";
@@ -10,7 +10,9 @@ import KmsEditor from "./components/kms/KmsEditor";
 import KmsLogViewer from "./components/kms/KmsLogViewer";
 import VaultSettingsModal from "./components/modals/VaultSettingsModal";
 import { ViewFull } from "./components/modals/ViewFull";
-import { ImageViewerModal } from "./components/modals/ImageViewerModal";
+const ImageViewerModal = lazy(() =>
+  import("./components/modals/ImageViewerModal").then((m) => ({ default: m.ImageViewerModal }))
+);
 import FileExplorer from "./components/kms/FileExplorer";
 import { KmsNoteDto, KmsFileSystemItemDto, KmsLogDto } from "./bindings";
 import { ClipEntry } from "./types";
@@ -893,16 +895,18 @@ export default function KmsApp() {
                     }
                 } : undefined}
             />
-            <ImageViewerModal
-                isOpen={imageViewerVisible}
-                onClose={() => setImageViewerVisible(false)}
-                currentImage={imageViewerCurrent}
-                allImages={imageViewerContext}
-                onNavigate={(img) => setImageViewerCurrent(img)}
-                onDeleteSuccess={() => {
-                    // Update search results if needed
-                }}
-            />
+            <Suspense fallback={null}>
+                <ImageViewerModal
+                    isOpen={imageViewerVisible}
+                    onClose={() => setImageViewerVisible(false)}
+                    currentImage={imageViewerCurrent}
+                    allImages={imageViewerContext}
+                    onNavigate={(img) => setImageViewerCurrent(img)}
+                    onDeleteSuccess={() => {
+                        // Update search results if needed
+                    }}
+                />
+            </Suspense>
         </div >
     );
 }

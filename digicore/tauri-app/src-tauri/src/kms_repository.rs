@@ -601,6 +601,7 @@ pub fn upsert_unified_fts(
     Ok(())
 }
 
+#[allow(dead_code)]
 pub fn delete_unified_fts(entity_type: &str, entity_id: &str) -> Result<(), String> {
     let conn = conn_guard()?;
     conn.execute(
@@ -676,6 +677,7 @@ pub fn delete_all_embeddings_for_type(entity_type: &str) -> Result<(), String> {
 }
 
 /// Bulk deletes embeddings for a list of entity IDs.
+#[allow(dead_code)]
 pub fn delete_embeddings_for_ids(entity_type: &str, entity_ids: &[String]) -> Result<(), String> {
     if entity_ids.is_empty() {
         return Ok(());
