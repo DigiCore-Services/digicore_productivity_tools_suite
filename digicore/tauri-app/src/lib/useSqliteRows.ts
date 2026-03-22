@@ -23,6 +23,10 @@ function rowToSnippet(r: SnippetRow): Snippet {
     profile: r.profile,
     appLock: r.app_lock,
     pinned: r.pinned,
+    case_adaptive: r.case_adaptive === 1 || r.case_adaptive === true,
+    case_sensitive: r.case_sensitive === 1 || r.case_sensitive === true,
+    smart_suffix: r.smart_suffix === 1 || r.smart_suffix === true,
+    is_sensitive: r.is_sensitive === 1 || r.is_sensitive === true,
     lastModified: r.last_modified,
   };
 }

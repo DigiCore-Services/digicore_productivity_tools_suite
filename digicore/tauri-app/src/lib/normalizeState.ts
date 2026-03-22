@@ -21,6 +21,10 @@ export function normalizeAppState(dto: AppStateDto): AppState {
         profile: s.profile ?? 'Default',
         appLock: s.appLock ?? '',
         pinned: s.pinned ?? 'false',
+        case_adaptive: s.case_adaptive ?? true,
+        case_sensitive: s.case_sensitive ?? false,
+        smart_suffix: s.smart_suffix ?? true,
+        is_sensitive: s.is_sensitive ?? false,
         lastModified: s.lastModified ?? '',
       }));
     }

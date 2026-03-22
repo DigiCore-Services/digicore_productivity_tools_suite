@@ -147,6 +147,10 @@ export type Snippet = {
     profile: string;
     appLock: string;
     pinned: string;
+    case_adaptive: boolean;
+    case_sensitive: boolean;
+    smart_suffix: boolean;
+    is_sensitive: boolean;
     lastModified: string;
 }
 

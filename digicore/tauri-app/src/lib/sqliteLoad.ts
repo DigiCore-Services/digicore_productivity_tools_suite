@@ -15,6 +15,10 @@ export interface SnippetRow {
   profile: string;
   app_lock: string;
   pinned: string;
+  case_adaptive: boolean | number;
+  case_sensitive: boolean | number;
+  smart_suffix: boolean | number;
+  is_sensitive: boolean | number;
   last_modified: string;
 }
 
@@ -56,7 +60,7 @@ export async function loadSnippetsPage(
     const limitOffset = searchPattern ? `LIMIT $2 OFFSET $3` : `LIMIT $1 OFFSET $2`;
 
     const sql = `
-      SELECT c.name as category, s.trigger, s.trigger_type, s.content, s.html_content, s.rtf_content, s.options, s.profile, s.app_lock, s.pinned, s.last_modified
+      SELECT c.name as category, s.trigger, s.trigger_type, s.content, s.html_content, s.rtf_content, s.options, s.profile, s.app_lock, s.pinned, s.case_adaptive, s.case_sensitive, s.smart_suffix, s.is_sensitive, s.last_modified
       FROM snippets s
       JOIN categories c ON s.category_id = c.id
       ${selectWhere}

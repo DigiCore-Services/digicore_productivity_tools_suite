@@ -43,6 +43,10 @@ export function SnippetEditor({
   const [content, setContent] = useState("");
   const [appLock, setAppLock] = useState("");
   const [pinned, setPinned] = useState(false);
+  const [caseAdaptive, setCaseAdaptive] = useState(true);
+  const [caseSensitive, setCaseSensitive] = useState(false);
+  const [smartSuffix, setSmartSuffix] = useState(true);
+  const [isSensitive, setIsSensitive] = useState(false);
   const [triggerType, setTriggerType] = useState<"suffix" | "regex">("suffix");
   const [htmlContent, setHtmlContent] = useState<string | null>(null);
   const [rtfContent, setRtfContent] = useState<string | null>(null);
@@ -82,6 +86,10 @@ export function SnippetEditor({
         setContent(initialSnippet.content || "");
         setAppLock(initialSnippet.appLock || "");
         setPinned((initialSnippet.pinned || "").toLowerCase() === "true");
+        setCaseAdaptive(initialSnippet.case_adaptive ?? true);
+        setCaseSensitive(initialSnippet.case_sensitive ?? false);
+        setSmartSuffix(initialSnippet.smart_suffix ?? true);
+        setIsSensitive(initialSnippet.is_sensitive ?? false);
         setTriggerType(initialSnippet.trigger_type || "suffix");
         setHtmlContent(initialSnippet.htmlContent ?? null);
         setRtfContent(initialSnippet.rtfContent ?? null);
@@ -93,6 +101,9 @@ export function SnippetEditor({
         setSnippetCategory(category || "General");
         setAppLock("");
         setPinned(false);
+        setCaseAdaptive(true);
+        setCaseSensitive(false);
+        setSmartSuffix(true);
         setTriggerType("suffix");
         setHtmlContent(null);
         setRtfContent(null);
@@ -104,6 +115,9 @@ export function SnippetEditor({
         setContent("");
         setAppLock("");
         setPinned(false);
+        setCaseAdaptive(true);
+        setCaseSensitive(false);
+        setSmartSuffix(true);
         setTriggerType("suffix");
         setHtmlContent(null);
         setRtfContent(null);
@@ -160,6 +174,10 @@ export function SnippetEditor({
       profile: profile.trim() || "Default",
       appLock: appLock.trim(),
       pinned: pinned ? "true" : "false",
+      case_adaptive: caseAdaptive,
+      case_sensitive: caseSensitive,
+      smart_suffix: smartSuffix,
+      is_sensitive: isSensitive,
       lastModified: "",
     };
     onSave(snippet);
@@ -602,6 +620,42 @@ export function SnippetEditor({
                   className="rounded"
                 />
                 <span>Pinned</span>
+              </label>
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={caseAdaptive}
+                  onChange={(e) => setCaseAdaptive(e.target.checked)}
+                  className="rounded"
+                />
+                <span>Case-Adaptive Expansion</span>
+              </label>
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={caseSensitive}
+                  onChange={(e) => setCaseSensitive(e.target.checked)}
+                  className="rounded"
+                />
+                <span>Case-Sensitive Match</span>
+              </label>
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={smartSuffix}
+                  onChange={(e) => setSmartSuffix(e.target.checked)}
+                  className="rounded"
+                />
+                <span>Smart Suffix (Word Boundaries)</span>
+              </label>
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={isSensitive}
+                  onChange={(e) => setIsSensitive(e.target.checked)}
+                  className="rounded"
+                />
+                <span className="text-[var(--dc-text-accent)] font-semibold">Sensitive (Encrypt at Rest)</span>
               </label>
             </div>
             <div className="mt-4 flex gap-2">
