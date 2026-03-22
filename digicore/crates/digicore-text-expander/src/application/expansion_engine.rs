@@ -58,8 +58,8 @@ where
         is_expansion_paused()
     }
 
-    /// Find snippet by trigger. Returns (snippet, category) if found and app-lock passes.
-    pub fn find_snippet(&self, trigger: &str) -> Option<(&Snippet, &str)> {
+    /// Find snippet by trigger. Returns (snippet, category, matched_case) if found and app-lock passes.
+    pub fn find_snippet(&self, trigger: &str) -> Option<(&Snippet, &str, crate::application::trigger_matcher::InputCase)> {
         if Self::is_paused() {
             return None;
         }
@@ -76,16 +76,38 @@ where
                             continue;
                         }
                     }
-                    return Some((snip, category));
+                    
+                    // Detect case from the input trigger
+                    let matched_case = crate::application::trigger_matcher::detect_case(trigger);
+
+                    return Some((snip, category, matched_case));
                 }
             }
         }
         None
     }
 
-    /// Perform expansion: delete trigger (backspaces) and type content.
-    /// Caller is responsible for deleting the trigger; we only type/paste the expansion.
-    pub fn expand(&self, snippet: &Snippet) -> anyhow::Result<()> {
+
+    /// Expand by trigger - find snippet and expand. Returns Some(expanded_content) if expanded.
+    pub fn expand_trigger(&self, trigger: &str) -> anyhow::Result<Option<String>> {
+        if let Some((snippet, _, matched_case)) = self.find_snippet(trigger) {
+            let mut content = snippet.content.clone();
+            
+            if snippet.case_adaptive {
+                content = crate::application::trigger_matcher::TriggerMatcher::apply_case(&content, matched_case);
+            }
+            
+            // Note: Currently expand works on snippet.content. We need to pass the transformed content.
+            // Let's refactor expand to take content as well.
+            self.expand_with_content(snippet, &content)?;
+            Ok(Some(content))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Perform expansion with specific content (respects rich text if provided).
+    pub fn expand_with_content(&self, snippet: &Snippet, content: &str) -> anyhow::Result<()> {
         if Self::is_paused() {
             return Ok(());
         }
@@ -93,7 +115,7 @@ where
         if snippet.html_content.is_some() || snippet.rtf_content.is_some() {
             // Rich text expansion via clipboard swap
             let saved = self._clipboard.get_text().ok();
-            if self._clipboard.set_multi(&snippet.content, snippet.html_content.as_deref(), snippet.rtf_content.as_deref()).is_ok() {
+            if self._clipboard.set_multi(content, snippet.html_content.as_deref(), snippet.rtf_content.as_deref()).is_ok() {
                 if self.input.send_ctrl_v().is_ok() {
                     let _ = saved.as_ref().map(|s| self._clipboard.set_text(s));
                     return Ok(());
@@ -103,17 +125,12 @@ where
             }
         }
 
-        self.input.type_text(&snippet.content)
+        self.input.type_text(content)
     }
 
-    /// Expand by trigger - find snippet and expand. Returns Some(expanded_content) if expanded.
-    pub fn expand_trigger(&self, trigger: &str) -> anyhow::Result<Option<String>> {
-        if let Some((snippet, _)) = self.find_snippet(trigger) {
-            let content = snippet.content.clone();
-            self.expand(snippet)?;
-            Ok(Some(content))
-        } else {
-            Ok(None)
-        }
+    /// Perform expansion: delete trigger (backspaces) and type content.
+    /// Caller is responsible for deleting the trigger; we only type/paste the expansion.
+    pub fn expand(&self, snippet: &Snippet) -> anyhow::Result<()> {
+        self.expand_with_content(snippet, &snippet.content)
     }
 }

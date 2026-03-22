@@ -20,7 +20,7 @@ fn test_find_snippet_no_app_lock() {
     let mut engine = ExpansionEngine::new(input, clipboard, window);
     engine.load_library(library);
 
-    let (snippet, cat) = engine.find_snippet("hi").unwrap();
+    let (snippet, cat, _casing) = engine.find_snippet("hi").unwrap();
     assert_eq!(snippet.trigger, "hi");
     assert_eq!(snippet.content, "Hello World");
     assert_eq!(cat, "Test");
