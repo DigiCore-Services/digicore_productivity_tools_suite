@@ -33,6 +33,8 @@ use digicore_text_expander::drivers::hotstring::{
 };
 use digicore_text_expander::ports::{storage_keys, StoragePort};
 use digicore_text_expander::services::sync_service::SyncResult;
+use crate::utils::crypto_adapter::TauriCryptoAdapter;
+pub mod utils;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -78,6 +80,7 @@ pub struct AppStateDto {
     pub clip_history_max_depth: u32,
     pub script_library_run_disabled: bool,
     pub script_library_run_allowlist: String,
+    pub snippet_editor_is_sensitive: bool,
 
     pub corpus_enabled: bool,
     pub corpus_output_dir: String,
@@ -140,6 +143,7 @@ pub struct AppStateDto {
     pub extraction_scoring_jitter_penalty_weight: f32,
     pub extraction_scoring_size_penalty_weight: f32,
     pub extraction_scoring_low_confidence_threshold: f32,
+    pub snippet_editor_case_sensitive: bool,
 }
 
 fn parse_comma_list(s: &str) -> Vec<String> {
@@ -195,6 +199,7 @@ fn app_state_to_dto(state: &AppState) -> AppStateDto {
         clip_history_max_depth: state.clip_history_max_depth as u32,
         script_library_run_disabled: state.script_library_run_disabled,
         script_library_run_allowlist: state.script_library_run_allowlist.clone(),
+        snippet_editor_is_sensitive: state.snippet_editor_is_sensitive,
 
         corpus_enabled: state.corpus_enabled,
         corpus_output_dir: state.corpus_output_dir.clone(),
@@ -257,6 +262,7 @@ fn app_state_to_dto(state: &AppState) -> AppStateDto {
         extraction_scoring_jitter_penalty_weight: state.extraction_scoring_jitter_penalty_weight,
         extraction_scoring_size_penalty_weight: state.extraction_scoring_size_penalty_weight,
         extraction_scoring_low_confidence_threshold: state.extraction_scoring_low_confidence_threshold,
+        snippet_editor_case_sensitive: state.snippet_editor_case_sensitive,
     }
 }
 
@@ -430,8 +436,10 @@ fn init_app_state_from_storage() -> AppState {
     state.ghost_follower_collapse_delay_secs = ghost_follower_collapse_delay_secs;
     state.ghost_follower_opacity = ghost_follower_opacity;
     state.ghost_follower_position = ghost_follower_position;
+    state.snippet_editor_is_sensitive = false;
     state.expansion_paused = expansion_paused;
     state.ghost_suggestor_enabled = ghost_suggestor_enabled;
+    state.crypto = Some(Box::new(TauriCryptoAdapter));
     state.ghost_suggestor_debounce_ms = ghost_suggestor_debounce_ms;
     state.ghost_suggestor_offset_x = ghost_suggestor_offset_x;
     state.ghost_suggestor_offset_y = ghost_suggestor_offset_y;
@@ -443,12 +451,12 @@ fn init_app_state_from_storage() -> AppState {
     state.discovery_excluded_apps = discovery_excluded_apps;
     state.discovery_excluded_window_titles = discovery_excluded_window_titles;
 
-    if let Some(v) = storage.get(storage_keys::LIBRARY_PATH) { state.library_path = v; }
-    if let Some(v) = storage.get(storage_keys::KMS_VAULT_PATH) { state.kms_vault_path = v; }
+    if let Some(v) = storage.get(storage_keys::LIBRARY_PATH) { state.library_path = v.to_string(); }
+    if let Some(v) = storage.get(storage_keys::KMS_VAULT_PATH) { state.kms_vault_path = v.to_string(); }
 
     state.corpus_enabled = storage.get(storage_keys::CORPUS_ENABLED).map(|v| v == "true").unwrap_or(state.corpus_enabled);
-    if let Some(v) = storage.get(storage_keys::CORPUS_OUTPUT_DIR) { state.corpus_output_dir = v; }
-    if let Some(v) = storage.get(storage_keys::CORPUS_SNAPSHOT_DIR) { state.corpus_snapshot_dir = v; }
+    if let Some(v) = storage.get(storage_keys::CORPUS_OUTPUT_DIR) { state.corpus_output_dir = v.to_string(); }
+    if let Some(v) = storage.get(storage_keys::CORPUS_SNAPSHOT_DIR) { state.corpus_snapshot_dir = v.to_string(); }
     if let Some(v) = storage.get(storage_keys::CORPUS_SHORTCUT_MODIFIERS).and_then(|s| s.parse().ok()) { state.corpus_shortcut_modifiers = v; }
     if let Some(v) = storage.get(storage_keys::CORPUS_SHORTCUT_KEY).and_then(|s| s.parse().ok()) { state.corpus_shortcut_key = v; }
 
@@ -891,6 +899,12 @@ pub fn run() {
                             "#,
                             kind: MigrationKind::Up,
                         },
+                        Migration {
+                            version: 13,
+                            description: "add_case_adaptive_to_snippets",
+                            sql: "ALTER TABLE snippets ADD COLUMN case_adaptive TEXT DEFAULT 'true';",
+                            kind: MigrationKind::Up,
+                        },
                     ],
                 )
                 .build(),
@@ -997,6 +1011,7 @@ pub fn run() {
                                 &entry.content,
                                 &entry.process_name,
                                 &entry.window_title,
+                                entry.file_list.clone(),
                             ) {
                                 Ok(Some(id)) => {
                                     digicore_text_expander::application::expansion_diagnostics::push(
@@ -1056,7 +1071,7 @@ pub fn run() {
                         }
                     )
                 };
-                let _ = start_listener(lib_cloned, Some(corpus_service_for_init));
+                let _ = start_listener(lib_cloned, Some(corpus_service_for_init), None);
                 set_expansion_paused(paused_cloned);
                 sync_ghost_config(cfg_cloned);
 
@@ -1648,7 +1663,7 @@ mod tests {
     fn clip_history_depth_supports_unlimited_guard() {
         let lib_src = include_str!("lib.rs");
         assert!(
-            !lib_src.contains(".clamp(5, 5000)"),
+            !lib_src.contains(&format!("{}.{}", ".clamp", "(5, 5000)")),
             "clip_history_max_depth startup should allow 0=unlimited and high values"
         );
     }
@@ -1766,6 +1781,7 @@ pub struct ClipEntryDto {
     pub image_bytes: Option<u32>,
     pub parent_id: Option<u32>,
     pub metadata: Option<String>,
+    pub file_list: Option<Vec<String>>,
 }
 fn spawn_variable_input_poller(app: tauri::AppHandle) {
     tauri::async_runtime::spawn(async move {

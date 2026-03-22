@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 use chrono;
 use crate::clipboard_repository;
+use crate::utils::crypto;
 use digicore_text_expander::adapters::storage::JsonFileStorageAdapter;
 use digicore_text_expander::ports::{storage_keys, StoragePort};
 
@@ -109,7 +110,14 @@ pub fn upsert_note(path: &str, title: &str, preview: &str, sync_status: &str, er
             last_modified = excluded.last_modified,
             sync_status = excluded.sync_status,
             last_error = excluded.last_error",
-        params![path, title, preview, now, sync_status, error],
+        params![
+            path, 
+            title, 
+            crypto::encrypt_local(preview).unwrap_or_else(|_| preview.to_string()), 
+            now, 
+            sync_status, 
+            error
+        ],
     )
     .map_err(|e| e.to_string())?;
     Ok(())
@@ -126,7 +134,7 @@ pub fn list_notes() -> Result<Vec<KmsNoteRow>, String> {
                 id: row.get(0)?,
                 path: row.get(1)?,
                 title: row.get(2)?,
-                content_preview: row.get(3)?,
+                content_preview: row.get::<_, Option<String>>(3)?.and_then(|s| crypto::decrypt_local(&s)),
                 last_modified: row.get(4)?,
                 is_favorite: row.get::<_, i32>(5)? != 0,
                 sync_status: row.get(6)?,
@@ -426,7 +434,7 @@ pub fn get_links_for_note(path: &str) -> Result<(Vec<KmsNoteRow>, Vec<KmsNoteRow
             id: row.get(0)?,
             path: row.get(1)?,
             title: row.get(2)?,
-            content_preview: row.get(3)?,
+            content_preview: row.get::<_, Option<String>>(3)?.and_then(|s| crypto::decrypt_local(&s)),
             last_modified: row.get(4)?,
             is_favorite: row.get::<_, i32>(5)? != 0,
             sync_status: row.get(6)?,
@@ -449,7 +457,7 @@ pub fn get_links_for_note(path: &str) -> Result<(Vec<KmsNoteRow>, Vec<KmsNoteRow
             id: row.get(0)?,
             path: row.get(1)?,
             title: row.get(2)?,
-            content_preview: row.get(3)?,
+            content_preview: row.get::<_, Option<String>>(3)?.and_then(|s| crypto::decrypt_local(&s)),
             last_modified: row.get(4)?,
             is_favorite: row.get::<_, i32>(5)? != 0,
             sync_status: row.get(6)?,
@@ -473,8 +481,6 @@ pub fn update_links_on_path_change(old_path: &str, new_path: &str) -> Result<(),
     Ok(())
 }
 
-
-
 #[allow(dead_code)]
 pub fn get_note_by_path(path: &str) -> Result<Option<KmsNoteRow>, String> {
     let conn = conn_guard()?;
@@ -486,7 +492,7 @@ pub fn get_note_by_path(path: &str) -> Result<Option<KmsNoteRow>, String> {
             id: row.get(0)?,
             path: row.get(1)?,
             title: row.get(2)?,
-            content_preview: row.get(3)?,
+            content_preview: row.get::<_, Option<String>>(3)?.and_then(|s| crypto::decrypt_local(&s)),
             last_modified: row.get(4)?,
             is_favorite: row.get::<_, i32>(5)? != 0,
             sync_status: row.get(6)?,

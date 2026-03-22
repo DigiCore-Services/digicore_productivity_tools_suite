@@ -5,6 +5,7 @@ use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
+use crate::utils::crypto::{self, decrypt_opt, encrypt_opt};
 
 #[derive(Clone, Debug)]
 pub struct ClipboardRow {
@@ -24,6 +25,7 @@ pub struct ClipboardRow {
     pub image_bytes: Option<u32>,
     pub parent_id: Option<u32>,
     pub metadata: Option<String>,
+    pub file_list: Option<Vec<String>>,
 }
 
 static DB_PATH: OnceLock<PathBuf> = OnceLock::new();
@@ -56,6 +58,14 @@ fn image_hash(rgba_bytes: &[u8], width: u32, height: u32) -> String {
 
 fn word_count(content: &str) -> u32 {
     content.split_whitespace().count() as u32
+}
+
+fn encrypt_string(text: &str) -> Result<String, String> {
+    crypto::encrypt_local(text)
+}
+
+fn decrypt_string(encrypted: &str) -> Option<String> {
+    crypto::decrypt_local(encrypted)
 }
 
 pub fn assets_root_dir() -> PathBuf {
@@ -113,12 +123,39 @@ pub fn init(db_path: PathBuf) -> Result<(), String> {
             image_height INTEGER,
             image_bytes INTEGER,
             parent_id INTEGER,
-            metadata TEXT
+            metadata TEXT,
+            file_list TEXT
         );
         CREATE INDEX IF NOT EXISTS idx_clipboard_history_created_at
             ON clipboard_history(created_at_unix_ms DESC);
         CREATE INDEX IF NOT EXISTS idx_clipboard_history_content_hash
             ON clipboard_history(content_hash);
+
+        -- FTS5 Virtual Table for Search
+        CREATE VIRTUAL TABLE IF NOT EXISTS clipboard_history_fts USING fts5(
+            content,
+            process_name,
+            window_title,
+            mime_type,
+            content='clipboard_history',
+            content_rowid='id'
+        );
+
+        -- Triggers to keep FTS in sync
+        CREATE TRIGGER IF NOT EXISTS clipboard_history_ai AFTER INSERT ON clipboard_history BEGIN
+            INSERT INTO clipboard_history_fts(rowid, content, process_name, window_title, mime_type)
+            VALUES (new.id, new.content, new.process_name, new.window_title, new.mime_type);
+        END;
+        CREATE TRIGGER IF NOT EXISTS clipboard_history_ad AFTER DELETE ON clipboard_history BEGIN
+            INSERT INTO clipboard_history_fts(clipboard_history_fts, rowid, content, process_name, window_title, mime_type)
+            VALUES('delete', old.id, old.content, old.process_name, old.window_title, old.mime_type);
+        END;
+        CREATE TRIGGER IF NOT EXISTS clipboard_history_au AFTER UPDATE ON clipboard_history BEGIN
+            INSERT INTO clipboard_history_fts(clipboard_history_fts, rowid, content, process_name, window_title, mime_type)
+            VALUES('delete', old.id, old.content, old.process_name, old.window_title, old.mime_type);
+            INSERT INTO clipboard_history_fts(rowid, content, process_name, window_title, mime_type)
+            VALUES (new.id, new.content, new.process_name, new.window_title, new.mime_type);
+        END;
         "#,
     )
     .map_err(|e| e.to_string())?;
@@ -131,6 +168,7 @@ pub fn init(db_path: PathBuf) -> Result<(), String> {
     ensure_column(&conn, "image_bytes", "INTEGER")?;
     ensure_column(&conn, "parent_id", "INTEGER")?;
     ensure_column(&conn, "metadata", "TEXT")?;
+    ensure_column(&conn, "file_list", "TEXT")?;
     let _ = DB_CONN.set(Mutex::new(conn));
     Ok(())
 }
@@ -152,7 +190,12 @@ fn latest_content_hash(conn: &Connection) -> Result<Option<String>, String> {
     .map_err(|e| e.to_string())
 }
 
-pub fn insert_entry(content: &str, process_name: &str, window_title: &str) -> Result<Option<u32>, String> {
+pub fn insert_entry(
+    content: &str,
+    process_name: &str,
+    window_title: &str,
+    file_list: Option<Vec<String>>,
+) -> Result<Option<u32>, String> {
     let normalized = normalize_content_for_hash(content);
     if normalized.is_empty() {
         return Ok(None);
@@ -168,9 +211,19 @@ pub fn insert_entry(content: &str, process_name: &str, window_title: &str) -> Re
     log::info!("[ClipboardRepository] Inserting text entry, hash: {}", hash);
     conn.execute(
         "INSERT INTO clipboard_history (
-            content, process_name, window_title, char_count, word_count, content_hash, created_at_unix_ms, entry_type, parent_id
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'text', ?8)",
-        params![content, process_name, window_title, chars, words, hash, now_ms, None::<u32>],
+            content, process_name, window_title, char_count, word_count, content_hash, created_at_unix_ms, entry_type, parent_id, file_list
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'text', ?8, ?9)",
+        params![
+            encrypt_string(content).unwrap_or_else(|_| content.to_string()),
+            process_name, 
+            window_title, 
+            chars, 
+            words, 
+            hash, 
+            now_ms, 
+            None::<u32>, 
+            encrypt_opt(file_list.as_ref().and_then(|fl| serde_json::to_string(fl).ok()).as_deref())
+        ],
     )
     .map_err(|e| e.to_string())?;
     let id = conn.last_insert_rowid() as u32;
@@ -288,10 +341,10 @@ pub fn insert_image_entry_returning_id(
     conn.execute(
         "INSERT INTO clipboard_history (
             content, process_name, window_title, char_count, word_count, content_hash, created_at_unix_ms, entry_type,
-            mime_type, image_path, thumb_path, image_width, image_height, image_bytes, parent_id
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'image', ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+            mime_type, image_path, thumb_path, image_width, image_height, image_bytes, parent_id, file_list
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'image', ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
         params![
-            content,
+            encrypt_string(&content).unwrap_or_else(|_| content.clone()),
             process_name,
             window_title,
             0i64,
@@ -304,7 +357,8 @@ pub fn insert_image_entry_returning_id(
             width as i64,
             height as i64,
             rgba_bytes.len() as i64,
-            None::<u32>
+            None::<u32>,
+            None::<String>
         ],
     )
     .map_err(|e| e.to_string())?;
@@ -397,7 +451,7 @@ pub fn migrate_image_assets_root(old_root: &str, new_root: &str) -> Result<u32, 
 fn map_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ClipboardRow> {
     Ok(ClipboardRow {
         id: row.get::<_, i64>(0)? as u32,
-        content: row.get(1)?,
+        content: decrypt_string(&row.get::<_, String>(1)?).unwrap_or_default(),
         process_name: row.get(2)?,
         window_title: row.get(3)?,
         char_count: row.get::<_, i64>(4)? as u32,
@@ -411,7 +465,8 @@ fn map_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ClipboardRow> {
         image_height: row.get::<_, Option<i64>>(12)?.map(|v| v as u32),
         image_bytes: row.get::<_, Option<i64>>(13)?.map(|v| v as u32),
         parent_id: row.get::<_, Option<i64>>(14)?.map(|v| v as u32),
-        metadata: row.get(15)?,
+        metadata: decrypt_opt(row.get(15)?),
+        file_list: decrypt_opt(row.get(16)?).and_then(|s| serde_json::from_str(&s).ok()),
     })
 }
 
@@ -421,7 +476,7 @@ pub fn list_entries(search: Option<&str>, limit: u32) -> Result<Vec<ClipboardRow
     let mut rows = Vec::new();
     let select_sql = "SELECT
             id, content, process_name, window_title, char_count, word_count, created_at_unix_ms,
-            entry_type, mime_type, image_path, thumb_path, image_width, image_height, image_bytes, parent_id, metadata
+            entry_type, mime_type, image_path, thumb_path, image_width, image_height, image_bytes, parent_id, metadata, file_list
         FROM clipboard_history";
     if let Some(search_raw) = search {
         let search_trim = search_raw.trim();
@@ -488,7 +543,48 @@ pub fn search_entries(
     if query.is_empty() {
         return list_entries(None, cap);
     }
+    
+    let conn = conn_guard()?;
     let operator_normalized = operator.unwrap_or("or").trim().to_ascii_lowercase();
+    
+    // Check if FTS5 is available and use it for standard searches
+    if operator_normalized != "regex" {
+        let fts_query = if operator_normalized == "and" {
+            query.split_whitespace().collect::<Vec<_>>().join(" AND ")
+        } else {
+            query.split_whitespace().collect::<Vec<_>>().join(" OR ")
+        };
+
+        let mut stmt = conn
+            .prepare(&format!(
+                "SELECT
+                    id, content, process_name, window_title, char_count, word_count, created_at_unix_ms,
+                    entry_type, mime_type, image_path, thumb_path, image_width, image_height, image_bytes, parent_id, metadata, file_list
+                FROM clipboard_history
+                JOIN clipboard_history_fts ON clipboard_history.id = clipboard_history_fts.rowid
+                WHERE clipboard_history_fts MATCH ?1
+                ORDER BY rank
+                LIMIT ?2"
+            ))
+            .map_err(|e| e.to_string())?;
+
+        let mapped = stmt
+            .query_map(params![fts_query, cap], map_row)
+            .map_err(|e| e.to_string())?;
+
+        let mut rows = Vec::new();
+        for item in mapped {
+            let mut row = item.map_err(|e| e.to_string())?;
+            ensure_row_thumbnail(&mut row);
+            rows.push(row);
+        }
+        
+        if !rows.is_empty() {
+            return Ok(rows);
+        }
+    }
+
+    // Fallback to legacy regex/substring search if FTS5 returns no results or regex requested
     let candidates = list_entries(None, cap.saturating_mul(5).min(10_000))?;
     if operator_normalized == "regex" {
         let mut pattern = query.to_string();
@@ -557,7 +653,7 @@ pub fn get_entry_by_id(id: u32) -> Result<Option<ClipboardRow>, String> {
         .prepare(
             "SELECT
                 id, content, process_name, window_title, char_count, word_count, created_at_unix_ms,
-                entry_type, mime_type, image_path, thumb_path, image_width, image_height, image_bytes, parent_id, metadata
+                entry_type, mime_type, image_path, thumb_path, image_width, image_height, image_bytes, parent_id, metadata, file_list
              FROM clipboard_history
              WHERE id = ?1
              LIMIT 1",
@@ -680,17 +776,18 @@ pub fn insert_extracted_text_entry(
     
     conn.execute(
         "INSERT INTO clipboard_history (
-            content, process_name, window_title, char_count, word_count, created_at_unix_ms, entry_type, parent_id, metadata
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'extracted_text', ?7, ?8)",
+            content, process_name, window_title, char_count, word_count, created_at_unix_ms, entry_type, parent_id, metadata, file_list
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'extracted_text', ?7, ?8, ?9)",
         params![
-            content,
+            encrypt_string(content).unwrap_or_else(|_| content.to_string()),
             process_name,
             window_title,
             content.chars().count() as i64,
             word_count(content) as i64,
             now_ms,
             parent_id,
-            serde_json::to_string(metadata).ok()
+            encrypt_opt(serde_json::to_string(metadata).ok().as_deref()),
+            None::<String>
         ],
     )
     .map_err(|e| e.to_string())?;
@@ -706,7 +803,7 @@ pub fn list_image_entries(search: Option<&str>, page: u32, page_size: u32) -> Re
     let mut rows = Vec::new();
     let select_sql = "SELECT
             id, content, process_name, window_title, char_count, word_count, created_at_unix_ms,
-            entry_type, mime_type, image_path, thumb_path, image_width, image_height, image_bytes, parent_id, metadata
+            entry_type, mime_type, image_path, thumb_path, image_width, image_height, image_bytes, parent_id, metadata, file_list
         FROM clipboard_history
         WHERE entry_type = 'image'";
 
@@ -760,7 +857,7 @@ pub fn get_child_entries(parent_id: u32) -> Result<Vec<ClipboardRow>, String> {
     let mut rows = Vec::new();
     let select_sql = "SELECT
             id, content, process_name, window_title, char_count, word_count, created_at_unix_ms,
-            entry_type, mime_type, image_path, thumb_path, image_width, image_height, image_bytes, parent_id, metadata
+            entry_type, mime_type, image_path, thumb_path, image_width, image_height, image_bytes, parent_id, metadata, file_list
         FROM clipboard_history
         WHERE parent_id = ?1
         ORDER BY id ASC";
@@ -771,3 +868,27 @@ pub fn get_child_entries(parent_id: u32) -> Result<Vec<ClipboardRow>, String> {
     }
     Ok(rows)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_dpapi_encryption_decryption() {
+        let original = "Hello, DPAPI Secret!";
+        let encrypted = encrypt_string(original).expect("Encryption failed");
+        
+        assert!(encrypted.starts_with("ENC:"));
+        assert_ne!(original, &encrypted);
+
+        let decrypted = decrypt_string(&encrypted).expect("Decryption returned None");
+        assert_eq!(original, decrypted);
+    }
+
+    #[test]
+    fn test_dpapi_invalid_decryption() {
+        assert_eq!(decrypt_string("not encrypted"), Some("not encrypted".to_string()));
+        assert_eq!(decrypt_string("ENC:invalid_base64"), None);
+    }
+}
+
