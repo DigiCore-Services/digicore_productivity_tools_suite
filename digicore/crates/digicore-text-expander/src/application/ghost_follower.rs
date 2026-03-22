@@ -233,8 +233,8 @@ fn collect_pinned(library: &HashMap<String, Vec<Snippet>>) -> Vec<(Snippet, Stri
 }
 
 /// Get clipboard history entries for display (F50).
-pub fn get_clipboard_entries() -> Vec<super::clipboard_history::ClipEntry> {
-    super::clipboard_history::get_entries()
+pub fn get_clipboard_entries() -> Vec<digicore_core::domain::entities::clipboard_entry::ClipEntry> {
+    crate::application::clipboard_history::get_entries()
 }
 
 /// Get pinned snippets for display, filtered by search (F50, F51).

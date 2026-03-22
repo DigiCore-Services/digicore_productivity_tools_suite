@@ -93,16 +93,12 @@ fn test_add_snippet() {
     state.library.insert("Cat1".to_string(), vec![Snippet::new("t1", "c1")]);
     state.categories = vec!["Cat1".to_string()];
 
-    let snip = Snippet {
-        trigger: "t2".into(),
-        content: "c2".into(),
-        options: "*:".into(),
-        category: "Cat1".into(),
-        profile: "Default".into(),
-        app_lock: String::new(),
-        pinned: "false".into(),
-        last_modified: String::new(),
-    };
+    let mut snip = Snippet::new("t2", "c2");
+    snip.options = "*:".into();
+    snip.category = "Cat1".into();
+    snip.profile = "Default".into();
+    snip.pinned = "false".into();
+    snip.last_modified = String::new();
     state.add_snippet("Cat1", &snip);
     assert_eq!(state.library["Cat1"].len(), 2);
     assert_eq!(state.library["Cat1"][1].trigger, "t2");
@@ -119,16 +115,12 @@ fn test_update_snippet() {
     state.library.insert("Cat1".to_string(), vec![s1, s2]);
     state.categories = vec!["Cat1".to_string()];
 
-    let snip = Snippet {
-        trigger: "t2-updated".into(),
-        content: "c2-updated".into(),
-        options: "*:".into(),
-        category: "Cat1".into(),
-        profile: "Default".into(),
-        app_lock: String::new(),
-        pinned: "false".into(),
-        last_modified: String::new(),
-    };
+    let mut snip = Snippet::new("t2-updated", "c2-updated");
+    snip.options = "*:".into();
+    snip.category = "Cat1".into();
+    snip.profile = "Default".into();
+    snip.pinned = "false".into();
+    snip.last_modified = String::new();
     state.update_snippet("Cat1", 1, &snip).unwrap();
     assert_eq!(state.library["Cat1"].len(), 2);
     assert_eq!(state.library["Cat1"][1].trigger, "t2-updated");

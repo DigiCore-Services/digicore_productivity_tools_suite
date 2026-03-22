@@ -15,7 +15,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = ["protocol-asset", "tray-icon"] }
 taurpc = "0.7"
-specta = { version = "=2.0.0-rc.22", features = ["derive"] }
+specta = { version = "=2.0.0-rc.22", features = ["derive", "chrono"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
 tauri-plugin-shell = "2"
 tauri-plugin-global-shortcut = "2"
@@ -49,6 +49,8 @@ sqlite-vec = "0.1"
 windows = { version = "0.61", features = [
   "Win32_Foundation",
   "Win32_UI_WindowsAndMessaging",
+  "Win32_Security_Cryptography",
+  "Win32_System_Memory",
 ] }
 notify = "6.1"
 async-trait = "0.1.89"

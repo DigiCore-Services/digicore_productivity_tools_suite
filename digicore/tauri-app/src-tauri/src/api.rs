@@ -297,6 +297,7 @@ pub(crate) fn persist_clipboard_entry_with_settings(
     content: &str,
     process_name: &str,
     window_title: &str,
+    file_list: Option<Vec<String>>,
 ) -> Result<Option<u32>, String> {
     let storage = JsonFileStorageAdapter::load();
     let max_depth = storage
@@ -314,7 +315,7 @@ pub(crate) fn persist_clipboard_entry_with_settings(
         return Ok(None);
     }
     let masked = apply_masking(content.to_string(), &cfg);
-    let inserted_id = clipboard_repository::insert_entry(&masked, process_name, window_title)?;
+    let inserted_id = clipboard_repository::insert_entry(&masked, process_name, window_title, file_list)?;
     log::info!("[Clipboard] clipboard_repository::insert_entry returned {:?}", inserted_id);
     if let Some(_id) = inserted_id {
         if cfg.json_output_enabled {
@@ -1592,6 +1593,7 @@ pub(crate) fn sync_runtime_clipboard_entries_to_sqlite(app: &tauri::AppHandle) {
             &entry.content,
             &entry.process_name,
             &entry.window_title,
+            entry.file_list.clone(),
         );
     }
     sync_current_clipboard_image_to_sqlite(String::new(), String::new(), Some(app));
@@ -1608,6 +1610,9 @@ pub(crate) fn sync_current_clipboard_image_to_sqlite(process_name: String, windo
         return;
     }
     if !cfg.image_capture_enabled {
+        return;
+    }
+    if process_is_blacklisted(&process_name, &cfg.blacklist_processes) {
         return;
     }
     let mut image_opt = None;
@@ -2175,6 +2180,7 @@ impl Api for ApiImpl {
                 image_bytes: r.image_bytes,
                 parent_id: r.parent_id,
                 metadata: r.metadata,
+                file_list: r.file_list,
             })
             .collect())
     }
@@ -2209,6 +2215,7 @@ impl Api for ApiImpl {
                 image_bytes: r.image_bytes,
                 parent_id: r.parent_id,
                 metadata: r.metadata,
+                file_list: r.file_list,
             })
             .collect())
     }
@@ -2258,23 +2265,26 @@ impl Api for ApiImpl {
             clipboard_repository::list_image_entries(search.as_deref(), page, page_size)?;
         let dtos = rows
             .into_iter()
-            .map(|r| ClipEntryDto {
-                id: r.id,
-                content: r.content,
-                process_name: r.process_name,
-                window_title: r.window_title,
-                length: r.char_count,
-                word_count: r.word_count,
-                created_at: r.created_at_unix_ms.to_string(),
-                entry_type: r.entry_type,
-                mime_type: r.mime_type,
-                image_path: r.image_path,
-                thumb_path: r.thumb_path,
-                image_width: r.image_width,
-                image_height: r.image_height,
-                image_bytes: r.image_bytes,
-                parent_id: r.parent_id,
-                metadata: r.metadata,
+            .map(|r| {
+                ClipEntryDto {
+                    id: r.id,
+                    content: r.content,
+                    process_name: r.process_name,
+                    window_title: r.window_title,
+                    length: r.char_count,
+                    word_count: r.word_count,
+                    created_at: r.created_at_unix_ms.to_string(),
+                    entry_type: r.entry_type,
+                    mime_type: r.mime_type,
+                    image_path: r.image_path,
+                    thumb_path: r.thumb_path,
+                    image_width: r.image_width,
+                    image_height: r.image_height,
+                    image_bytes: r.image_bytes,
+                    parent_id: r.parent_id,
+                    metadata: r.metadata,
+                    file_list: r.file_list,
+                }
             })
             .collect();
         Ok((dtos, total))
@@ -2301,6 +2311,7 @@ impl Api for ApiImpl {
                 image_bytes: r.image_bytes,
                 parent_id: r.parent_id,
                 metadata: r.metadata,
+                file_list: r.file_list,
             })
             .collect())
     }
@@ -2445,24 +2456,28 @@ impl Api for ApiImpl {
 
     async fn get_clip_entry_by_id(self, id: u32) -> Result<Option<ClipEntryDto>, String> {
         let entry_opt = clipboard_repository::get_entry_by_id(id)?;
-        Ok(entry_opt.map(|r| ClipEntryDto {
-            id: r.id,
-            content: r.content,
-            process_name: r.process_name,
-            window_title: r.window_title,
-            length: r.char_count,
-            word_count: r.word_count,
-            created_at: r.created_at_unix_ms.to_string(),
-            entry_type: r.entry_type,
-            mime_type: r.mime_type,
-            image_path: r.image_path,
-            thumb_path: r.thumb_path,
-            image_width: r.image_width,
-            image_height: r.image_height,
-            image_bytes: r.image_bytes,
-            parent_id: r.parent_id,
-            metadata: r.metadata,
-        }))
+        let dto_opt = entry_opt.map(|r| {
+            ClipEntryDto {
+                id: r.id,
+                content: r.content,
+                process_name: r.process_name,
+                window_title: r.window_title,
+                length: r.char_count,
+                word_count: r.word_count,
+                created_at: r.created_at_unix_ms.to_string(),
+                entry_type: r.entry_type,
+                mime_type: r.mime_type,
+                image_path: r.image_path,
+                thumb_path: r.thumb_path,
+                image_width: r.image_width,
+                image_height: r.image_height,
+                image_bytes: r.image_bytes,
+                parent_id: r.parent_id,
+                metadata: r.metadata,
+                file_list: r.file_list,
+            }
+        });
+        Ok(dto_opt)
     }
 
     async fn get_script_library_js(self) -> Result<String, String> {

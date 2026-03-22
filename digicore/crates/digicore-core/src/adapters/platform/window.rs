@@ -14,6 +14,29 @@ impl WindowsWindowAdapter {
     pub fn new() -> Self {
         Self
     }
+
+    /// Creates a mock version of the adapter that returns a fixed context.
+    pub fn mock(process_name: &str, title: &str) -> MockWindowAdapter {
+        MockWindowAdapter {
+            process_name: process_name.to_string(),
+            title: title.to_string(),
+        }
+    }
+}
+
+/// A mock version of the WindowContextPort for testing.
+pub struct MockWindowAdapter {
+    pub process_name: String,
+    pub title: String,
+}
+
+impl WindowContextPort for MockWindowAdapter {
+    fn get_active(&self) -> Result<WindowContext> {
+        Ok(WindowContext {
+            process_name: self.process_name.clone(),
+            title: self.title.clone(),
+        })
+    }
 }
 
 impl Default for WindowsWindowAdapter {

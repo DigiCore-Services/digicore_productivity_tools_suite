@@ -1,5 +1,7 @@
 //! Utility functions for display and formatting.
 
+pub mod json_logger;
+
 /// Parse file filter string "Name (*.ext1;*.ext2)" -> (name, extensions).
 /// Returns None for invalid format. Extensions are without dots (e.g. "json").
 pub fn parse_file_filter(s: &str) -> Option<(String, Vec<String>)> {

@@ -6,17 +6,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
-
-/// A clipboard history entry (F38, F40).
-#[derive(Clone, Debug)]
-pub struct ClipEntry {
-    pub content: String,
-    pub html_content: Option<String>,
-    pub rtf_content: Option<String>,
-    pub process_name: String,
-    pub window_title: String,
-    pub timestamp: Instant,
-}
+use digicore_core::domain::entities::clipboard_entry::ClipEntry;
+use digicore_core::domain::ports::clipboard_repository::ClipboardRepository;
 
 /// Clipboard history configuration (F39).
 #[derive(Clone, Debug)]
@@ -29,7 +20,7 @@ impl Default for ClipboardHistoryConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            max_depth: 20,
+            max_depth: 200,
         }
     }
 }
@@ -38,6 +29,7 @@ struct ClipboardHistoryState {
     config: ClipboardHistoryConfig,
     entries: Vec<ClipEntry>,
     last_content: Option<String>,
+    repo: Option<Arc<dyn ClipboardRepository>>,
 }
 
 static CLIP_STATE: Mutex<Option<Arc<Mutex<ClipboardHistoryState>>>> = Mutex::new(None);
@@ -56,16 +48,28 @@ pub fn set_entry_observer(observer: Option<EntryObserver>) {
 /// On Windows: uses WM_CLIPBOARDUPDATE listener (AHK parity - captures App/Window Title).
 /// On other platforms: uses poll loop.
 /// Seeds with current clipboard content on startup so existing content is visible.
-pub fn start(config: ClipboardHistoryConfig) {
+pub fn start(config: ClipboardHistoryConfig, repo: Option<Arc<dyn ClipboardRepository>>) {
     CLIP_ENABLED.store(config.enabled, Ordering::SeqCst);
-    #[allow(unused_mut)]
     let mut entries = Vec::new();
-    #[allow(unused_mut)]
     let mut last_content = None;
 
+    // Load from repository if available
+    if let Some(ref r) = repo {
+        match r.load_last_n(config.max_depth) {
+            Ok(loaded) => {
+                entries = loaded;
+                if let Some(first) = entries.first() {
+                    last_content = Some(first.content.clone());
+                }
+                log::info!("[ClipboardHistory] loaded {} entries from persistence", entries.len());
+            }
+            Err(e) => log::error!("[ClipboardHistory] failed to load from persistence: {}", e),
+        }
+    }
+
     #[cfg(not(test))]
-    if config.enabled {
-        // Seed from current clipboard. Retry once after short delay (clipboard may not be ready at startup).
+    if config.enabled && entries.is_empty() {
+        // Seed from current clipboard if empty
         for attempt in 0..2 {
             if attempt > 0 {
                 std::thread::sleep(std::time::Duration::from_millis(150));
@@ -74,34 +78,23 @@ pub fn start(config: ClipboardHistoryConfig) {
                 match clipboard.get_text() {
                     Ok(text) => {
                         if !text.is_empty() && !text.chars().all(|c| c.is_whitespace()) {
-                            let len = text.len();
-                            entries.push(ClipEntry {
-                                content: text.clone(),
-                                html_content: None,
-                                rtf_content: None,
-                                process_name: String::new(),
-                                window_title: String::new(),
-                                timestamp: Instant::now(),
-                            });
-                            last_content = Some(text);
-                            log::info!(
-                                "[ClipboardHistory] seeded from current clipboard: {} chars (attempt {})",
-                                len,
-                                attempt + 1
+                            let entry = ClipEntry::new(
+                                text.clone(),
+                                None,
+                                None,
+                                String::new(),
+                                String::new(),
                             );
+                            if let Some(ref r) = repo {
+                                let _ = r.save(&entry);
+                            }
+                            last_content = Some(text);
+                            entries.push(entry);
                             break;
-                        } else if attempt == 1 {
-                            log::info!("[ClipboardHistory] clipboard empty or whitespace-only after retry");
                         }
                     }
-                    Err(e) => {
-                        if attempt == 1 {
-                            log::warn!("[ClipboardHistory] failed to read clipboard for seed: {}", e);
-                        }
-                    }
+                    Err(_) => {}
                 }
-            } else if attempt == 1 {
-                log::warn!("[ClipboardHistory] failed to create Clipboard for seed");
             }
         }
     }
@@ -110,15 +103,16 @@ pub fn start(config: ClipboardHistoryConfig) {
         config: config.clone(),
         entries,
         last_content,
+        repo,
     })));
 
     if config.enabled {
         #[cfg(target_os = "windows")]
         {
             if let Err(_) = crate::platform::windows_clipboard_listener::start_clipboard_listener(
-                move |text, process_name, window_title| {
+                move |entry| {
                     if !is_suppressed() {
-                        add_entry(text, &process_name, &window_title);
+                        add_entry(entry);
                     }
                 },
             ) {
@@ -159,7 +153,55 @@ fn run_poll_loop(state: Arc<Mutex<ClipboardHistoryState>>) {
             thread::sleep(Duration::from_millis(100));
             continue;
         }
-        if let Ok(text) = clipboard.get_text() {
+        
+        // Handle images in poll loop
+        if let Ok(img) = clipboard.get_image() {
+            let mut guard = match state.lock() {
+                Ok(g) => g,
+                Err(_) => break,
+            };
+            // Simplistic image dedup: check bytes len and dimensions
+            let is_dup = guard.entries.first().map_or(false, |e| {
+                e.entry_type == "image" && e.image_bytes == Some(img.bytes.len() as i64) && e.image_width == Some(img.width as i32)
+            });
+
+            if !is_dup {
+                let (html, rtf) = get_rich_formats();
+                #[cfg(target_os = "windows")]
+                let (process_name, window_title) = crate::platform::windows_clipboard_listener::get_foreground_window_context_internal();
+                #[cfg(not(target_os = "windows"))]
+                let (process_name, window_title) = (String::new(), String::new());
+
+                let mut entry = ClipEntry::new("[Image]".to_string(), html, rtf, process_name, window_title);
+                entry.entry_type = "image".to_string();
+                entry.image_width = Some(img.width as i32);
+                entry.image_height = Some(img.height as i32);
+                entry.image_bytes = Some(img.bytes.len() as i64);
+                
+                // Save image (Dry logic for now, similar to windows_listener)
+                let images_dir = crate::ports::data_path_resolver::DataPathResolver::clipboard_images_dir();
+                let _ = std::fs::create_dir_all(&images_dir);
+                let file_id = uuid::Uuid::new_v4().to_string();
+                let file_path = images_dir.join(format!("{}.png", file_id));
+                if let Ok(mut png_buf) = std::fs::File::create(&file_path) {
+                    use image::ImageEncoder;
+                    let _ = image::codecs::png::PngEncoder::new(&mut png_buf)
+                        .write_image(&img.bytes, img.width as u32, img.height as u32, image::ColorType::Rgba8.into());
+                    entry.image_path = Some(file_path.to_string_lossy().to_string());
+                    
+                    // Generate thumbnail
+                    let thumb_path = images_dir.join(format!("{}_thumb.png", file_id));
+                    if let Some(rgba_img) = image::ImageBuffer::<image::Rgba<u8>, Vec<u8>>::from_raw(img.width as u32, img.height as u32, img.bytes.to_vec()) {
+                        let dynamic_img = image::DynamicImage::ImageRgba8(rgba_img);
+                        let thumb = dynamic_img.thumbnail(200, 200);
+                        let _ = thumb.save(&thumb_path);
+                        entry.thumb_path = Some(thumb_path.to_string_lossy().to_string());
+                    }
+                }
+
+                add_entry_inner(&mut guard, entry);
+            }
+        } else if let Ok(text) = clipboard.get_text() {
             if !text.is_empty() && !text.chars().all(|c| c.is_whitespace()) {
                 let mut guard = match state.lock() {
                     Ok(g) => g,
@@ -169,41 +211,40 @@ fn run_poll_loop(state: Arc<Mutex<ClipboardHistoryState>>) {
                     if !is_fuzzy_duplicate(guard.last_content.as_deref().unwrap_or(""), &text) {
                         guard.last_content = Some(text.clone());
                         let (html, rtf) = get_rich_formats();
-                        add_entry_inner(&mut guard, text, html, rtf, String::new(), String::new());
+                        #[cfg(target_os = "windows")]
+                        let (process_name, window_title) = crate::platform::windows_clipboard_listener::get_foreground_window_context_internal();
+                        #[cfg(not(target_os = "windows"))]
+                        let (process_name, window_title) = (String::new(), String::new());
+
+                        let entry = ClipEntry::new(text, html, rtf, process_name, window_title);
+                        add_entry_inner(&mut guard, entry);
                     }
                 }
             }
         }
-        thread::sleep(Duration::from_millis(500));
+        thread::sleep(Duration::from_millis(1000));
     }
 }
 
 fn add_entry_inner(
     state: &mut ClipboardHistoryState,
-    content: String,
-    html_content: Option<String>,
-    rtf_content: Option<String>,
-    process_name: String,
-    window_title: String,
+    entry: ClipEntry,
 ) {
-    // Fuzzy deduplication check against the most recent entry
     if let Some(first) = state.entries.first() {
-        if is_fuzzy_duplicate(&first.content, &content) {
+        if is_fuzzy_duplicate(&first.content, &entry.content) {
             return;
         }
     }
 
-    state.entries.insert(
-        0,
-        ClipEntry {
-            content: content.clone(),
-            html_content,
-            rtf_content,
-            process_name,
-            window_title,
-            timestamp: Instant::now(),
-        },
-    );
+    // Save to repository
+    if let Some(ref r) = state.repo {
+        if let Err(e) = r.save(&entry) {
+            log::error!("[ClipboardHistory] failed to persist entry: {}", e);
+        }
+    }
+
+    state.entries.insert(0, entry);
+    
     if let Ok(guard) = ENTRY_OBSERVER.lock() {
         if let Some(cb) = guard.as_ref() {
             if let Some(inserted) = state.entries.first() {
@@ -211,13 +252,14 @@ fn add_entry_inner(
             }
         }
     }
+
     while state.entries.len() > state.config.max_depth {
         state.entries.pop();
     }
 }
 
-/// Add entry (called when we have window context). F40: app + window title metadata.
-pub fn add_entry(content: String, process_name: &str, window_title: &str) {
+/// Add entry directly.
+pub fn add_entry(entry: ClipEntry) {
     if !CLIP_ENABLED.load(Ordering::SeqCst) {
         return;
     }
@@ -235,10 +277,10 @@ pub fn add_entry(content: String, process_name: &str, window_title: &str) {
         Ok(s) => s,
         Err(_) => return,
     };
-    if !is_fuzzy_duplicate(s.last_content.as_deref().unwrap_or(""), &content) {
-        s.last_content = Some(content.clone());
-        let (html, rtf) = get_rich_formats();
-        add_entry_inner(&mut s, content, html, rtf, process_name.to_string(), window_title.to_string());
+    
+    if !is_fuzzy_duplicate(s.last_content.as_deref().unwrap_or(""), &entry.content) {
+        s.last_content = Some(entry.content.clone());
+        add_entry_inner(&mut s, entry);
     }
 }
 
@@ -263,7 +305,7 @@ fn is_fuzzy_duplicate(a: &str, b: &str) -> bool {
 }
 
 #[cfg(target_os = "windows")]
-fn get_rich_formats() -> (Option<String>, Option<String>) {
+pub(crate) fn get_rich_formats() -> (Option<String>, Option<String>) {
     use windows::Win32::System::DataExchange::{OpenClipboard, CloseClipboard, GetClipboardData, RegisterClipboardFormatW};
     use windows::Win32::System::Memory::{GlobalLock, GlobalUnlock};
     use windows::Win32::Foundation::HGLOBAL;
@@ -314,7 +356,7 @@ fn get_rich_formats() -> (Option<String>, Option<String>) {
 }
 
 #[cfg(not(target_os = "windows"))]
-fn get_rich_formats() -> (Option<String>, Option<String>) {
+pub(crate) fn get_rich_formats() -> (Option<String>, Option<String>) {
     (None, None)
 }
 
@@ -391,10 +433,13 @@ pub fn request_promote(content: String) {
 /// Remove entry at index (0-based; matches get_entries() order).
 pub fn delete_entry_at(index: usize) {
     if let Ok(guard) = CLIP_STATE.lock() {
-        if let Some(ref state) = *guard {
-            if let Ok(mut s) = state.lock() {
+        if let Some(ref state_arc) = *guard {
+            if let Ok(mut s) = state_arc.lock() {
                 if index < s.entries.len() {
-                    s.entries.remove(index);
+                    let entry = s.entries.remove(index);
+                    if let Some(ref r) = s.repo {
+                        let _ = r.delete_at(entry.timestamp);
+                    }
                 }
             }
         }
@@ -404,8 +449,11 @@ pub fn delete_entry_at(index: usize) {
 /// Clear all clipboard history entries.
 pub fn clear_all() {
     if let Ok(guard) = CLIP_STATE.lock() {
-        if let Some(ref state) = *guard {
-            if let Ok(mut s) = state.lock() {
+        if let Some(ref state_arc) = *guard {
+            if let Ok(mut s) = state_arc.lock() {
+                if let Some(ref r) = s.repo {
+                    let _ = r.clear_all();
+                }
                 s.entries.clear();
                 s.last_content = None;
             }
@@ -422,7 +470,7 @@ mod tests {
     fn test_config_default() {
         let config = ClipboardHistoryConfig::default();
         assert!(config.enabled);
-        assert_eq!(config.max_depth, 20);
+        assert_eq!(config.max_depth, 200);
     }
 
     #[test]
@@ -430,7 +478,7 @@ mod tests {
     fn test_start_stop() {
         stop();
         assert!(!is_enabled());
-        start(ClipboardHistoryConfig::default());
+        start(ClipboardHistoryConfig::default(), None);
         assert!(is_enabled());
         stop();
         assert!(!is_enabled());
@@ -443,9 +491,9 @@ mod tests {
         start(ClipboardHistoryConfig {
             enabled: true,
             max_depth: 5,
-        });
-        add_entry("hello".to_string(), "notepad.exe", "Test");
-        add_entry("hello".to_string(), "notepad.exe", "Test");
+        }, None);
+        add_entry(ClipEntry::new("hello".to_string(), None, None, "notepad.exe".to_string(), "Test".to_string()));
+        add_entry(ClipEntry::new("hello".to_string(), None, None, "notepad.exe".to_string(), "Test".to_string()));
         let entries = get_entries();
         assert_eq!(entries.len(), 1);
         stop();
@@ -458,11 +506,11 @@ mod tests {
         start(ClipboardHistoryConfig {
             enabled: true,
             max_depth: 3,
-        });
-        add_entry("a".to_string(), "app", "win");
-        add_entry("b".to_string(), "app", "win");
-        add_entry("c".to_string(), "app", "win");
-        add_entry("d".to_string(), "app", "win");
+        }, None);
+        add_entry(ClipEntry::new("a".to_string(), None, None, "app".to_string(), "win".to_string()));
+        add_entry(ClipEntry::new("b".to_string(), None, None, "app".to_string(), "win".to_string()));
+        add_entry(ClipEntry::new("c".to_string(), None, None, "app".to_string(), "win".to_string()));
+        add_entry(ClipEntry::new("d".to_string(), None, None, "app".to_string(), "win".to_string()));
         let entries = get_entries();
         assert_eq!(entries.len(), 3);
         assert_eq!(entries[0].content, "d");
@@ -474,7 +522,7 @@ mod tests {
     #[serial]
     fn test_take_promote_pending_none() {
         stop();
-        start(ClipboardHistoryConfig::default());
+        start(ClipboardHistoryConfig::default(), None);
         let result = take_promote_pending();
         assert!(result.is_none());
         stop();
@@ -484,7 +532,7 @@ mod tests {
     #[serial]
     fn test_request_take_promote() {
         stop();
-        start(ClipboardHistoryConfig::default());
+        start(ClipboardHistoryConfig::default(), None);
         request_promote("snippet content".to_string());
         let result = take_promote_pending();
         assert_eq!(result, Some("snippet content".to_string()));
@@ -500,8 +548,8 @@ mod tests {
         start(ClipboardHistoryConfig {
             enabled: false,
             max_depth: 5,
-        });
-        add_entry("hello".to_string(), "notepad.exe", "Test");
+        }, None);
+        add_entry(ClipEntry::new("hello".to_string(), None, None, "notepad.exe".to_string(), "Test".to_string()));
         let entries = get_entries();
         assert!(entries.is_empty());
         stop();
@@ -522,10 +570,10 @@ mod tests {
         start(ClipboardHistoryConfig {
             enabled: true,
             max_depth: 10,
-        });
-        add_entry("a".to_string(), "app", "win");
-        add_entry("b".to_string(), "app", "win");
-        add_entry("c".to_string(), "app", "win");
+        }, None);
+        add_entry(ClipEntry::new("a".to_string(), None, None, "app".to_string(), "win".to_string()));
+        add_entry(ClipEntry::new("b".to_string(), None, None, "app".to_string(), "win".to_string()));
+        add_entry(ClipEntry::new("c".to_string(), None, None, "app".to_string(), "win".to_string()));
         let entries = get_entries();
         assert_eq!(entries.len(), 3);
 
@@ -554,8 +602,8 @@ mod tests {
         start(ClipboardHistoryConfig {
             enabled: true,
             max_depth: 5,
-        });
-        add_entry("x".to_string(), "app", "win");
+        }, None);
+        add_entry(ClipEntry::new("x".to_string(), None, None, "app".to_string(), "win".to_string()));
         delete_entry_at(99);
         let entries = get_entries();
         assert_eq!(entries.len(), 1);
@@ -570,10 +618,10 @@ mod tests {
         start(ClipboardHistoryConfig {
             enabled: true,
             max_depth: 10,
-        });
-        add_entry("a".to_string(), "app", "win");
-        add_entry("b".to_string(), "app", "win");
-        add_entry("c".to_string(), "app", "win");
+        }, None);
+        add_entry(ClipEntry::new("a".to_string(), None, None, "app".to_string(), "win".to_string()));
+        add_entry(ClipEntry::new("b".to_string(), None, None, "app".to_string(), "win".to_string()));
+        add_entry(ClipEntry::new("c".to_string(), None, None, "app".to_string(), "win".to_string()));
         let entries = get_entries();
         assert_eq!(entries.len(), 3);
 
@@ -581,7 +629,7 @@ mod tests {
         let entries = get_entries();
         assert!(entries.is_empty());
 
-        add_entry("new".to_string(), "app", "win");
+        add_entry(ClipEntry::new("new".to_string(), None, None, "app".to_string(), "win".to_string()));
         let entries = get_entries();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].content, "new");
@@ -596,9 +644,9 @@ mod tests {
         start(ClipboardHistoryConfig {
             enabled: true,
             max_depth: 10,
-        });
-        add_entry("content from notepad".to_string(), "notepad.exe", "Untitled - Notepad");
-        add_entry("content from terminal".to_string(), "WindowsTerminal.exe", "PowerShell");
+        }, None);
+        add_entry(ClipEntry::new("content from notepad".to_string(), None, None, "notepad.exe".to_string(), "Untitled - Notepad".to_string()));
+        add_entry(ClipEntry::new("content from terminal".to_string(), None, None, "WindowsTerminal.exe".to_string(), "PowerShell".to_string()));
         let entries = get_entries();
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].content, "content from terminal");
@@ -617,12 +665,12 @@ mod tests {
         start(ClipboardHistoryConfig {
             enabled: true,
             max_depth: 10,
-        });
-        add_entry("a".to_string(), "app", "win");
-        add_entry("b".to_string(), "app", "win");
-        add_entry("c".to_string(), "app", "win");
-        add_entry("d".to_string(), "app", "win");
-        add_entry("e".to_string(), "app", "win");
+        }, None);
+        add_entry(ClipEntry::new("a".to_string(), None, None, "app".to_string(), "win".to_string()));
+        add_entry(ClipEntry::new("b".to_string(), None, None, "app".to_string(), "win".to_string()));
+        add_entry(ClipEntry::new("c".to_string(), None, None, "app".to_string(), "win".to_string()));
+        add_entry(ClipEntry::new("d".to_string(), None, None, "app".to_string(), "win".to_string()));
+        add_entry(ClipEntry::new("e".to_string(), None, None, "app".to_string(), "win".to_string()));
         let entries = get_entries();
         assert_eq!(entries.len(), 5);
 
@@ -644,14 +692,14 @@ mod tests {
         start(ClipboardHistoryConfig {
             enabled: true,
             max_depth: 5,
-        });
+        }, None);
         assert!(is_enabled());
         update_config(ClipboardHistoryConfig {
             enabled: false,
             max_depth: 5,
         });
         assert!(!is_enabled());
-        add_entry("should not add".to_string(), "app", "win");
+        add_entry(ClipEntry::new("should not add".to_string(), None, None, "app".to_string(), "win".to_string()));
         let entries = get_entries();
         assert!(entries.is_empty());
         stop();
@@ -664,9 +712,9 @@ mod tests {
         start(ClipboardHistoryConfig {
             enabled: true,
             max_depth: 5,
-        });
+        }, None);
         suppress_for_duration(Duration::from_millis(10));
-        add_entry("entry".to_string(), "app", "win");
+        add_entry(ClipEntry::new("entry".to_string(), None, None, "app".to_string(), "win".to_string()));
         let entries = get_entries();
         assert_eq!(entries.len(), 1);
         stop();

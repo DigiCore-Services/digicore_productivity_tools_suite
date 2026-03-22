@@ -1197,13 +1197,23 @@ export function ConfigTab({ appState, onConfigLoaded }: ConfigTabProps) {
             Note: 0 = Unlimited
           </p>
           <label className="block mt-2">Blacklist process names (comma-separated):</label>
-          <input
-            type="text"
-            value={copyBlacklistProcesses}
-            onChange={(e) => setCopyBlacklistProcesses(e.target.value)}
-            placeholder="KeePassXC.exe, 1Password.exe"
-            className={inputCls}
-          />
+          <div className="mt-1 flex gap-2">
+            <input
+              type="text"
+              value={copyBlacklistProcesses}
+              onChange={(e) => setCopyBlacklistProcesses(e.target.value)}
+              placeholder="KeePassXC.exe, 1Password.exe"
+              className={`${inputCls} flex-1`}
+            />
+            <button
+              type="button"
+              onClick={() => setCopyBlacklistProcesses("KeePass.exe, KeePassXC.exe, 1Password.exe, Bitwarden.exe, Dashlane.exe")}
+              className="px-2 py-1 text-xs bg-[var(--dc-bg-alt)] border border-[var(--dc-border)] rounded hover:border-[var(--dc-accent)]"
+              title="Load suggested password managers"
+            >
+              Defaults
+            </button>
+          </div>
           <div className="mt-2 flex flex-wrap gap-3">
             <label className="flex items-center gap-2">
               <input

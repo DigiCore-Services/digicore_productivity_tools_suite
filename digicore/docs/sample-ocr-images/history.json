@@ -181,6 +181,13 @@
       "avg_latency_ms": 96.166664,
       "total_samples": 24,
       "avg_resilience": 0.78176075
+    },
+    {
+      "timestamp": "2026-03-21T21:45:04.554561800+00:00",
+      "avg_accuracy": 0.9583334,
+      "avg_latency_ms": 90.5,
+      "total_samples": 24,
+      "avg_resilience": 0.7867822
     }
   ]
 }

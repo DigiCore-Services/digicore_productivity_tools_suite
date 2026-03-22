@@ -143,6 +143,8 @@ pub fn snippet_editor_modal(app: &mut TextExpanderApp, ctx: &egui::Context) {
             ui.label("App lock (comma-separated exe names, empty = all apps):");
             ui.add(egui::TextEdit::singleline(&mut app.snippet_editor_app_lock).desired_width(300.0));
             ui.checkbox(&mut app.snippet_editor_pinned, "Pinned (priority in search)");
+            ui.checkbox(&mut app.snippet_editor_case_adaptive, "Case-Adaptive (auto-match Lower/Upper/Title)");
+            ui.checkbox(&mut app.snippet_editor_case_sensitive, "Case-Sensitive Match (exact case match)");
             ui.horizontal(|ui| {
                 if ui.button("Save").clicked() {
                     app.snippet_editor_save_clicked = true;
@@ -205,9 +207,10 @@ pub fn snippet_editor_modal(app: &mut TextExpanderApp, ctx: &egui::Context) {
         app.snippet_editor_profile = "Work".to_string();
         app.snippet_editor_app_lock.clear();
         app.snippet_editor_pinned = false;
+        app.snippet_editor_case_adaptive = true;
+        app.snippet_editor_case_sensitive = false;
         app.snippet_editor_save_clicked = false;
         app.snippet_editor_template_selected = 0;
-        app.snippet_editor_modal_open = true;
     }
 }
 
@@ -297,6 +300,7 @@ pub fn clip_view_content_modal(app: &mut TextExpanderApp, ctx: &egui::Context) {
                 app.snippet_editor_template_selected = 0;
                 app.snippet_editor_app_lock.clear();
                 app.snippet_editor_pinned = false;
+                app.snippet_editor_case_sensitive = false;
                 app.snippet_editor_modal_open = true;
             }
         } else if edit_clicked.load(std::sync::atomic::Ordering::SeqCst) {
@@ -310,6 +314,7 @@ pub fn clip_view_content_modal(app: &mut TextExpanderApp, ctx: &egui::Context) {
                 profile,
                 app_lock,
                 pinned,
+                case_sensitive,
             } = view
             {
                 app.snippet_editor_mode = Some(SnippetEditorMode::Edit {
@@ -323,6 +328,7 @@ pub fn clip_view_content_modal(app: &mut TextExpanderApp, ctx: &egui::Context) {
                 app.snippet_editor_profile = profile;
                 app.snippet_editor_app_lock = app_lock;
                 app.snippet_editor_pinned = pinned;
+                app.snippet_editor_case_sensitive = case_sensitive;
                 app.snippet_editor_modal_open = true;
             }
         }

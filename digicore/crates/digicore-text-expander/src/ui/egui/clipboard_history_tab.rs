@@ -5,7 +5,8 @@
 //! Promote to Snippet, Clear All History. Parity with AHK implementation.
 
 use crate::TextExpanderApp;
-use digicore_text_expander::application::clipboard_history::{self, ClipboardHistoryConfig, ClipEntry};
+use digicore_text_expander::application::clipboard_history::{self, ClipboardHistoryConfig};
+use digicore_core::domain::entities::clipboard_entry::ClipEntry;
 use digicore_text_expander::utils::truncate_for_display;
 use egui;
 

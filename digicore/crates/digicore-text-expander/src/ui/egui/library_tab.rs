@@ -222,6 +222,7 @@ pub fn render(app: &mut TextExpanderApp, _ctx: &egui::Context, ui: &mut egui::Ui
                     snip.category.clone(),
                     snip.profile.clone(),
                     snip.app_lock.clone(),
+                    snip.case_sensitive,
                 )
             })
             .collect();
@@ -239,6 +240,7 @@ pub fn render(app: &mut TextExpanderApp, _ctx: &egui::Context, ui: &mut egui::Ui
                 snip_category,
                 profile,
                 snip_app_lock,
+                is_case_sensitive,
             ) in row_data
             {
                 let row_response = ui.horizontal(|ui| {
@@ -262,6 +264,7 @@ pub fn render(app: &mut TextExpanderApp, _ctx: &egui::Context, ui: &mut egui::Ui
                         app.snippet_editor_profile = profile.clone();
                         app.snippet_editor_app_lock = snip_app_lock.clone();
                         app.snippet_editor_pinned = is_pinned;
+                        app.snippet_editor_case_sensitive = is_case_sensitive;
                         app.snippet_editor_modal_open = true;
                     }
                     if ui.small_button("Delete").clicked() {
@@ -287,6 +290,7 @@ pub fn render(app: &mut TextExpanderApp, _ctx: &egui::Context, ui: &mut egui::Ui
                             profile: profile.clone(),
                             app_lock: snip_app_lock.clone(),
                             pinned: is_pinned,
+                            case_sensitive: is_case_sensitive,
                         });
                         ui.close_menu();
                     }
@@ -329,6 +333,7 @@ pub fn render(app: &mut TextExpanderApp, _ctx: &egui::Context, ui: &mut egui::Ui
                         app.snippet_editor_profile = profile.clone();
                         app.snippet_editor_app_lock = snip_app_lock.clone();
                         app.snippet_editor_pinned = is_pinned;
+                        app.snippet_editor_case_sensitive = is_case_sensitive;
                         app.snippet_editor_modal_open = true;
                         ui.close_menu();
                     }
@@ -398,6 +403,7 @@ pub fn render(app: &mut TextExpanderApp, _ctx: &egui::Context, ui: &mut egui::Ui
             app.snippet_editor_profile = "Work".to_string();
             app.snippet_editor_app_lock.clear();
             app.snippet_editor_pinned = false;
+            app.snippet_editor_case_sensitive = false;
             app.snippet_editor_template_selected = 0;
             app.snippet_editor_modal_open = true;
         }

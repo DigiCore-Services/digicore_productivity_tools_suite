@@ -46,6 +46,11 @@ fn main() -> eframe::Result<()> {
 }
 
 fn run_egui() -> eframe::Result<()> {
+    // Phase 3: Diagnostics & Reliability - JSON Logging
+    if std::env::var("DIGICORE_LOG_JSON").as_deref() == Ok("1") {
+        let _ = digicore_text_expander::utils::json_logger::JsonLogger::init(log::Level::Info);
+    }
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([900.0, 600.0])
@@ -91,13 +96,15 @@ fn is_foreground_our_app() -> bool {
 
 /// Main application - thin UI binding over AppState (Phase 0/1).
 /// Holds framework-specific storage and file dialog adapters.
-struct TextExpanderApp {
+pub struct TextExpanderApp {
     /// Framework-agnostic application state.
     state: AppState,
     /// Framework-specific persistence. EframeStorageAdapter for egui.
     storage: EframeStorageAdapter,
     /// File dialog for Load/Save/Browse. Arc allows sharing without borrowing app.
     file_dialog: Arc<RfdFileDialogAdapter>,
+    /// Persistent clipboard history repository.
+    clipboard_repo: Option<Arc<dyn digicore_core::domain::ports::ClipboardRepository>>,
 }
 
 impl std::ops::Deref for TextExpanderApp {
@@ -170,10 +177,24 @@ impl TextExpanderApp {
         state.script_library_run_disabled = run_disabled;
         state.script_library_run_allowlist = run_allowlist;
 
+        let mut clipboard_repo = None;
+        let db_path = digicore_text_expander::ports::data_path_resolver::DataPathResolver::db_path();
+        if let Some(parent) = db_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        match digicore_text_expander::adapters::sqlite_clipboard::SqliteClipboardRepository::new(db_path) {
+            Ok(repo) => {
+                clipboard_repo = Some(Arc::new(repo) as Arc<dyn digicore_core::domain::ports::ClipboardRepository>);
+                log::info!("[Main] Clipboard persistence initialized.");
+            }
+            Err(e) => log::error!("[Main] Failed to initialize clipboard persistence: {}", e),
+        }
+
         Self {
             state,
             storage,
             file_dialog: Arc::new(RfdFileDialogAdapter::new()),
+            clipboard_repo,
         }
     }
 
@@ -352,7 +373,7 @@ impl eframe::App for TextExpanderApp {
             };
             builder = builder.with_position(egui::pos2(pos_x, pos_y));
             let pinned_with_idx: Vec<(Snippet, String, usize)> = pinned;
-            let clips_with_idx: Vec<(usize, clipboard_history::ClipEntry)> = clips
+            let clips_with_idx: Vec<(usize, digicore_core::domain::ClipEntry)> = clips
                 .iter()
                 .enumerate()
                 .map(|(i, e)| (i, e.clone()))
@@ -442,6 +463,7 @@ impl eframe::App for TextExpanderApp {
                                                 profile: profile.clone(),
                                                 app_lock: app_lock.clone(),
                                                 pinned: is_pinned,
+                                                case_sensitive: snip.case_sensitive,
                                             });
                                             ui.close_menu();
                                         }
@@ -468,6 +490,7 @@ impl eframe::App for TextExpanderApp {
                                             app.snippet_editor_profile = profile;
                                             app.snippet_editor_app_lock = app_lock;
                                             app.snippet_editor_pinned = is_pinned;
+                                            app.snippet_editor_case_adaptive = snip.case_adaptive;
                                             app.snippet_editor_modal_open = true;
                                             ui.close_menu();
                                         }
@@ -881,6 +904,9 @@ impl TextExpanderApp {
                     app_lock: self.snippet_editor_app_lock.trim().to_string(),
                     pinned: if self.snippet_editor_pinned { "true" } else { "false" }.to_string(),
                     last_modified,
+                    case_adaptive: self.snippet_editor_case_adaptive,
+                    case_sensitive: self.snippet_editor_case_sensitive,
+                    smart_suffix: self.snippet_editor_smart_suffix,
                 };
                 self.library.entry(cat).or_default().push(snip);
                 self.status = "Snippet added".to_string();
@@ -891,6 +917,7 @@ impl TextExpanderApp {
                 let options = self.snippet_editor_options.trim().to_string();
                 let app_lock = self.snippet_editor_app_lock.trim().to_string();
                 let pinned = if self.snippet_editor_pinned { "true" } else { "false" }.to_string();
+                let case_adaptive = self.snippet_editor_case_adaptive;
                 if let Some(snippets) = self.library.get_mut(&cat_owned) {
                     if let Some(snip) = snippets.get_mut(*snippet_idx) {
                         snip.trigger = trigger;
@@ -900,6 +927,7 @@ impl TextExpanderApp {
                         snip.profile = profile;
                         snip.app_lock = app_lock;
                         snip.pinned = pinned;
+                        snip.case_adaptive = case_adaptive;
                         snip.last_modified = last_modified.clone();
                         if snip.category != cat_owned {
                             to_move = Some((snip.clone(), category.clone(), cat_owned, *snippet_idx));
@@ -1004,7 +1032,7 @@ impl TextExpanderApp {
             let baseline = std::sync::Arc::new(OcrBaselineAdapter::new(config.snapshot_dir.clone(), None));
             let corpus_service = std::sync::Arc::new(CorpusService::new(config, storage, baseline));
 
-            if let Err(e) = start_listener(self.library.clone(), Some(corpus_service)) {
+            if let Err(e) = start_listener(self.library.clone(), Some(corpus_service), self.clipboard_repo.clone()) {
                 self.status = format!("Hotstring failed to start: {}", e);
             }
         }
@@ -1226,6 +1254,9 @@ impl TextExpanderApp {
             app_lock: row.get(8).cloned().unwrap_or_default(),
             pinned: row.get(9).cloned().unwrap_or_else(|| "false".to_string()),
             last_modified: row.get(10).cloned().unwrap_or_default(),
+            case_adaptive: row.get(11).map(|s| s == "true").unwrap_or(true),
+            case_sensitive: row.get(12).map(|s| s == "true").unwrap_or(false),
+            smart_suffix: row.get(13).map(|s| s == "true").unwrap_or(true),
         })
     }
 

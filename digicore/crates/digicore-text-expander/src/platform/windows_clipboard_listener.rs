@@ -5,13 +5,16 @@
 //! window (source app) for App and Window Title - AHK parity.
 
 use digicore_core::domain::ports::WindowContextPort;
+use digicore_core::domain::entities::clipboard_entry::ClipEntry;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::{thread, time::Duration};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::Graphics::Gdi::HBRUSH;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::System::DataExchange::{AddClipboardFormatListener, RemoveClipboardFormatListener};
+use windows::Win32::System::DataExchange::{AddClipboardFormatListener, RemoveClipboardFormatListener, IsClipboardFormatAvailable, OpenClipboard, CloseClipboard, GetClipboardData};
+const CF_HDROP: u32 = 15;
 use windows::Win32::UI::WindowsAndMessaging::*;
+use windows::Win32::UI::Shell::{DragQueryFileW, HDROP};
 
 const WM_CLIPBOARDUPDATE: u32 = 0x031D;
 const WM_CREATE: u32 = 0x0001;
@@ -27,13 +30,13 @@ thread_local! {
 /// reads clipboard, gets foreground window context, and calls on_clip.
 /// Runs until process exits or stop requested.
 pub fn start_clipboard_listener(
-    on_clip: impl Fn(String, String, String) + Send + 'static,
+    on_clip: impl Fn(ClipEntry) + Send + 'static,
 ) -> anyhow::Result<()> {
     if LISTENER_ACTIVE.swap(true, Ordering::SeqCst) {
         return Ok(());
     }
 
-    let on_clip: std::sync::Arc<std::sync::Mutex<Box<dyn Fn(String, String, String) + Send>>> =
+    let on_clip: std::sync::Arc<std::sync::Mutex<Box<dyn Fn(ClipEntry) + Send>>> =
         std::sync::Arc::new(std::sync::Mutex::new(Box::new(on_clip)));
 
     thread::spawn(move || {
@@ -48,7 +51,7 @@ pub fn is_clipboard_listener_running() -> bool {
     LISTENER_ACTIVE.load(Ordering::SeqCst)
 }
 
-fn run_listener(on_clip: std::sync::Arc<std::sync::Mutex<Box<dyn Fn(String, String, String) + Send>>>) -> anyhow::Result<()> {
+fn run_listener(on_clip: std::sync::Arc<std::sync::Mutex<Box<dyn Fn(ClipEntry) + Send>>>) -> anyhow::Result<()> {
     unsafe {
         let instance = GetModuleHandleW(None)?;
         let class_name = windows::core::w!("DigiCoreClipboardListener");
@@ -118,7 +121,7 @@ fn run_listener(on_clip: std::sync::Arc<std::sync::Mutex<Box<dyn Fn(String, Stri
 }
 
 struct ListenerData {
-    on_clip: std::sync::Arc<std::sync::Mutex<Box<dyn Fn(String, String, String) + Send>>>,
+    on_clip: std::sync::Arc<std::sync::Mutex<Box<dyn Fn(ClipEntry) + Send>>>,
 }
 
 thread_local! {
@@ -154,7 +157,6 @@ fn on_clipboard_update() {
         Ok(c) => c,
         Err(e) => {
             log::warn!("[ClipboardListener] Failed to initialize arboard: {}", e);
-            // Small retry for busy clipboard
             thread::sleep(Duration::from_millis(100));
             match arboard::Clipboard::new() {
                 Ok(c) => c,
@@ -166,43 +168,109 @@ fn on_clipboard_update() {
         }
     };
 
-    let text = match clipboard.get_text() {
-        Ok(t) => {
-            if t.is_empty() || t.chars().all(|c| c.is_whitespace()) {
-                None
-            } else {
-                Some(t)
+    let (process_name, window_title) = get_foreground_window_context_internal();
+    let (html_content, rtf_content) = crate::application::clipboard_history::get_rich_formats();
+
+    let entry = if let Ok(img) = clipboard.get_image() {
+        log::info!("[ClipboardListener] Image detected ({}x{})", img.width, img.height);
+        let mut entry = ClipEntry::new(
+            "[Image]".to_string(),
+            html_content,
+            rtf_content,
+            process_name,
+            window_title,
+        );
+        entry.entry_type = "image".to_string();
+        entry.image_width = Some(img.width as i32);
+        entry.image_height = Some(img.height as i32);
+        entry.image_bytes = Some(img.bytes.len() as i64);
+
+        // Save image to file
+        let images_dir = crate::ports::data_path_resolver::DataPathResolver::clipboard_images_dir();
+        let _ = std::fs::create_dir_all(&images_dir);
+        let file_id = uuid::Uuid::new_v4().to_string();
+        let file_path = images_dir.join(format!("{}.png", file_id));
+        if let Ok(mut png_buf) = std::fs::File::create(&file_path) {
+            use image::ImageEncoder;
+            let _ = image::codecs::png::PngEncoder::new(&mut png_buf)
+                .write_image(&img.bytes, img.width as u32, img.height as u32, image::ColorType::Rgba8.into());
+            entry.image_path = Some(file_path.to_string_lossy().to_string());
+            
+            // Generate thumbnail
+            let thumb_path = images_dir.join(format!("{}_thumb.png", file_id));
+            if let Some(rgba_img) = image::ImageBuffer::<image::Rgba<u8>, Vec<u8>>::from_raw(img.width as u32, img.height as u32, img.bytes.to_vec()) {
+                let dynamic_img = image::DynamicImage::ImageRgba8(rgba_img);
+                let thumb = dynamic_img.thumbnail(200, 200);
+                let _ = thumb.save(&thumb_path);
+                entry.thumb_path = Some(thumb_path.to_string_lossy().to_string());
             }
         }
-        Err(e) => {
-            log::trace!("[ClipboardListener] Failed to get text: {}", e);
-            None
-        },
-    };
-
-    let content = if clipboard.get_image().is_ok() {
-        log::info!("[ClipboardListener] Image detected on clipboard");
-        "[Image]".to_string()
-    } else if let Some(t) = text {
-        t
+        entry
+    } else if let Ok(text) = clipboard.get_text() {
+        if text.is_empty() || text.chars().all(|c| c.is_whitespace()) {
+            return;
+        }
+        ClipEntry::new(text, html_content, rtf_content, process_name, window_title)
+    } else if unsafe { IsClipboardFormatAvailable(CF_HDROP).is_ok() } {
+        let (files, content) = get_file_list_and_content();
+        if files.is_empty() {
+            return;
+        }
+        let mut entry = ClipEntry::new(content, html_content, rtf_content, process_name, window_title);
+        entry.entry_type = "file_list".to_string();
+        entry.file_list = Some(files);
+        entry
     } else {
-        log::debug!("[ClipboardListener] No text or image found on clipboard");
+        log::debug!("[ClipboardListener] No supported content on clipboard");
         return;
     };
 
-    let (process_name, window_title) = get_foreground_window_context();
     LISTENER_DATA.with(|cell| {
         if let Some(ref data) = *cell.borrow() {
             if let Ok(cb) = data.on_clip.lock() {
-                cb(content, process_name, window_title);
+                cb(entry);
             }
         }
     });
 }
 
-fn get_foreground_window_context() -> (String, String) {
+pub(crate) fn get_foreground_window_context_internal() -> (String, String) {
     digicore_core::adapters::platform::window::WindowsWindowAdapter::new()
         .get_active()
         .map(|ctx| (ctx.process_name, ctx.title))
         .unwrap_or_default()
+}
+
+fn get_file_list_and_content() -> (Vec<String>, String) {
+    let mut files = Vec::new();
+    unsafe {
+        if OpenClipboard(None).is_err() {
+            return (files, String::new());
+        }
+        
+        let h_data = GetClipboardData(CF_HDROP);
+        if let Ok(h_drop) = h_data {
+            let h_drop = HDROP(h_drop.0);
+            let count = DragQueryFileW(h_drop, 0xFFFFFFFF, None);
+            for i in 0..count {
+                let len = DragQueryFileW(h_drop, i, None);
+                let mut buffer = vec![0u16; (len + 1) as usize];
+                DragQueryFileW(h_drop, i, Some(&mut buffer));
+                if let Ok(path) = String::from_utf16(&buffer[..len as usize]) {
+                    files.push(path);
+                }
+            }
+        }
+        let _ = CloseClipboard();
+    }
+    
+    let content = if files.is_empty() {
+        String::new()
+    } else if files.len() == 1 {
+        files[0].clone()
+    } else {
+        format!("[{} files]", files.len())
+    };
+    
+    (files, content)
 }

@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Analysis: Example5_Table-combined-with-Plain-Text_7hdlmNFDk5.png</title>
+    <style>
+        body { font-family: 'Inter', system-ui, sans-serif; background: #0b0b0d; color: #e4e4e7; margin: 0; padding: 0; height: 100vh; overflow: hidden; display: flex; flex-direction: column; }
+        
+        /* Top Navigation */
+        .top-bar { background: #121215; border-bottom: 1px solid #27272a; padding: 0.75rem 1.5rem; display: flex; justify-content: space-between; align-items: center; z-index: 100; }
+        .nav-left { display: flex; align-items: center; gap: 1.5rem; }
+        .back-link { color: #a1a1aa; text-decoration: none; font-size: 0.875rem; display: flex; align-items: center; gap: 0.5rem; }
+        .back-link:hover { color: #fff; }
+        h1 { margin: 0; font-size: 1.125rem; font-weight: 700; color: #fff; }
+        
+        .status-pill { display: flex; align-items: center; gap: 1rem; }
+        .accuracy-badge { padding: 0.4rem 0.8rem; border-radius: 99px; font-weight: 700; font-size: 0.875rem; }
+        .success { background: rgba(34, 197, 94, 0.1); color: #22c55e; border: 1px solid rgba(34, 197, 94, 0.2); }
+        .warning { background: rgba(245, 158, 11, 0.1); color: #f59e0b; border: 1px solid rgba(245, 158, 11, 0.2); }
+        .danger { background: rgba(239, 68, 68, 0.1); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.2); }
+
+        /* Secondary Toolbar */
+        .toolbar { background: #18181b; border-bottom: 1px solid #27272a; padding: 0.5rem 1.5rem; display: flex; gap: 1rem; align-items: center; }
+        .view-toggle { display: flex; background: #09090b; border-radius: 8px; padding: 2px; border: 1px solid #27272a; }
+        .toggle-btn { padding: 0.4rem 0.8rem; border: none; background: transparent; color: #71717a; font-size: 0.75rem; font-weight: 600; cursor: pointer; border-radius: 6px; transition: all 0.2s; }
+        .toggle-btn.active { background: #27272a; color: #fff; }
+        
+        /* Main Workspace */
+        .workspace { flex: 1; display: grid; grid-template-columns: 350px 1fr; overflow: hidden; }
+        
+        /* Sidebar (Source Image) */
+        .sidebar { background: #09090b; border-right: 1px solid #27272a; padding: 1.5rem; overflow-y: auto; display: flex; flex-direction: column; gap: 1rem; }
+        .sidebar-label { font-size: 0.75rem; font-weight: 600; text-transform: uppercase; color: #52525b; letter-spacing: 0.05em; }
+        .source-img-container { background: #121215; border: 1px solid #27272a; border-radius: 8px; overflow: hidden; cursor: zoom-in; position: relative; }
+        .source-img-container img { width: 100%; display: block; opacity: 0.8; transition: opacity 0.2s; }
+        .source-img-container:hover img { opacity: 1; }
+        
+        /* Content Pane */
+        .content-pane { background: #121215; overflow: hidden; position: relative; }
+        .view-pane { position: absolute; inset: 0; display: none; flex-direction: column; }
+        .view-pane.active { display: flex; }
+        
+        /* Side-by-Side Sync View */
+        .sync-layout { display: flex; height: 100%; }
+        .sync-column { flex: 1; border-right: 1px solid #27272a; display: flex; flex-direction: column; overflow: hidden; }
+        .sync-column:last-child { border-right: none; }
+        .sync-header { padding: 0.5rem 1rem; background: #09090b; border-bottom: 1px solid #27272a; font-size: 0.7rem; font-weight: 700; color: #71717a; text-transform: uppercase; }
+        .sync-scroll { flex: 1; overflow-y: auto; padding: 1.5rem; font-family: 'JetBrains Mono', 'Consolas', monospace; font-size: 13px; line-height: 1.6; white-space: pre-wrap; color: #d4d4d8; }
+        
+        /* Highlight Diff View */
+        .diff-layout { height: 100%; overflow-y: auto; padding: 2rem; font-family: 'JetBrains Mono', 'Consolas', monospace; font-size: 14px; line-height: 1.7; white-space: pre-wrap; word-break: break-all; }
+        .diff-add { background: rgba(34, 197, 94, 0.25); color: #4ade80; text-decoration: none; padding: 1px 0; border-bottom: 1px solid rgba(34, 197, 94, 0.5); }
+        .diff-del { background: rgba(239, 68, 68, 0.25); color: #f87171; text-decoration: line-through; padding: 1px 0; border-bottom: 1px solid rgba(239, 68, 68, 0.5); }
+        
+        /* Scrollbar styling */
+        ::-webkit-scrollbar-thumb:hover { background: #3f3f46; }
+
+        /* Heatmap Styles */
+        .diag-coerced { border-bottom: 2px solid #3b82f6; background: rgba(59, 130, 246, 0.1); } /* Blue */
+        .diag-bridged { border-bottom: 2px solid #f59e0b; background: rgba(245, 158, 11, 0.1); } /* Amber */
+        
+        /* Entity Styles */
+        .entity { padding: 0 2px; border-radius: 3px; font-weight: 500; font-size: 0.9em; }
+        .entity-email { background: rgba(59, 130, 246, 0.2); border: 1px solid #3b82f6; color: #60a5fa; }
+        .entity-date { background: rgba(16, 185, 129, 0.2); border: 1px solid #10b981; color: #34d399; }
+        .entity-currency { background: rgba(245, 158, 11, 0.2); border: 1px solid #f59e0b; color: #fbbf24; }
+        
+        .heatmap-overlay { position: absolute; inset: 0; pointer-events: none; z-index: 10; width: 100%; }
+        .heatmap-rect { stroke-width: 1; fill-opacity: 0.15; transition: fill-opacity 0.2s; }
+        .heatmap-rect.coerced { fill: #3b82f6; stroke: #3b82f6; }
+        .heatmap-rect.bridged { fill: #f59e0b; stroke: #f59e0b; }
+        .heatmap-rect.low_confidence { fill: #ef4444; stroke: #ef4444; fill-opacity: 0.3; } /* Red */
+        .heatmap-rect:hover { fill-opacity: 0.6; }
+
+        .legend { margin-top: 1rem; padding: 0.75rem; background: #18181b; border: 1px solid #27272a; border-radius: 8px; font-size: 0.7rem; }
+        .legend-item { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.4rem; }
+        .legend-item:last-child { margin-bottom: 0; }
+        .legend-dot { width: 8px; height: 8px; border-radius: 2px; }
+    </style>
+</head>
+<body>
+    <div class="top-bar">
+        <div class="nav-left">
+            <a href="summary.html#card-Example5_Table-combined-with-Plain-Text_7hdlmNFDk5.png" class="back-link">← Back</a>
+            <h1>Example5_Table-combined-with-Plain-Text_7hdlmNFDk5.png</h1>
+            
+            <span class="accuracy-badge" style="background: #27272a; color: #fff; border: 1px solid #3f3f46; margin-left: 0.5rem;">109ms</span>
+         <span class="accuracy-badge low" style="border: 1px solid currentColor; margin-left: 0.5rem;">ENTROPY: 5.0 (LOW)</span>
+         <span class="accuracy-badge" style="background: #18181b; color: #a1a1aa; border: 1px solid #27272a; margin-left: 0.5rem;">PROFILE: FORMS_TABLES</span> <span class="accuracy-badge warning" style="border: 1px solid currentColor; margin-left: 0.5rem;">RESIL: 0.86</span>
+        </div>
+        <div class="status-pill">
+            <div id="metrics" style="font-size: 0.75rem; color: #71717a;">Analyzing...</div>
+            <div class="accuracy-badge success">96% Match</div>
+        </div>
+    </div>
+
+    <div class="toolbar">
+        <div class="view-toggle">
+            <button class="toggle-btn active" onclick="setView(event, 'diff')">Visual Diff</button>
+            <button class="toggle-btn" onclick="setView(event, 'side')">Side-by-Side</button>
+            <button class="toggle-btn" onclick="setView(event, 'raw')">Raw Output</button>
+        </div>
+        <div style="font-size: 0.75rem; color: #52525b;">Phase 35 Diagnostics</div>
+    </div>
+    
+    <div class="workspace">
+        <div class="sidebar">
+            <span class="sidebar-label">Source Document & Heatmap</span>
+            <div class="source-img-container" id="img-container">
+                <a href="../Example5_Table-combined-with-Plain-Text_7hdlmNFDk5.png" target="_blank"><img id="source-img" src="../Example5_Table-combined-with-Plain-Text_7hdlmNFDk5.png" alt="source" /></a>
+                <svg id="diag-svg" class="heatmap-overlay" viewBox="0 0 1000 1000" preserveAspectRatio="none"></svg>
+            </div>
+            
+            <div class="legend">
+                <div class="legend-item">
+                    <div class="legend-dot" style="background: #3b82f6;"></div>
+                    <span><b>Coerced</b>: Symbol snapped to column (|)</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-dot" style="background: #f59e0b;"></div>
+                    <span><b>Bridged</b>: Large gap reconstruction</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-dot" style="background: #ef4444;"></div>
+                    <span><b>Low Confidence</b>: High geometric jitter</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-dot entity-email" style="width: 12px; height: 12px; border-radius: 4px;">@</div>
+                    <span><b>Email</b>: Detected via patterns</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-dot entity-currency" style="width: 12px; height: 12px; border-radius: 4px;">$</div>
+                    <span><b>Currency</b>: Financial entities</span>
+                </div>
+            </div>
+
+            <div style="font-size: 0.7rem; color: #52525b; line-height: 1.4;">
+                Heatmap shows structural corrections. <br/>
+                Hover to brighten. Click to zoom.
+            </div>
+        </div>
+        
+        <div class="content-pane">
+            <!-- Visual Diff Pane -->
+            <div id="pane-diff" class="view-pane active">
+                <div id="diff-content" class="diff-layout"></div>
+            </div>
+            
+            <!-- Side-by-Side Sync Pane -->
+            <div id="pane-side" class="view-pane">
+                <div class="sync-layout">
+                    <div class="sync-column">
+                        <div class="sync-header">Baseline (Expected)</div>
+                        <div id="scroll-left" class="sync-scroll">README Code of conduct Contributing Apache-2.0 license      Security
+
+# Advanced Usage
+
+Multipart Uploads
+
+   gws drive files create --json ' {"name": "report. pdf"}' --upload . / report      . pdf
+
+# Pagination
+
+            Flag Description      Default
+
+   --page-all      Auto-paginate, one JSON line per page (NDJSON)      off
+
+   --page-limit &lt;N&gt;      Max pages to fetch      10
+
+   --page-delay &lt;MS&gt;      Delay between pages      100 ms
+
+# Google Sheets — Shell Escaping
+
+## Sheets ranges use ! which bash interprets as history expansion. Always wrap      values in single quotes:</div>
+                    </div>
+                    <div class="sync-column">
+                        <div class="sync-header">Latest Run (Actual)</div>
+                        <div id="scroll-right" class="sync-scroll">README Code of conduct Contributing Apache-2.0 license      Security
+
+# Advanced Usage
+
+Multipart Uploads
+
+   gws drive files create --json ' {"name": "report. pdf"}' --upload . / report      . pdf
+
+# Pagination
+
+            Flag Description      Default
+
+   --page-all      Auto-paginate, one JSON line per page (NDJSON)      off
+
+   --page-limit &lt;N&gt;      Max pages to fetch      10
+
+   --page-delay &lt;MS&gt;      Delay between pages      100 ms
+
+# Google Sheets — Shell Escaping
+
+## Sheets ranges use ! which bash interprets as history expansion. Always wrap      values in single quotes:</div>
+                        <div id="entities-view" style="margin-top: 1rem; padding: 0.5rem; background: #111; border: 1px solid #222; border-radius: 4px; font-size: 0.8rem; display:none;">
+                             <h4 style="margin:0 0 0.5rem 0; color:#52525b; font-size:0.7rem; text-transform:uppercase;">Entities Found</h4>
+                             <div id="entities-list"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Raw Pane -->
+            <div id="pane-raw" class="view-pane">
+                <div class="diff-layout" style="color: #a1a1aa;">README Code of conduct Contributing Apache-2.0 license      Security
+
+# Advanced Usage
+
+Multipart Uploads
+
+   gws drive files create --json ' {"name": "report. pdf"}' --upload . / report      . pdf
+
+# Pagination
+
+            Flag Description      Default
+
+   --page-all      Auto-paginate, one JSON line per page (NDJSON)      off
+
+   --page-limit &lt;N&gt;      Max pages to fetch      10
+
+   --page-delay &lt;MS&gt;      Delay between pages      100 ms
+
+# Google Sheets — Shell Escaping
+
+## Sheets ranges use ! which bash interprets as history expansion. Always wrap      values in single quotes:</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const diagnostics = null;
+        const expectedRaw = `README Code of conduct Contributing Apache-2.0 license      Security
+
+# Advanced Usage
+
+Multipart Uploads
+
+   gws drive files create --json ' {"name": "report. pdf"}' --upload . / report      . pdf
+
+# Pagination
+
+            Flag Description      Default
+
+   --page-all      Auto-paginate, one JSON line per page (NDJSON)      off
+
+   --page-limit <N>      Max pages to fetch      10
+
+   --page-delay <MS>      Delay between pages      100 ms
+
+# Google Sheets — Shell Escaping
+
+## Sheets ranges use ! which bash interprets as history expansion. Always wrap      values in single quotes:`;
+        const actualRaw = `README Code of conduct Contributing Apache-2.0 license      Security
+
+# Advanced Usage
+
+Multipart Uploads
+
+   gws drive files create --json ' {"name": "report. pdf"}' --upload . / report      . pdf
+
+# Pagination
+
+            Flag Description      Default
+
+   --page-all      Auto-paginate, one JSON line per page (NDJSON)      off
+
+   --page-limit <N>      Max pages to fetch      10
+
+   --page-delay <MS>      Delay between pages      100 ms
+
+# Google Sheets — Shell Escaping
+
+## Sheets ranges use ! which bash interprets as history expansion. Always wrap      values in single quotes:`;
+        const entities = [];
+
+        function applyEntityHighlights(text, entities) {
+            if (!entities || entities.length === 0) return text;
+            
+            // Sort entities in reverse order to not break offsets
+            const sorted = [...entities].sort((a, b) => b.start_offset - a.start_offset);
+            let result = text;
+            for (const e of sorted) {
+                const typeClass = `entity-${e.entity_type.toLowerCase()}`;
+                const before = result.substring(0, e.start_offset);
+                const after = result.substring(e.end_offset);
+                const tagged = `<mark class="entity ${typeClass}" title="${e.entity_type}">${e.value}</mark>`;
+                result = before + tagged + after;
+            }
+            return result;
+        }
+
+        window.onload = () => {
+            const img = document.getElementById('source-img');
+            const svg = document.getElementById('diag-svg');
+            
+            if (img.complete) initHeatmap();
+            else img.onload = initHeatmap;
+
+            function initHeatmap() {
+                if (!diagnostics) return;
+                const naturalW = img.naturalWidth;
+                const naturalH = img.naturalHeight;
+                svg.setAttribute('viewBox', `0 0 ${naturalW} ${naturalH}`);
+                
+                let svgHtml = '';
+                for (const d of diagnostics) {
+                    const title = d.confidence ? `Confidence: ${d.confidence}%` : d.text;
+                    svgHtml += `<rect x="${d.x}" y="${d.y}" width="${d.w}" height="${d.h}" class="heatmap-rect ${d.type}"><title>${title}</title></rect>`;
+                }
+                svg.innerHTML = svgHtml;
+            }
+        };
+
+        function setView(event, view) {
+            document.querySelectorAll('.view-pane').forEach(p => p.classList.remove('active'));
+            document.querySelectorAll('.toggle-btn').forEach(b => b.classList.remove('active'));
+            
+            document.getElementById('pane-' + view).classList.add('active');
+            event.target.classList.add('active');
+        }
+
+        // Word-Level Diffing (Myers LCS)
+        function computeWordDiff(s1, s2) {
+            // Split by words, preserving whitespace/newlines as individual tokens
+            const tokenize = (s) => s.split(/(\s+)/);
+            const words1 = tokenize(s1);
+            const words2 = tokenize(s2);
+            
+            let n = words1.length, m = words2.length;
+            let dp = Array.from({length: n + 1}, () => Array(m + 1).fill(0));
+            
+            for (let i = 1; i <= n; i++) {
+                for (let j = 1; j <= m; j++) {
+                    if (words1[i-1] === words2[j-1]) dp[i][j] = dp[i-1][j-1] + 1;
+                    else dp[i][j] = Math.max(dp[i-1][j], dp[i][j-1]);
+                }
+            }
+
+            let result = '';
+            let i = n, j = m;
+            let chunks = [];
+            let adds = 0, dels = 0;
+
+            while (i > 0 || j > 0) {
+                if (i > 0 && j > 0 && words1[i-1] === words2[j-1]) {
+                    chunks.push({type: 'equal', text: words1[i-1]});
+                    i--; j--;
+                } else if (j > 0 && (i === 0 || dp[i][j-1] >= dp[i-1][j])) {
+                    chunks.push({type: 'add', text: words2[j-1]});
+                    adds++;
+                    j--;
+                } else {
+                    chunks.push({type: 'del', text: words1[i-1]});
+                    dels++;
+                    i--;
+                }
+            }
+            
+            chunks.reverse();
+            const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br/>');
+            
+            let html = '';
+            for (let c of chunks) {
+                if (c.type === 'equal') html += `<span>${esc(c.text)}</span>`;
+                else if (c.type === 'add') html += `<span class="diff-add">${esc(c.text)}</span>`;
+                else html += `<span class="diff-del">${esc(c.text)}</span>`;
+            }
+            
+            document.getElementById('metrics').innerText = `Words: +${adds} -${dels}`;
+            return html;
+        }
+
+        // Synchronized Scrolling
+        const leftScroll = document.getElementById('scroll-left');
+        const rightScroll = document.getElementById('scroll-right');
+        
+        let isSyncingLeftScroll = false;
+        let isSyncingRightScroll = false;
+
+        leftScroll.onscroll = function() {
+            if (!isSyncingLeftScroll) {
+                isSyncingRightScroll = true;
+                rightScroll.scrollTop = leftScroll.scrollTop;
+            }
+            isSyncingLeftScroll = false;
+        };
+
+        rightScroll.onscroll = function() {
+            if (!isSyncingRightScroll) {
+                isSyncingLeftScroll = true;
+                leftScroll.scrollTop = rightScroll.scrollTop;
+            }
+            isSyncingRightScroll = false;
+        };
+
+        // Initialize
+        try {
+            document.getElementById('diff-content').innerHTML = computeWordDiff(expectedRaw, actualRaw);
+            
+            // Apply highlights to Side-by-Side Actual pane
+            const rightScroll = document.getElementById('scroll-right');
+            const rawActual = rightScroll.innerText;
+            rightScroll.innerHTML = applyEntityHighlights(rawActual, entities).replace(/\n/g, '<br/>');
+
+            if (entities.length > 0) {
+                const view = document.getElementById('entities-view');
+                const list = document.getElementById('entities-list');
+                view.style.display = 'block';
+                entities.forEach(e => {
+                    const pill = document.createElement('div');
+                    pill.className = `entity entity-${e.entity_type.toLowerCase()}`;
+                    pill.style.display = 'inline-block';
+                    pill.style.margin = '2px';
+                    pill.innerText = `${e.entity_type}: ${e.value}`;
+                    list.appendChild(pill);
+                });
+            }
+        } catch (e) {
+            document.getElementById('diff-content').innerText = "Error: " + e.message;
+        }
+    </script>
+</body>
+</html>

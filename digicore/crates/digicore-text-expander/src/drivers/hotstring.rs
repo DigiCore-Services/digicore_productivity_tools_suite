@@ -31,15 +31,18 @@ const VK_TAB: u16 = 0x09;
 const VK_RETURN: u16 = 0x0D;
 const VK_SPACE: u16 = 0x20;
 const VK_ESCAPE: u16 = 0x1B;
+const VK_V: u16 = 0x56;
 
 /// Shared state for hotstring listener.
 struct HotstringState {
     library: HashMap<String, Vec<Snippet>>,
     buffer: String,
-    input: EnigoInputAdapter,
-    clipboard: Box<dyn ClipboardPort>,
+    input: Arc<EnigoInputAdapter>,
+    clipboard: Arc<dyn ClipboardPort>,
     window: WindowsWindowAdapter,
     corpus_service: Option<Arc<crate::application::corpus_generator::CorpusService>>,
+    transformer_service: crate::application::transformer_service::TransformerService,
+    trie_matcher: Option<crate::application::trie_matcher::TrieMatcher>,
 }
 
 static HOTSTRING_STATE: Mutex<Option<Arc<Mutex<HotstringState>>>> = Mutex::new(None);
@@ -49,18 +52,25 @@ static HOTSTRING_STATE: Mutex<Option<Arc<Mutex<HotstringState>>>> = Mutex::new(N
 pub fn start_listener(
     library: HashMap<String, Vec<Snippet>>,
     corpus_service: Option<Arc<crate::application::corpus_generator::CorpusService>>,
+    clipboard_repo: Option<Arc<dyn digicore_core::domain::ports::clipboard_repository::ClipboardRepository>>,
 ) -> anyhow::Result<()> {
     if windows_keyboard::is_listener_running() {
         return Ok(());
     }
 
-    let input = EnigoInputAdapter::new()?;
+    let input = Arc::new(EnigoInputAdapter::new()?);
     #[cfg(target_os = "windows")]
-    let clipboard: Box<dyn ClipboardPort> = Box::new(digicore_core::adapters::platform::clipboard_windows::WindowsRichClipboardAdapter::new());
+    let clipboard: Arc<dyn ClipboardPort> = Arc::new(digicore_core::adapters::platform::clipboard_windows::WindowsRichClipboardAdapter::new());
     #[cfg(not(target_os = "windows"))]
-    let clipboard: Box<dyn ClipboardPort> = Box::new(ArboardClipboardAdapter::new()?);
+    let clipboard: Arc<dyn ClipboardPort> = Arc::new(ArboardClipboardAdapter::new()?);
+    
+    let transformer_service = crate::application::transformer_service::TransformerService::new(
+        clipboard.clone(),
+        input.clone(),
+    );
 
     let library_clone = library.clone();
+    let snippets: Vec<Snippet> = library_clone.values().flatten().cloned().collect();
     let state = Arc::new(Mutex::new(HotstringState {
         library,
         buffer: String::new(),
@@ -68,6 +78,8 @@ pub fn start_listener(
         clipboard,
         window: WindowsWindowAdapter::new(),
         corpus_service,
+        transformer_service,
+        trie_matcher: Some(crate::application::trie_matcher::TrieMatcher::new(&snippets)),
     }));
 
     *HOTSTRING_STATE.lock().unwrap() = Some(state.clone());
@@ -77,6 +89,7 @@ pub fn start_listener(
     ghost_follower::start(ghost_follower::GhostFollowerConfig::default(), library_clone);
     crate::application::clipboard_history::start(
         crate::application::clipboard_history::ClipboardHistoryConfig::default(),
+        clipboard_repo,
     );
 
     let callback = Box::new(move |vk_code: u16, ch: Option<char>| on_key(state.clone(), vk_code, ch));
@@ -245,6 +258,8 @@ pub fn update_library(library: HashMap<String, Vec<Snippet>>) {
     if let Ok(guard) = HOTSTRING_STATE.lock() {
         if let Some(ref state) = *guard {
             if let Ok(mut s) = state.lock() {
+                let snippets: Vec<Snippet> = library.values().flatten().cloned().collect();
+                s.trie_matcher = Some(crate::application::trie_matcher::TrieMatcher::new(&snippets));
                 s.library = library;
             }
         }
@@ -409,6 +424,16 @@ fn on_key(state: Arc<Mutex<HotstringState>>, vk_code: u16, ch: Option<char>) -> 
         return false;
     }
 
+    let is_ctrl = windows_keyboard::is_ctrl_pressed();
+    let is_shift = windows_keyboard::is_shift_pressed();
+    let is_alt = windows_keyboard::is_alt_pressed();
+
+    // F22: Clip Transformer Service - Ctrl+Shift+V for plain text paste
+    if vk_code == VK_V && is_ctrl && is_shift && !is_alt {
+        let _ = guard.transformer_service.paste_plain_text();
+        return true; // Consume
+    }
+
     if let Some(ref service) = guard.corpus_service {
         let is_ctrl = windows_keyboard::is_ctrl_pressed();
         let is_alt = windows_keyboard::is_alt_pressed();
@@ -474,7 +499,7 @@ fn on_key(state: Arc<Mutex<HotstringState>>, vk_code: u16, ch: Option<char>) -> 
 
         // Check for trigger match using TriggerMatcher
         let process_name = guard.window.get_active().map(|c| c.process_name.clone()).unwrap_or_default();
-        if let Some(res) = crate::application::trigger_matcher::TriggerMatcher::find_match(&guard.library, &guard.buffer, &process_name) {
+        if let Some(res) = crate::application::trigger_matcher::TriggerMatcher::find_match(&guard.library, guard.trie_matcher.as_ref(), &guard.buffer, &process_name) {
             let snippet = res.snippet;
             expansion_diagnostics::push(
                 "info",
@@ -484,9 +509,14 @@ fn on_key(state: Arc<Mutex<HotstringState>>, vk_code: u16, ch: Option<char>) -> 
             let trigger_len = res.trigger_length;
             let mut content = snippet.content.clone();
             
-            // Expand regex captures if present
+            // 1. Expand regex captures if present
             if let Some(caps) = res.captures {
                 content = crate::application::trigger_matcher::TriggerMatcher::expand_captures(&content, &caps);
+            }
+
+            // 2. Apply case-adaptive transformation if enabled
+            if snippet.case_adaptive {
+                content = crate::application::trigger_matcher::TriggerMatcher::apply_case(&content, res.matched_case);
             }
 
             if variable_input::has_interactive_vars(&content) {
@@ -650,10 +680,11 @@ fn expand_suggestion(state: Arc<Mutex<HotstringState>>, trigger_len: usize, cont
 pub fn find_snippet<'a>(
     library: &'a HashMap<String, Vec<Snippet>>,
     buffer: &str,
-    window: &WindowsWindowAdapter,
+    window: &dyn digicore_core::domain::ports::WindowContextPort,
 ) -> Option<crate::application::trigger_matcher::MatchResult<'a>> {
     let ctx = window.get_active().ok()?;
-    crate::application::trigger_matcher::TriggerMatcher::find_match(library, buffer, &ctx.process_name)
+    // For simple UI/test calls we don't always have the trie, so pass None
+    crate::application::trigger_matcher::TriggerMatcher::find_match(library, None, buffer, &ctx.process_name)
 }
 
 /// Fallback: map virtual key code to char for US QWERTY (no Shift).
@@ -688,8 +719,9 @@ pub(crate) fn vk_to_char_fallback(vk: u16) -> Option<char> {
 
 #[cfg(test)]
 mod tests {
-    use super::{find_snippet_for_process, vk_to_char_fallback};
+    use super::{find_snippet, vk_to_char_fallback};
     use digicore_core::domain::Snippet;
+    use digicore_core::adapters::platform::window::WindowsWindowAdapter;
     use std::collections::HashMap;
 
     #[test]
@@ -758,11 +790,10 @@ mod tests {
         let mut library = HashMap::new();
         library.insert("Cat".to_string(), vec![snip]);
 
-        let result = find_snippet_for_process(&library, "sig", "chrome.exe");
+        let result = find_snippet(&library, "sig", &WindowsWindowAdapter::mock("chrome.exe", ""));
         assert!(result.is_none());
     }
 
-    #[test]
     #[test]
     fn test_find_snippet_app_lock_multi_allowed() {
         let mut snip = Snippet::new("sig", "Best regards");

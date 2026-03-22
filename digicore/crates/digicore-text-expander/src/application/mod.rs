@@ -17,4 +17,6 @@ pub mod template_processor;
 pub mod variable_input;
 pub mod corpus_generator;
 pub mod trigger_matcher;
+pub mod trie_matcher;
+pub mod transformer_service;
 
