@@ -34,6 +34,7 @@ pub enum ClipViewContent {
         profile: String,
         app_lock: String,
         pinned: bool,
+        case_sensitive: bool,
     },
 }
 
@@ -199,6 +200,10 @@ pub struct AppState {
     pub snippet_editor_save_clicked: bool,
     pub snippet_editor_modal_open: bool,
     pub snippet_editor_template_selected: usize,
+    pub snippet_editor_case_adaptive: bool,
+    pub snippet_editor_case_sensitive: bool,
+    pub snippet_editor_smart_suffix: bool,
+    pub snippet_editor_is_sensitive: bool,
 
     // Delete confirmation
     pub snippet_delete_confirm: Option<(String, usize)>,
@@ -226,6 +231,9 @@ pub struct AppState {
     pub snippet_test_var_pending: Option<SnippetTestVarState>,
     pub snippet_test_result_modal_open: bool,
     pub snippet_test_var_modal_open: bool,
+
+    // Ports
+    pub crypto: Option<Box<dyn crate::ports::CryptoPort>>,
 }
 
 impl Default for AppState {
@@ -350,6 +358,10 @@ impl Default for AppState {
             snippet_editor_save_clicked: false,
             snippet_editor_modal_open: false,
             snippet_editor_template_selected: 0,
+            snippet_editor_case_adaptive: true,
+            snippet_editor_case_sensitive: false,
+            snippet_editor_smart_suffix: true,
+            snippet_editor_is_sensitive: false,
             snippet_delete_confirm: None,
             snippet_delete_dialog_open: false,
             library_search: String::new(),
@@ -367,6 +379,7 @@ impl Default for AppState {
             snippet_test_var_pending: None,
             snippet_test_result_modal_open: false,
             snippet_test_var_modal_open: false,
+            crypto: None,
         }
     }
 }
@@ -389,7 +402,21 @@ impl AppState {
         }
         let path = Path::new(&self.library_path);
         let repo = JsonLibraryAdapter;
-        let library = repo.load(path)?;
+        let mut library = repo.load(path)?;
+
+        // Decrypt sensitive snippets if crypto port available
+        if let Some(ref crypto) = self.crypto {
+            for snippets in library.values_mut() {
+                for snip in snippets {
+                    if snip.is_sensitive {
+                        if let Some(decrypted) = crypto.decrypt_local(&snip.content) {
+                            snip.content = decrypted;
+                        }
+                    }
+                }
+            }
+        }
+
         self.library = library;
         self.normalize_library_by_snippet_category();
         self.selected_category = None;
@@ -409,11 +436,25 @@ impl AppState {
         }
         let path = Path::new(&self.library_path);
         let repo = JsonLibraryAdapter;
-        let library = if self.library.is_empty() {
+        let mut library = if self.library.is_empty() {
             repo.load(path)?
         } else {
             self.library.clone()
         };
+
+        // Encrypt sensitive snippets if crypto port available
+        if let Some(ref crypto) = self.crypto {
+            for snippets in library.values_mut() {
+                for snip in snippets {
+                    if snip.is_sensitive && !snip.content.starts_with("ENC:") {
+                        if let Ok(encrypted) = crypto.encrypt_local(&snip.content) {
+                            snip.content = encrypted;
+                        }
+                    }
+                }
+            }
+        }
+
         repo.save(path, &library)?;
         Ok(())
     }
