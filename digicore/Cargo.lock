@@ -1898,6 +1898,7 @@ dependencies = [
  "arboard",
  "async-trait",
  "base64 0.22.1",
+ "chrono",
  "enigo",
  "reqwest 0.12.28",
  "ring",
@@ -1913,6 +1914,7 @@ dependencies = [
 name = "digicore-text-expander"
 version = "0.1.0"
 dependencies = [
+ "aho-corasick",
  "anyhow",
  "arboard",
  "async-trait",
@@ -1933,6 +1935,7 @@ dependencies = [
  "regex",
  "reqwest 0.12.28",
  "rfd 0.17.2",
+ "rusqlite",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -7805,6 +7808,7 @@ version = "2.0.0-rc.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ab7f01e9310a820edd31c80fde3cae445295adde21a3f9416517d7d65015b971"
 dependencies = [
+ "chrono",
  "ctor",
  "paste",
  "specta-macros",

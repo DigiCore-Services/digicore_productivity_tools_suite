@@ -44,6 +44,24 @@ pub struct Snippet {
     pub pinned: String,
     #[serde(default, rename = "lastModified")]
     pub last_modified: String,
+    #[serde(default = "default_case_adaptive")]
+    pub case_adaptive: bool,
+    #[serde(default)]
+    pub case_sensitive: bool,
+    #[serde(default)]
+    pub smart_suffix: bool,
+    #[serde(default)]
+    pub is_sensitive: bool,
+}
+
+#[allow(dead_code)]
+fn default_case_adaptive() -> bool {
+    true
+}
+
+#[allow(dead_code)]
+fn default_smart_suffix() -> bool {
+    true
 }
 
 impl Snippet {
@@ -61,6 +79,10 @@ impl Snippet {
             app_lock: String::new(),
             pinned: "false".into(),
             last_modified: String::new(),
+            case_adaptive: true,
+            case_sensitive: false,
+            smart_suffix: true,
+            is_sensitive: false,
         }
     }
 
