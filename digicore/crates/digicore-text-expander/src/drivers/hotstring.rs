@@ -127,7 +127,7 @@ pub fn request_expansion_with_target(content: String, target_hwnd: Option<isize>
 /// Request expansion from Ghost Follower double-click. Restores focus to the target
 /// window (Sublime, Outlook, etc.) before pasting so content inserts at cursor.
 pub fn request_expansion_from_ghost_follower(content: String) {
-    let mut target_hwnd = ghost_follower::take_target_hwnd();
+    let mut target_hwnd = ghost_follower::take_target_hwnd_global();
     #[cfg(target_os = "windows")]
     if let Some(hwnd) = target_hwnd {
         if !crate::platform::windows_window::is_valid_external_hwnd(hwnd) {
@@ -353,9 +353,9 @@ pub fn sync_ghost_config(config: GhostConfig) {
             2 => ghost_follower::MonitorAnchor::Current,
             _ => ghost_follower::MonitorAnchor::Primary,
         },
-        search_filter: config.follower_search,
         hover_preview: config.follower_hover_preview,
         collapse_delay_secs: config.follower_collapse_delay_secs,
+        ..ghost_follower::GhostFollowerConfig::default()
     });
 }
 

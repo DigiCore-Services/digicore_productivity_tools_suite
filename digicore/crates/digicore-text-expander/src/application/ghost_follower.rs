@@ -5,11 +5,13 @@
 
 use digicore_core::domain::Snippet;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
+use once_cell::sync::Lazy;
+
+static GLOBAL_STATE: Lazy<Mutex<Option<GhostFollowerState>>> = Lazy::new(|| Mutex::new(None));
 
 /// Edge to anchor the ribbon (F48).
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum FollowerEdge {
     Left,
     Right,
@@ -22,7 +24,7 @@ impl Default for FollowerEdge {
 }
 
 /// Monitor to anchor the ribbon (F49: multi-monitor).
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum MonitorAnchor {
     /// Primary monitor.
     Primary,
@@ -38,8 +40,34 @@ impl Default for MonitorAnchor {
     }
 }
 
+/// Feature Mode: Edge-Anchored vs Floating Bubble.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum FollowerMode {
+    EdgeAnchored,
+    FloatingBubble,
+}
+
+impl Default for FollowerMode {
+    fn default() -> Self {
+        Self::EdgeAnchored
+    }
+}
+
+/// Expansion Trigger: Click vs Hover.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum ExpandTrigger {
+    Click,
+    Hover,
+}
+
+impl Default for ExpandTrigger {
+    fn default() -> Self {
+        Self::Click
+    }
+}
+
 /// Ghost Follower configuration.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct GhostFollowerConfig {
     /// Enable/disable.
     pub enabled: bool,
@@ -47,12 +75,22 @@ pub struct GhostFollowerConfig {
     pub edge: FollowerEdge,
     /// Monitor to anchor (F49).
     pub monitor_anchor: MonitorAnchor,
-    /// Search filter (F51).
-    pub search_filter: String,
-    /// F53: Show full content on hover.
-    pub hover_preview: bool,
+    /// Feature Mode (Edge vs Bubble).
+    pub mode: FollowerMode,
+    /// Expansion Trigger (Click vs Hover).
+    pub expand_trigger: ExpandTrigger,
+    /// Delay before auto-expanding on hover (ms).
+    pub expand_delay_ms: u64,
     /// F54-F55: Collapse to pill after delay (seconds). 0 = disabled.
     pub collapse_delay_secs: u64,
+    /// F53: Show full content on hover.
+    pub hover_preview: bool,
+    /// Maximum clipboard entries to display in follower.
+    pub clipboard_depth: usize,
+    /// Opacity (0-100).
+    pub opacity: u32,
+    /// Saved window position.
+    pub position: Option<(i32, i32)>,
 }
 
 impl Default for GhostFollowerConfig {
@@ -61,40 +99,97 @@ impl Default for GhostFollowerConfig {
             enabled: true,
             edge: FollowerEdge::Right,
             monitor_anchor: MonitorAnchor::Primary,
-            search_filter: String::new(),
-            hover_preview: true,
+            mode: FollowerMode::EdgeAnchored,
+            expand_trigger: ExpandTrigger::Click,
+            expand_delay_ms: 500,
             collapse_delay_secs: 5,
+            hover_preview: true,
+            clipboard_depth: 20,
+            opacity: 100,
+            position: None,
         }
     }
 }
 
-/// Ghost Follower state.
-struct FollowerState {
-    config: GhostFollowerConfig,
-    library: HashMap<String, Vec<Snippet>>,
-    /// Pinned snippets only (F50). (snippet, category, snippet_idx)
-    pinned: Vec<(Snippet, String, usize)>,
+/// Ghost Follower runtime state.
+#[derive(Clone, Debug)]
+pub struct GhostFollowerState {
+    pub config: GhostFollowerConfig,
+    pub collapsed: bool,
+    pub search_filter: String,
+    pub last_active: Option<std::time::Instant>,
+    pub last_target_hwnd: Option<isize>,
+    /// Pinned snippets cache. (snippet, category, snippet_idx)
+    pub pinned: Vec<(Snippet, String, usize)>,
 }
 
-static FOLLOWER_STATE: Mutex<Option<Arc<Mutex<FollowerState>>>> = Mutex::new(None);
-static FOLLOWER_ENABLED: AtomicBool = AtomicBool::new(false);
-static FOLLOWER_SEARCH: Mutex<String> = Mutex::new(String::new());
-static FOLLOWER_COLLAPSED: Mutex<bool> = Mutex::new(false);
-static FOLLOWER_LAST_ACTIVE: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+impl GhostFollowerState {
+    pub fn new(config: GhostFollowerConfig, library: &HashMap<String, Vec<Snippet>>) -> Self {
+        let pinned = collect_pinned(library);
+        Self {
+            config,
+            collapsed: true,
+            search_filter: String::new(),
+            last_active: None,
+            last_target_hwnd: None,
+            pinned,
+        }
+    }
 
-/// Last foreground window before user interacted with Ghost Follower (for insert-at-cursor).
-#[cfg(target_os = "windows")]
-static FOLLOWER_LAST_TARGET_HWND: Mutex<Option<isize>> = Mutex::new(None);
+    pub fn update_library(&mut self, library: &HashMap<String, Vec<Snippet>>) {
+        self.pinned = collect_pinned(library);
+    }
 
-/// Capture the current foreground window as the insert target. Call when mouse enters
-/// Ghost Follower while it does not have focus (user moving from target app).
+    pub fn update_config(&mut self, config: GhostFollowerConfig) {
+        self.config = config;
+    }
+
+    pub fn touch(&mut self) {
+        self.last_active = Some(std::time::Instant::now());
+    }
+
+    pub fn should_collapse(&self) -> bool {
+        let delay = self.config.collapse_delay_secs;
+        if delay == 0 || self.collapsed {
+            return false;
+        }
+        let Some(last) = self.last_active else {
+            return false;
+        };
+        last.elapsed() >= std::time::Duration::from_secs(delay)
+    }
+}
+
+/// Global entry points for drivers (hotstring.rs) that don't have access to AppState.
+/// These synchronize with the state managed by the host app.
+
+pub fn start(config: GhostFollowerConfig, library: HashMap<String, Vec<Snippet>>) {
+    let mut guard = GLOBAL_STATE.lock().unwrap();
+    *guard = Some(GhostFollowerState::new(config, &library));
+}
+
+pub fn update_library(library: HashMap<String, Vec<Snippet>>) {
+    if let Ok(mut guard) = GLOBAL_STATE.lock() {
+        if let Some(state) = guard.as_mut() {
+            state.update_library(&library);
+        }
+    }
+}
+
+pub fn update_config(config: GhostFollowerConfig) {
+    if let Ok(mut guard) = GLOBAL_STATE.lock() {
+        if let Some(state) = guard.as_mut() {
+            state.update_config(config);
+        }
+    }
+}
+
+/// Capture the current foreground window as the insert target.
 #[cfg(target_os = "windows")]
-pub fn capture_target_window() {
+pub fn capture_target_window(state: &mut GhostFollowerState) {
     let fg = crate::platform::windows_window::describe_foreground_window();
     if let Some(hwnd) = crate::platform::windows_window::capture_strict_external_foreground_hwnd() {
-        if let Ok(mut guard) = FOLLOWER_LAST_TARGET_HWND.lock() {
-            *guard = Some(hwnd);
-        }
+        state.last_target_hwnd = Some(hwnd);
         let captured = crate::platform::windows_window::describe_hwnd(hwnd);
         log::debug!(
             "[GhostFollowerTarget] capture_target_window: foreground={} captured={}",
@@ -108,19 +203,26 @@ pub fn capture_target_window() {
     }
 }
 
+/// Global wrapper for capture_target_window.
+pub fn capture_target_window_global() {
+    if let Ok(mut guard) = GLOBAL_STATE.lock() {
+        if let Some(state) = guard.as_mut() {
+            capture_target_window(state);
+        }
+    }
+}
+
 #[cfg(not(target_os = "windows"))]
-pub fn capture_target_window() {}
+pub fn capture_target_window(_state: &mut GhostFollowerState) {}
 
 /// Capture target window for tray/quick-search launch where foreground is often tray UI.
 #[cfg(target_os = "windows")]
-pub fn capture_target_window_for_quick_search_launch() {
+pub fn capture_target_window_for_quick_search_launch(state: &mut GhostFollowerState) {
     let fg = crate::platform::windows_window::describe_foreground_window();
     if let Some(hwnd) =
         crate::platform::windows_window::capture_recent_external_foreground_hwnd(1500)
     {
-        if let Ok(mut guard) = FOLLOWER_LAST_TARGET_HWND.lock() {
-            *guard = Some(hwnd);
-        }
+        state.last_target_hwnd = Some(hwnd);
         let captured = crate::platform::windows_window::describe_hwnd(hwnd);
         log::debug!(
             "[QuickSearchTarget] capture_for_launch: foreground={} captured={}",
@@ -135,88 +237,30 @@ pub fn capture_target_window_for_quick_search_launch() {
 }
 
 #[cfg(not(target_os = "windows"))]
-pub fn capture_target_window_for_quick_search_launch() {}
+pub fn capture_target_window_for_quick_search_launch(_state: &mut GhostFollowerState) {}
 
-/// Take the stored target window for insert. Returns None if not captured.
-#[cfg(target_os = "windows")]
-pub fn take_target_hwnd() -> Option<isize> {
-    if let Ok(mut guard) = FOLLOWER_LAST_TARGET_HWND.lock() {
-        guard.take()
-    } else {
-        None
+/// Global wrapper for capture_target_window_for_quick_search_launch.
+pub fn capture_target_window_for_quick_search_launch_global() {
+    if let Ok(mut guard) = GLOBAL_STATE.lock() {
+        if let Some(state) = guard.as_mut() {
+            capture_target_window_for_quick_search_launch(state);
+        }
     }
 }
 
-#[cfg(not(target_os = "windows"))]
-pub fn take_target_hwnd() -> Option<isize> {
+/// Take the stored target window for insert. Returns None if not captured.
+pub fn take_target_hwnd_global() -> Option<isize> {
+    if let Ok(mut guard) = GLOBAL_STATE.lock() {
+        if let Some(ref mut state) = *guard {
+            return state.last_target_hwnd.take();
+        }
+    }
     None
 }
 
-/// Start Ghost Follower with config and library.
-pub fn start(config: GhostFollowerConfig, library: HashMap<String, Vec<Snippet>>) {
-    log::info!(
-        "[GhostFollower] start: enabled={}, pinned_count={}",
-        config.enabled,
-        collect_pinned(&library).len()
-    );
-    FOLLOWER_ENABLED.store(config.enabled, Ordering::SeqCst);
-    let pinned = collect_pinned(&library);
-    *FOLLOWER_STATE.lock().unwrap() = Some(Arc::new(Mutex::new(FollowerState {
-        config,
-        library,
-        pinned,
-    })));
-}
-
-/// Stop Ghost Follower.
-pub fn stop() {
-    FOLLOWER_ENABLED.store(false, Ordering::SeqCst);
-    *FOLLOWER_STATE.lock().unwrap() = None;
-}
-
-/// Update library and recompute pinned list.
-pub fn update_library(library: HashMap<String, Vec<Snippet>>) {
-    if let Ok(guard) = FOLLOWER_STATE.lock() {
-        if let Some(ref state) = *guard {
-            if let Ok(mut s) = state.lock() {
-                s.library = library;
-                s.pinned = collect_pinned(&s.library);
-            }
-        }
-    }
-}
-
-/// Update config.
-pub fn update_config(config: GhostFollowerConfig) {
-    log::info!(
-        "[GhostFollower] update_config: enabled={}, edge={:?}, monitor={:?}",
-        config.enabled,
-        config.edge,
-        config.monitor_anchor
-    );
-    FOLLOWER_ENABLED.store(config.enabled, Ordering::SeqCst);
-    if let Ok(guard) = FOLLOWER_STATE.lock() {
-        if let Some(ref state) = *guard {
-            if let Ok(mut s) = state.lock() {
-                s.config = config;
-                s.pinned = collect_pinned(&s.library);
-            }
-        }
-    }
-}
-
-/// Get config for UI (hover_preview, collapse_delay).
-pub fn get_config() -> GhostFollowerConfig {
-    let guard = match FOLLOWER_STATE.lock() {
-        Ok(g) => g,
-        Err(_) => return GhostFollowerConfig::default(),
-    };
-    let state = match guard.as_ref() {
-        Some(s) => s.clone(),
-        None => return GhostFollowerConfig::default(),
-    };
-    drop(guard);
-    state.lock().map(|s| s.config.clone()).unwrap_or_default()
+/// Take the stored target window for insert from instance state.
+pub fn take_target_hwnd(state: &mut GhostFollowerState) -> Option<isize> {
+    state.last_target_hwnd.take()
 }
 
 fn collect_pinned(library: &HashMap<String, Vec<Snippet>>) -> Vec<(Snippet, String, usize)> {
@@ -239,27 +283,12 @@ pub fn get_clipboard_entries() -> Vec<digicore_core::domain::entities::clipboard
 
 /// Get pinned snippets for display, filtered by search (F50, F51).
 /// Returns (Snippet, category, snippet_idx).
-pub fn get_pinned_snippets(filter: &str) -> Vec<(Snippet, String, usize)> {
-    let guard = match FOLLOWER_STATE.lock() {
-        Ok(g) => g,
-        Err(_) => return vec![],
-    };
-    let state = match guard.as_ref() {
-        Some(s) => s.clone(),
-        None => return vec![],
-    };
-    drop(guard);
-
-    let s = match state.lock() {
-        Ok(s) => s,
-        Err(_) => return vec![],
-    };
-
+pub fn get_pinned_snippets(state: &GhostFollowerState, filter: &str) -> Vec<(Snippet, String, usize)> {
     let filter_lower = filter.to_lowercase();
     if filter_lower.is_empty() {
-        return s.pinned.clone();
+        return state.pinned.clone();
     }
-    s.pinned
+    state.pinned
         .iter()
         .filter(|(snip, cat, _)| {
             snip.trigger.to_lowercase().contains(&filter_lower)
@@ -270,63 +299,10 @@ pub fn get_pinned_snippets(filter: &str) -> Vec<(Snippet, String, usize)> {
         .collect()
 }
 
-/// Check if Ghost Follower is enabled.
-pub fn is_enabled() -> bool {
-    FOLLOWER_ENABLED.load(Ordering::SeqCst)
-}
-
-/// Get current search filter (F51).
-pub fn get_search_filter() -> String {
-    FOLLOWER_SEARCH
-        .lock()
-        .map(|g| g.clone())
-        .unwrap_or_default()
-}
-
-/// Set search filter (F51).
-pub fn set_search_filter(filter: &str) {
-    if let Ok(mut s) = FOLLOWER_SEARCH.lock() {
-        *s = filter.to_string();
-    }
-}
-
-/// F54: Check if ribbon is collapsed.
-pub fn is_collapsed() -> bool {
-    FOLLOWER_COLLAPSED.lock().map(|g| *g).unwrap_or(false)
-}
-
-/// F54: Set collapsed state.
-pub fn set_collapsed(collapsed: bool) {
-    if let Ok(mut g) = FOLLOWER_COLLAPSED.lock() {
-        *g = collapsed;
-    }
-}
-
-/// F55: Notify user activity (reset collapse timer).
-pub fn touch() {
-    if let Ok(mut g) = FOLLOWER_LAST_ACTIVE.lock() {
-        *g = Some(std::time::Instant::now());
-    }
-}
-
-/// F55: Check if should collapse (no activity for delay).
-pub fn should_collapse(delay_secs: u64) -> bool {
-    if delay_secs == 0 {
-        return false;
-    }
-    let last = FOLLOWER_LAST_ACTIVE.lock().ok().and_then(|g| *g);
-    let Some(last) = last else {
-        touch();
-        return false;
-    };
-    last.elapsed() >= std::time::Duration::from_secs(delay_secs)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use digicore_core::domain::Snippet;
-    use serial_test::serial;
     use std::collections::HashMap;
 
     #[test]
@@ -337,38 +313,30 @@ mod tests {
     }
 
     #[test]
-    #[serial]
-    fn test_start_stop() {
-        stop();
-        assert!(!is_enabled());
+    fn test_state_lifecycle() {
         let mut library = HashMap::new();
         let mut snip = Snippet::new("sig", "Best regards");
         snip.pinned = "true".to_string();
         library.insert("Cat".to_string(), vec![snip]);
-        start(GhostFollowerConfig::default(), library);
-        assert!(is_enabled());
-        let pinned = get_pinned_snippets("");
+        
+        let mut state = GhostFollowerState::new(GhostFollowerConfig::default(), &library);
+        assert!(state.config.enabled);
+        let pinned = get_pinned_snippets(&state, "");
         assert_eq!(pinned.len(), 1);
         assert_eq!(pinned[0].0.trigger, "sig");
-        stop();
-        assert!(!is_enabled());
     }
 
     #[test]
-    #[serial]
     fn test_search_filter() {
-        stop();
         let mut library = HashMap::new();
         let mut snip = Snippet::new("sig", "Best regards");
         snip.pinned = "true".to_string();
         library.insert("Cat".to_string(), vec![snip]);
-        start(GhostFollowerConfig::default(), library);
-        set_search_filter("sig");
-        let pinned = get_pinned_snippets(&get_search_filter());
+        
+        let state = GhostFollowerState::new(GhostFollowerConfig::default(), &library);
+        let pinned = get_pinned_snippets(&state, "sig");
         assert_eq!(pinned.len(), 1);
-        set_search_filter("xyz");
-        let pinned = get_pinned_snippets(&get_search_filter());
+        let pinned = get_pinned_snippets(&state, "xyz");
         assert_eq!(pinned.len(), 0);
-        stop();
     }
 }

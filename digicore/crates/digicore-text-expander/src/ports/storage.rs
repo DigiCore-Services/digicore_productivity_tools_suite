@@ -33,6 +33,10 @@ pub mod keys {
     pub const GHOST_FOLLOWER_MONITOR_ANCHOR: &str = "ghost_follower_monitor_anchor";
     pub const GHOST_FOLLOWER_HOVER_PREVIEW: &str = "ghost_follower_hover_preview";
     pub const GHOST_FOLLOWER_COLLAPSE_DELAY_SECS: &str = "ghost_follower_collapse_delay_secs";
+    pub const GHOST_FOLLOWER_MODE: &str = "ghost_follower_mode";
+    pub const GHOST_FOLLOWER_EXPAND_TRIGGER: &str = "ghost_follower_expand_trigger";
+    pub const GHOST_FOLLOWER_EXPAND_DELAY_MS: &str = "ghost_follower_expand_delay_ms";
+    pub const GHOST_FOLLOWER_CLIPBOARD_DEPTH: &str = "ghost_follower_clipboard_depth";
     pub const GHOST_FOLLOWER_OPACITY: &str = "ghost_follower_opacity";
     pub const GHOST_FOLLOWER_POSITION_X: &str = "ghost_follower_position_x";
     pub const GHOST_FOLLOWER_POSITION_Y: &str = "ghost_follower_position_y";
