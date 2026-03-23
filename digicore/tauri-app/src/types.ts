@@ -25,6 +25,7 @@ export interface AppState {
   status: string;
   sync_url: string;
   sync_status: string;
+  expansion_log_path: string;
   expansion_paused: boolean;
   template_date_format: string;
   template_time_format: string;

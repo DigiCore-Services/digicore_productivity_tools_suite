@@ -46,6 +46,7 @@ use tauri_plugin_sql::{Migration, MigrationKind};
 #[taurpc::ipc_type]
 pub struct AppStateDto {
     pub library_path: String,
+    pub expansion_log_path: String,
     pub kms_vault_path: String,
     pub library: HashMap<String, Vec<Snippet>>,
     pub categories: Vec<String>,
@@ -169,6 +170,7 @@ fn sync_result_to_string(r: &SyncResult) -> String {
 fn app_state_to_dto(state: &AppState) -> AppStateDto {
     AppStateDto {
         library_path: state.library_path.clone(),
+        expansion_log_path: state.expansion_log_path.clone(),
         kms_vault_path: state.kms_vault_path.clone(),
         library: state.library.clone(),
         categories: state.categories.clone(),
@@ -453,6 +455,10 @@ fn init_app_state_from_storage() -> AppState {
     state.discovery_excluded_window_titles = discovery_excluded_window_titles;
 
     if let Some(v) = storage.get(storage_keys::LIBRARY_PATH) { state.library_path = v.to_string(); }
+    if let Some(v) = storage.get(storage_keys::EXPANSION_LOG_PATH) { 
+        state.expansion_log_path = v.to_string(); 
+        digicore_text_expander::application::expansion_logger::set_log_path(v.to_string());
+    }
     if let Some(v) = storage.get(storage_keys::KMS_VAULT_PATH) { state.kms_vault_path = v.to_string(); }
 
     state.corpus_enabled = storage.get(storage_keys::CORPUS_ENABLED).map(|v| v == "true").unwrap_or(state.corpus_enabled);
@@ -1353,6 +1359,7 @@ pub struct UiPrefsDto {
 #[derive(Default)]
 pub struct ConfigUpdateDto {
     pub library_path: Option<String>,
+    pub expansion_log_path: Option<String>,
     pub kms_vault_path: Option<String>,
     pub expansion_paused: Option<bool>,
     pub template_date_format: Option<String>,

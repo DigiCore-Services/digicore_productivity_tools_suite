@@ -88,6 +88,7 @@ const SETTINGS_GROUP_OPTIONS = [
   { id: "ghost_follower", label: "Ghost Follower" },
   { id: "clipboard_history", label: "Clipboard History" },
   { id: "copy_to_clipboard", label: "Copy-to-Clipboard" },
+  { id: "text_expansion", label: "Text Expansion" },
   { id: "core", label: "Core" },
   { id: "script_runtime", label: "Script Runtime" },
   { id: "corpus", label: "Corpus Generation" },
@@ -146,6 +147,7 @@ export function ConfigTab({ appState, onConfigLoaded }: ConfigTabProps) {
   const [copyImageStorageDir, setCopyImageStorageDir] = useState("");
   const [copyOcrEnabled, setCopyOcrEnabled] = useState(true);
   const [loadedImageStorageDir, setLoadedImageStorageDir] = useState("");
+  const [expansionLogPath, setExpansionLogPath] = useState("");
   const [expansionPaused, setExpansionPaused] = useState(false);
 
   const [corpusEnabled, setCorpusEnabled] = useState(false);
@@ -279,6 +281,7 @@ export function ConfigTab({ appState, onConfigLoaded }: ConfigTabProps) {
       setGhostFollowerMode(appState.ghost_follower_mode || "EdgeAnchored");
       setGhostFollowerExpandTrigger(appState.ghost_follower_expand_trigger || "Click");
       setClipMaxDepth(appState.clip_history_max_depth ?? 20);
+      setExpansionLogPath(appState.expansion_log_path || "");
       setExpansionPaused(!!appState.expansion_paused);
 
       setCorpusEnabled(!!appState.corpus_enabled);
@@ -1304,6 +1307,43 @@ export function ConfigTab({ appState, onConfigLoaded }: ConfigTabProps) {
           <Suspense fallback={<div className="py-8 text-[var(--dc-text-muted)]">Loading Logs...</div>}>
             <LogTab />
           </Suspense>
+        </div>
+      )}
+
+      {activeGroup === "text_expansion" && (
+        <div className={sectionCls}>
+          <h3 className="font-bold mb-2">Text Expansion</h3>
+          <label className="block mt-2">Expansion Log Path (JSON):</label>
+          <div className="mt-1 flex gap-2">
+            <input
+              type="text"
+              value={expansionLogPath}
+              onChange={(e) => setExpansionLogPath(e.target.value)}
+              placeholder="Default: <AppData>/logs"
+              className={`${inputCls} flex-1`}
+            />
+            <button
+              type="button"
+              onClick={() => void chooseDirectory(expansionLogPath, setExpansionLogPath)}
+              className="px-3 py-1.5 bg-[var(--dc-bg-alt)] border border-[var(--dc-border)] rounded"
+            >
+              Browse
+            </button>
+          </div>
+          <p className="text-xs text-[var(--dc-text-muted)] mt-1">
+            Specify a custom directory for text expansion diagnostic logs. Leave empty for default.
+          </p>
+          <button
+            onClick={() => applyConfig({ expansion_log_path: expansionLogPath }, "text_expansion")}
+            className="mt-3 px-3 py-1.5 bg-[var(--dc-accent)] text-white rounded"
+          >
+            Save Expansion Settings
+          </button>
+          {lastSavedGroup === "text_expansion" && (
+            <span className="ml-2 text-emerald-500 font-medium animate-in fade-in duration-300">
+              Saved!
+            </span>
+          )}
         </div>
       )}
 

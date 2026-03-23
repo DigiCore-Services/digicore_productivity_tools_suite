@@ -1970,6 +1970,10 @@ impl Api for ApiImpl {
         if let Some(ref v) = config.sync_url {
             guard.sync_url = v.clone();
         }
+        if let Some(ref v) = config.expansion_log_path {
+            guard.expansion_log_path = v.clone();
+            digicore_text_expander::application::expansion_logger::set_log_path(v.clone());
+        }
         if let Some(v) = config.discovery_enabled {
             guard.discovery_enabled = v;
         }
