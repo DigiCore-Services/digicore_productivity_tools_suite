@@ -82,6 +82,9 @@ fn test_snippet_full_fields_roundtrip() {
         app_lock: "notepad.exe,word.exe".into(),
         pinned: "true".into(),
         last_modified: "20260101120000000".into(),
+        is_sensitive: false,
+        case_sensitive: false,
+        smart_suffix: true,
     };
     assert!(s.is_pinned());
     assert_eq!(s.app_lock, "notepad.exe,word.exe");
