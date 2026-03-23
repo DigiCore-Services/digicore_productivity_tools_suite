@@ -73,9 +73,13 @@ pub struct AppStateDto {
     pub ghost_follower_enabled: bool,
     pub ghost_follower_edge_right: bool,
     pub ghost_follower_monitor_anchor: u32,
-    pub ghost_follower_search: String,
     pub ghost_follower_hover_preview: bool,
     pub ghost_follower_collapse_delay_secs: u32,
+    pub ghost_follower_search: String,
+    pub ghost_follower_mode: String,
+    pub ghost_follower_expand_trigger: String,
+    pub ghost_follower_expand_delay_ms: u32,
+    pub ghost_follower_clipboard_depth: u32,
     pub ghost_follower_opacity: u32,
     pub clip_history_max_depth: u32,
     pub script_library_run_disabled: bool,
@@ -189,13 +193,21 @@ fn app_state_to_dto(state: &AppState) -> AppStateDto {
         ghost_suggestor_snooze_duration_mins: state.ghost_suggestor_snooze_duration_mins as u32,
         ghost_suggestor_offset_x: state.ghost_suggestor_offset_x,
         ghost_suggestor_offset_y: state.ghost_suggestor_offset_y,
-        ghost_follower_enabled: state.ghost_follower_enabled,
-        ghost_follower_edge_right: state.ghost_follower_edge_right,
-        ghost_follower_monitor_anchor: state.ghost_follower_monitor_anchor as u32,
-        ghost_follower_search: state.ghost_follower_search.clone(),
-        ghost_follower_hover_preview: state.ghost_follower_hover_preview,
-        ghost_follower_collapse_delay_secs: state.ghost_follower_collapse_delay_secs as u32,
-        ghost_follower_opacity: state.ghost_follower_opacity,
+        ghost_follower_enabled: state.ghost_follower.config.enabled,
+        ghost_follower_edge_right: state.ghost_follower.config.edge == digicore_text_expander::application::ghost_follower::FollowerEdge::Right,
+        ghost_follower_monitor_anchor: match state.ghost_follower.config.monitor_anchor {
+            digicore_text_expander::application::ghost_follower::MonitorAnchor::Secondary => 1,
+            digicore_text_expander::application::ghost_follower::MonitorAnchor::Current => 2,
+            _ => 0,
+        },
+        ghost_follower_mode: format!("{:?}", state.ghost_follower.config.mode),
+        ghost_follower_expand_trigger: format!("{:?}", state.ghost_follower.config.expand_trigger),
+        ghost_follower_expand_delay_ms: state.ghost_follower.config.expand_delay_ms as u32,
+        ghost_follower_clipboard_depth: state.ghost_follower.config.clipboard_depth as u32,
+        ghost_follower_opacity: state.ghost_follower.config.opacity,
+        ghost_follower_search: state.ghost_follower.search_filter.clone(),
+        ghost_follower_hover_preview: state.ghost_follower.config.hover_preview,
+        ghost_follower_collapse_delay_secs: state.ghost_follower.config.collapse_delay_secs as u32,
         clip_history_max_depth: state.clip_history_max_depth as u32,
         script_library_run_disabled: state.script_library_run_disabled,
         script_library_run_allowlist: state.script_library_run_allowlist.clone(),
@@ -338,42 +350,6 @@ fn init_app_state_from_storage() -> AppState {
         .get(storage_keys::CLIP_HISTORY_MAX_DEPTH)
         .and_then(|s| s.parse().ok())
         .unwrap_or(20usize);
-    let ghost_follower_enabled = storage
-        .get(storage_keys::GHOST_FOLLOWER_ENABLED)
-        .map(|v| v == "true")
-        .unwrap_or(true);
-    let ghost_follower_edge_right = storage
-        .get(storage_keys::GHOST_FOLLOWER_EDGE_RIGHT)
-        .map(|v| v == "true")
-        .unwrap_or(true);
-    let ghost_follower_monitor_anchor = storage
-        .get(storage_keys::GHOST_FOLLOWER_MONITOR_ANCHOR)
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(0u32)
-        .min(2);
-    let ghost_follower_hover_preview = storage
-        .get(storage_keys::GHOST_FOLLOWER_HOVER_PREVIEW)
-        .map(|v| v == "true")
-        .unwrap_or(true);
-    let ghost_follower_collapse_delay_secs = storage
-        .get(storage_keys::GHOST_FOLLOWER_COLLAPSE_DELAY_SECS)
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(5u64)
-        .min(60);
-    let ghost_follower_opacity = storage
-        .get(storage_keys::GHOST_FOLLOWER_OPACITY)
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(100u32)
-        .clamp(10, 100);
-    let ghost_follower_position = storage
-        .get(storage_keys::GHOST_FOLLOWER_POSITION_X)
-        .and_then(|sx| sx.parse().ok())
-        .and_then(|x: i32| {
-            storage
-                .get(storage_keys::GHOST_FOLLOWER_POSITION_Y)
-                .and_then(|sy| sy.parse().ok())
-                .map(|y: i32| (x, y))
-        });
     let expansion_paused = storage
         .get(storage_keys::EXPANSION_PAUSED)
         .map(|v| v == "true")
@@ -429,13 +405,38 @@ fn init_app_state_from_storage() -> AppState {
     state.script_library_run_disabled = run_disabled;
     state.script_library_run_allowlist = run_allowlist;
     state.clip_history_max_depth = clip_history_max_depth;
-    state.ghost_follower_enabled = ghost_follower_enabled;
-    state.ghost_follower_edge_right = ghost_follower_edge_right;
-    state.ghost_follower_monitor_anchor = ghost_follower_monitor_anchor as usize;
-    state.ghost_follower_hover_preview = ghost_follower_hover_preview;
-    state.ghost_follower_collapse_delay_secs = ghost_follower_collapse_delay_secs;
-    state.ghost_follower_opacity = ghost_follower_opacity;
-    state.ghost_follower_position = ghost_follower_position;
+    
+    // Initialize Ghost Follower Config
+    state.ghost_follower.config = digicore_text_expander::application::ghost_follower::GhostFollowerConfig {
+        enabled: storage.get(storage_keys::GHOST_FOLLOWER_ENABLED).map(|v| v == "true").unwrap_or(true),
+        mode: match storage.get(storage_keys::GHOST_FOLLOWER_MODE).as_deref() {
+            Some("Bubble") => digicore_text_expander::application::ghost_follower::FollowerMode::FloatingBubble,
+            _ => digicore_text_expander::application::ghost_follower::FollowerMode::EdgeAnchored,
+        },
+        edge: if storage.get(storage_keys::GHOST_FOLLOWER_EDGE_RIGHT).map(|v| v == "true").unwrap_or(true) {
+            digicore_text_expander::application::ghost_follower::FollowerEdge::Right
+        } else {
+            digicore_text_expander::application::ghost_follower::FollowerEdge::Left
+        },
+        monitor_anchor: match storage.get(storage_keys::GHOST_FOLLOWER_MONITOR_ANCHOR).and_then(|s| s.parse().ok()).unwrap_or(0u32) {
+            1 => digicore_text_expander::application::ghost_follower::MonitorAnchor::Secondary,
+            2 => digicore_text_expander::application::ghost_follower::MonitorAnchor::Current,
+            _ => digicore_text_expander::application::ghost_follower::MonitorAnchor::Primary,
+        },
+        expand_trigger: match storage.get(storage_keys::GHOST_FOLLOWER_EXPAND_TRIGGER).as_deref() {
+            Some("Hover") => digicore_text_expander::application::ghost_follower::ExpandTrigger::Hover,
+            _ => digicore_text_expander::application::ghost_follower::ExpandTrigger::Click,
+        },
+        expand_delay_ms: storage.get(storage_keys::GHOST_FOLLOWER_EXPAND_DELAY_MS).and_then(|s| s.parse().ok()).unwrap_or(500u64),
+        collapse_delay_secs: storage.get(storage_keys::GHOST_FOLLOWER_COLLAPSE_DELAY_SECS).and_then(|s| s.parse().ok()).unwrap_or(5u64),
+        hover_preview: storage.get(storage_keys::GHOST_FOLLOWER_HOVER_PREVIEW).map(|v| v == "true").unwrap_or(true),
+        clipboard_depth: storage.get(storage_keys::GHOST_FOLLOWER_CLIPBOARD_DEPTH).and_then(|s| s.parse().ok()).unwrap_or(20usize),
+        opacity: storage.get(storage_keys::GHOST_FOLLOWER_OPACITY).and_then(|s| s.parse().ok()).unwrap_or(100u32),
+        position: storage.get(storage_keys::GHOST_FOLLOWER_POSITION_X).and_then(|sx| sx.parse().ok()).and_then(|x: i32| {
+            storage.get(storage_keys::GHOST_FOLLOWER_POSITION_Y).and_then(|sy| sy.parse().ok()).map(|y: i32| (x, y))
+        }),
+    };
+
     state.snippet_editor_is_sensitive = false;
     state.expansion_paused = expansion_paused;
     state.ghost_suggestor_enabled = ghost_suggestor_enabled;
@@ -939,7 +940,7 @@ pub fn run() {
                 .with_handler(|app, shortcut, _event| {
                     let s = shortcut.to_string();
                     if s.eq_ignore_ascii_case("Shift+Alt+Space") {
-                        digicore_text_expander::application::ghost_follower::capture_target_window_for_quick_search_launch();
+                        digicore_text_expander::application::ghost_follower::capture_target_window_for_quick_search_launch_global();
                         let _ = app.emit("show-quick-search", ());
                         return;
                     }
@@ -1062,12 +1063,16 @@ pub fn run() {
                             suggestor_snooze_duration_mins: g.ghost_suggestor_snooze_duration_mins,
                             suggestor_offset_x: g.ghost_suggestor_offset_x,
                             suggestor_offset_y: g.ghost_suggestor_offset_y,
-                            follower_enabled: g.ghost_follower_enabled,
-                            follower_edge_right: g.ghost_follower_edge_right,
-                            follower_monitor_anchor: g.ghost_follower_monitor_anchor,
-                            follower_search: g.ghost_follower_search.clone(),
-                            follower_hover_preview: g.ghost_follower_hover_preview,
-                            follower_collapse_delay_secs: g.ghost_follower_collapse_delay_secs,
+                            follower_enabled: g.ghost_follower.config.enabled,
+                            follower_edge_right: g.ghost_follower.config.edge == digicore_text_expander::application::ghost_follower::FollowerEdge::Right,
+                            follower_monitor_anchor: match g.ghost_follower.config.monitor_anchor {
+                                digicore_text_expander::application::ghost_follower::MonitorAnchor::Secondary => 1,
+                                digicore_text_expander::application::ghost_follower::MonitorAnchor::Current => 2,
+                                _ => 0,
+                            },
+                            follower_search: g.ghost_follower.search_filter.clone(),
+                            follower_hover_preview: g.ghost_follower.config.hover_preview,
+                            follower_collapse_delay_secs: g.ghost_follower.config.collapse_delay_secs,
                         }
                     )
                 };
@@ -1254,7 +1259,7 @@ pub fn run() {
                 .unwrap_or(false);
             install_tray_menu(&handle, paused);
 
-            let tray_state_for_events = state_for_tray.clone();
+            let tray_state_for_menu = state_for_tray.clone();
             app.on_menu_event(move |app_handle, event| match event.id.as_ref() {
                 "view_console" => {
                     if let Some(win) = app_handle.get_webview_window("main") {
@@ -1264,7 +1269,9 @@ pub fn run() {
                     }
                 }
                 "quick_search" => {
-                    digicore_text_expander::application::ghost_follower::capture_target_window_for_quick_search_launch();
+                    if let Ok(mut guard) = tray_state_for_menu.lock() {
+                        digicore_text_expander::application::ghost_follower::capture_target_window_for_quick_search_launch(&mut guard.ghost_follower);
+                    }
                     if let Some(win) = app_handle.get_webview_window("quick-search") {
                         let _ = win.show();
                         let _ = win.set_focus();
@@ -1273,14 +1280,14 @@ pub fn run() {
                     let _ = app_handle.emit("quick-search-refresh", ());
                 }
                 "toggle_pause" => {
-                    let paused = if let Ok(mut guard) = tray_state_for_events.lock() {
+                    let paused = if let Ok(mut guard) = tray_state_for_menu.lock() {
                         guard.expansion_paused = !guard.expansion_paused;
                         guard.expansion_paused
                     } else {
                         false
                     };
                     set_expansion_paused(paused);
-                    if let Err(e) = crate::api::persist_settings_for_state(&tray_state_for_events) {
+                    if let Err(e) = crate::api::persist_settings_for_state(&tray_state_for_menu) {
                         log::warn!("[Tray] persist pause toggle failed: {}", e);
                     }
                     install_tray_menu(app_handle, paused);
@@ -1302,8 +1309,11 @@ pub fn run() {
                 _ => {}
             });
 
+            let tray_state_for_listen = state_for_tray.clone();
             app.listen("show-quick-search", move |_event| {
-                digicore_text_expander::application::ghost_follower::capture_target_window_for_quick_search_launch();
+                if let Ok(mut guard) = tray_state_for_listen.lock() {
+                    digicore_text_expander::application::ghost_follower::capture_target_window_for_quick_search_launch(&mut guard.ghost_follower);
+                }
                 if let Some(win) = handle.get_webview_window("quick-search") {
                     let _ = win.show();
                     let _ = win.set_focus();
@@ -1368,6 +1378,10 @@ pub struct ConfigUpdateDto {
     pub ghost_follower_hover_preview: Option<bool>,
     pub ghost_follower_collapse_delay_secs: Option<u32>,
     pub ghost_follower_opacity: Option<u32>,
+    pub ghost_follower_mode: Option<String>,
+    pub ghost_follower_expand_trigger: Option<String>,
+    pub ghost_follower_expand_delay_ms: Option<u32>,
+    pub ghost_follower_clipboard_depth: Option<u32>,
     pub clip_history_max_depth: Option<u32>,
     pub script_library_run_disabled: Option<bool>,
     pub script_library_run_allowlist: Option<String>,
@@ -1699,6 +1713,10 @@ pub struct PinnedSnippetDto {
 #[taurpc::ipc_type]
 pub struct GhostFollowerStateDto {
     pub enabled: bool,
+    pub mode: String,
+    pub expand_trigger: String,
+    pub expand_delay_ms: u32,
+    pub clipboard_depth: u32,
     pub pinned: Vec<PinnedSnippetDto>,
     pub search_filter: String,
     /// Position (x, y) for edge-anchored window. None on non-Windows.

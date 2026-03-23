@@ -47,6 +47,10 @@ export interface AppState {
   ghost_follower_search: string;
   ghost_follower_hover_preview: boolean;
   ghost_follower_collapse_delay_secs: number;
+  ghost_follower_mode: string;
+  ghost_follower_expand_trigger: string;
+  ghost_follower_expand_delay_ms: number;
+  ghost_follower_clipboard_depth: number;
   ghost_follower_opacity: number;
   clip_history_max_depth: number;
   script_library_run_disabled: boolean;
