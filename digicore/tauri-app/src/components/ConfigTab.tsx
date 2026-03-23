@@ -129,6 +129,8 @@ export function ConfigTab({ appState, onConfigLoaded }: ConfigTabProps) {
   const [ghostFollowerEdge, setGhostFollowerEdge] = useState<"right" | "left">(
     "right"
   );
+  const [ghostFollowerMode, setGhostFollowerMode] = useState("EdgeAnchored");
+  const [ghostFollowerExpandTrigger, setGhostFollowerExpandTrigger] = useState("Click");
   const [ghostFollowerMonitor, setGhostFollowerMonitor] = useState("0");
   const [ghostFollowerOpacity, setGhostFollowerOpacity] = useState(100);
   const [clipMaxDepth, setClipMaxDepth] = useState(20);
@@ -274,6 +276,8 @@ export function ConfigTab({ appState, onConfigLoaded }: ConfigTabProps) {
         String(appState.ghost_follower_monitor_anchor ?? 0)
       );
       setGhostFollowerOpacity(appState.ghost_follower_opacity ?? 100);
+      setGhostFollowerMode(appState.ghost_follower_mode || "EdgeAnchored");
+      setGhostFollowerExpandTrigger(appState.ghost_follower_expand_trigger || "Click");
       setClipMaxDepth(appState.clip_history_max_depth ?? 20);
       setExpansionPaused(!!appState.expansion_paused);
 
@@ -1000,8 +1004,27 @@ export function ConfigTab({ appState, onConfigLoaded }: ConfigTabProps) {
               checked={ghostFollowerHover}
               onChange={(e) => setGhostFollowerHover(e.target.checked)}
             />
-            Hover preview
+            Hover preview content
           </label>
+          <label className="block mt-2">Follower Mode:</label>
+          <select
+            value={ghostFollowerMode}
+            onChange={(e) => setGhostFollowerMode(e.target.value)}
+            className={inputCls}
+          >
+            <option value="EdgeAnchored">Edge Anchored</option>
+            <option value="FloatingBubble">Floating Bubble</option>
+          </select>
+
+          <label className="block mt-2">Expansion Trigger:</label>
+          <select
+            value={ghostFollowerExpandTrigger}
+            onChange={(e) => setGhostFollowerExpandTrigger(e.target.value)}
+            className={inputCls}
+          >
+            <option value="Click">Click</option>
+            <option value="Hover">Hover</option>
+          </select>
           <label className="block mt-2">Collapse delay (s):</label>
           <input
             type="number"

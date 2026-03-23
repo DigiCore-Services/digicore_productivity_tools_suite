@@ -16,7 +16,7 @@ const RIBBON_HEIGHT = 420;
 import { getTaurpc } from "@/lib/taurpc";
 import { emit, listen } from "@tauri-apps/api/event";
 import { resolveTheme, applyThemeToDocument } from "@/lib/theme";
-import { LogicalPosition } from "@tauri-apps/api/dpi";
+import { LogicalPosition, PhysicalPosition } from "@tauri-apps/api/dpi";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { confirm } from "@tauri-apps/plugin-dialog";
 
@@ -36,6 +36,8 @@ let clipEntries: { content: string; process_name?: string }[] = [];
 let promotedContentSet = new Set<string>();
 let isPointerOverFollower = false;
 let isPointerOverContextMenu = false;
+let ghostFollowerMode = "EdgeAnchored";
+let ghostFollowerExpandTrigger = "Click";
 
 function normalizeContentForMatch(value: string): string {
   return (value || "").replace(/\r\n/g, "\n").trim();
@@ -167,7 +169,7 @@ async function handleClose() {
   await api.ghost_follower_hide();
 }
 
-function render(state: { enabled?: boolean; pinned?: typeof pinnedItems; clip_history_max_depth?: number; should_collapse?: boolean; collapse_delay_secs?: number; opacity?: number } | null) {
+function render(state: { enabled?: boolean; pinned?: typeof pinnedItems; clip_history_max_depth?: number; should_collapse?: boolean; collapse_delay_secs?: number; opacity?: number; mode?: string; expand_trigger?: string } | null) {
   const list = document.getElementById("pinned-list");
   const clipList = document.getElementById("clip-list");
   const clipHeader = document.getElementById("clip-header");
@@ -360,6 +362,8 @@ async function refresh() {
       });
     });
     promotedContentSet = set;
+    ghostFollowerMode = state?.mode || "EdgeAnchored";
+    ghostFollowerExpandTrigger = state?.expand_trigger || "Click";
     render(state);
 
     if (
@@ -381,7 +385,8 @@ async function refresh() {
         await w.show();
       } else {
         let positioned = false;
-        if (positioner && state?.enabled && (state as { monitor_primary?: boolean }).monitor_primary) {
+        const isSaved = (state as { saved_position?: boolean }).saved_position;
+        if (positioner && state?.enabled && (state as { monitor_primary?: boolean }).monitor_primary && ghostFollowerMode === "EdgeAnchored" && !isSaved) {
           try {
             const edgeRight = (state as { edge_right?: boolean }).edge_right;
             const pos = edgeRight ? positioner.Position?.TopRight : positioner.Position?.TopLeft;
@@ -406,12 +411,13 @@ async function refresh() {
             y <= 20000;
           try {
             if (sane && x !== null && y !== null) {
-              await w.setPosition(new LogicalPosition(x, y));
-            } else {
+              await w.setPosition(new PhysicalPosition(x, y));
+            } else if (state?.enabled && !isSaved) {
+              // Only auto-center if enabled and NO saved position exists (to avoid jumping)
               await w.center();
             }
           } catch {
-            await w.center();
+            if (!isSaved) await w.center();
           }
         }
         if (state?.enabled) {
@@ -463,8 +469,16 @@ async function init() {
   if (pill) {
     pill.style.display = collapsed ? "flex" : "none";
     pill.addEventListener("mouseenter", () => {
-      api.ghost_follower_touch().catch(() => { });
-      expand();
+      if (ghostFollowerExpandTrigger === "Hover") {
+        api.ghost_follower_touch().catch(() => { });
+        expand();
+      }
+    });
+    pill.addEventListener("click", () => {
+      if (ghostFollowerExpandTrigger === "Click") {
+        api.ghost_follower_touch().catch(() => { });
+        expand();
+      }
     });
   }
   if (pillWrapper) {
