@@ -106,15 +106,7 @@ pub struct AppState {
     pub ghost_suggestor_offset_y: i32,
 
     // Ghost Follower (F48-F59)
-    pub ghost_follower_enabled: bool,
-    pub ghost_follower_edge_right: bool,
-    pub ghost_follower_monitor_anchor: usize,
-    pub ghost_follower_search: String,
-    pub ghost_follower_hover_preview: bool,
-    pub ghost_follower_collapse_delay_secs: u64,
-    pub ghost_follower_opacity: u32,
-    /// Saved window position (x, y) when user drags. None = use edge/monitor.
-    pub ghost_follower_position: Option<(i32, i32)>,
+    pub ghost_follower: crate::application::ghost_follower::GhostFollowerState,
     pub clip_history_max_depth: usize,
 
     // Corpus Generation (F55)
@@ -268,14 +260,10 @@ impl Default for AppState {
             ghost_suggestor_snooze_duration_mins: 5,
             ghost_suggestor_offset_x: 0,
             ghost_suggestor_offset_y: 20,
-            ghost_follower_enabled: true,
-            ghost_follower_edge_right: true,
-            ghost_follower_monitor_anchor: 0,
-            ghost_follower_search: String::new(),
-            ghost_follower_hover_preview: true,
-            ghost_follower_collapse_delay_secs: 5,
-            ghost_follower_opacity: 100,
-            ghost_follower_position: None,
+            ghost_follower: crate::application::ghost_follower::GhostFollowerState::new(
+                crate::application::ghost_follower::GhostFollowerConfig::default(),
+                &HashMap::new(),
+            ),
             clip_history_max_depth: 20,
 
             // Corpus
@@ -419,6 +407,7 @@ impl AppState {
 
         self.library = library;
         self.normalize_library_by_snippet_category();
+        self.ghost_follower.update_library(&self.library);
         self.selected_category = None;
         self.initial_load_attempted = true;
         Ok(self.categories.len())
@@ -480,6 +469,7 @@ impl AppState {
             self.categories.push(cat);
             self.categories.sort();
         }
+        self.ghost_follower.update_library(&self.library);
     }
 
     /// Update a snippet at the given category and index. May move to new category if snippet.category differs.
@@ -519,6 +509,7 @@ impl AppState {
         } else {
             self.normalize_library_by_snippet_category();
         }
+        self.ghost_follower.update_library(&self.library);
         Ok(())
     }
 
@@ -538,6 +529,7 @@ impl AppState {
         }
         self.categories = self.library.keys().cloned().collect();
         self.categories.sort();
+        self.ghost_follower.update_library(&self.library);
         Ok(())
     }
 
@@ -557,5 +549,6 @@ impl AppState {
         self.library = regrouped;
         self.categories = self.library.keys().cloned().collect();
         self.categories.sort();
+        self.ghost_follower.update_library(&self.library);
     }
 }

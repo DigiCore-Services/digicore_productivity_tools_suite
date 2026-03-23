@@ -143,3 +143,30 @@ fn test_delete_snippet() {
     state.delete_snippet("Cat1", 0).unwrap();
     assert!(!state.library.contains_key("Cat1"));
 }
+
+#[test]
+fn test_ghost_follower_sync() {
+    let mut state = AppState::new();
+    let mut snip = Snippet::new("sig", "Best regards");
+    snip.pinned = "true".to_string();
+    
+    // Test add_snippet synchronization
+    state.add_snippet("General", &snip);
+    assert_eq!(state.ghost_follower.pinned.len(), 1);
+    assert_eq!(state.ghost_follower.pinned[0].0.trigger, "sig");
+    
+    // Test update_snippet (unpinning)
+    let mut unpin = snip.clone();
+    unpin.pinned = "false".to_string();
+    state.update_snippet("General", 0, &unpin).unwrap();
+    assert_eq!(state.ghost_follower.pinned.len(), 0);
+    
+    // Test update_snippet (re-pinning)
+    state.update_snippet("General", 0, &snip).unwrap();
+    assert_eq!(state.ghost_follower.pinned.len(), 1);
+    
+    // Test delete_snippet
+    state.delete_snippet("General", 0).unwrap();
+    assert_eq!(state.ghost_follower.pinned.len(), 0);
+}
+

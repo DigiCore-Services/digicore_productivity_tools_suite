@@ -25,7 +25,9 @@ use digicore_text_expander::application::expansion_diagnostics;
 use digicore_text_expander::application::expansion_engine::set_expansion_paused;
 use digicore_text_expander::application::expansion_stats;
 use digicore_text_expander::application::discovery;
-use digicore_text_expander::application::ghost_follower;
+use digicore_text_expander::application::ghost_follower::{
+    self, ExpandTrigger, FollowerEdge, FollowerMode, MonitorAnchor,
+};
 use digicore_text_expander::application::ghost_suggestor;
 use digicore_text_expander::application::scripting::{
     get_scripting_config, set_global_library, set_scripting_config,
@@ -1116,29 +1118,49 @@ fn persist_settings_to_storage(state: &AppState) -> Result<(), String> {
     );
     storage.set(
         storage_keys::GHOST_FOLLOWER_ENABLED,
-        &state.ghost_follower_enabled.to_string(),
+        &state.ghost_follower.config.enabled.to_string(),
+    );
+    storage.set(
+        storage_keys::GHOST_FOLLOWER_MODE,
+        &format!("{:?}", state.ghost_follower.config.mode),
     );
     storage.set(
         storage_keys::GHOST_FOLLOWER_EDGE_RIGHT,
-        &state.ghost_follower_edge_right.to_string(),
+        &(state.ghost_follower.config.edge == digicore_text_expander::application::ghost_follower::FollowerEdge::Right).to_string(),
     );
     storage.set(
         storage_keys::GHOST_FOLLOWER_MONITOR_ANCHOR,
-        &state.ghost_follower_monitor_anchor.to_string(),
+        &match state.ghost_follower.config.monitor_anchor {
+            digicore_text_expander::application::ghost_follower::MonitorAnchor::Primary => 0u32,
+            digicore_text_expander::application::ghost_follower::MonitorAnchor::Secondary => 1u32,
+            digicore_text_expander::application::ghost_follower::MonitorAnchor::Current => 2u32,
+        }.to_string(),
+    );
+    storage.set(
+        storage_keys::GHOST_FOLLOWER_EXPAND_TRIGGER,
+        &format!("{:?}", state.ghost_follower.config.expand_trigger),
+    );
+    storage.set(
+        storage_keys::GHOST_FOLLOWER_EXPAND_DELAY_MS,
+        &state.ghost_follower.config.expand_delay_ms.to_string(),
     );
     storage.set(
         storage_keys::GHOST_FOLLOWER_HOVER_PREVIEW,
-        &state.ghost_follower_hover_preview.to_string(),
+        &state.ghost_follower.config.hover_preview.to_string(),
     );
     storage.set(
         storage_keys::GHOST_FOLLOWER_COLLAPSE_DELAY_SECS,
-        &state.ghost_follower_collapse_delay_secs.to_string(),
+        &state.ghost_follower.config.collapse_delay_secs.to_string(),
+    );
+    storage.set(
+        storage_keys::GHOST_FOLLOWER_CLIPBOARD_DEPTH,
+        &state.ghost_follower.config.clipboard_depth.to_string(),
     );
     storage.set(
         storage_keys::GHOST_FOLLOWER_OPACITY,
-        &state.ghost_follower_opacity.to_string(),
+        &state.ghost_follower.config.opacity.to_string(),
     );
-    if let Some((px, py)) = state.ghost_follower_position {
+    if let Some((px, py)) = state.ghost_follower.config.position {
         storage.set(storage_keys::GHOST_FOLLOWER_POSITION_X, &px.to_string());
         storage.set(storage_keys::GHOST_FOLLOWER_POSITION_Y, &py.to_string());
     }
@@ -1988,25 +2010,49 @@ impl Api for ApiImpl {
             guard.ghost_suggestor_offset_y = v;
         }
         if let Some(v) = config.ghost_follower_enabled {
-            guard.ghost_follower_enabled = v;
+            guard.ghost_follower.config.enabled = v;
         }
         if let Some(v) = config.ghost_follower_edge_right {
-            guard.ghost_follower_edge_right = v;
+            guard.ghost_follower.config.edge = if v { FollowerEdge::Right } else { FollowerEdge::Left };
         }
         if let Some(v) = config.ghost_follower_monitor_anchor {
-            guard.ghost_follower_monitor_anchor = v as usize;
+            guard.ghost_follower.config.monitor_anchor = match v {
+                1 => MonitorAnchor::Secondary,
+                2 => MonitorAnchor::Current,
+                _ => MonitorAnchor::Primary,
+            };
         }
         if let Some(ref v) = config.ghost_follower_search {
-            guard.ghost_follower_search = v.clone();
+            guard.ghost_follower.search_filter = v.clone();
         }
         if let Some(v) = config.ghost_follower_hover_preview {
-            guard.ghost_follower_hover_preview = v;
+            guard.ghost_follower.config.hover_preview = v;
         }
         if let Some(v) = config.ghost_follower_collapse_delay_secs {
-            guard.ghost_follower_collapse_delay_secs = v as u64;
+            guard.ghost_follower.config.collapse_delay_secs = v as u64;
         }
         if let Some(v) = config.ghost_follower_opacity {
-            guard.ghost_follower_opacity = v.clamp(10, 100);
+            guard.ghost_follower.config.opacity = v.clamp(10, 100);
+        }
+        if let Some(ref v) = config.ghost_follower_mode {
+            if v == "Bubble" || v == "FloatingBubble" {
+                guard.ghost_follower.config.mode = FollowerMode::FloatingBubble;
+            } else {
+                guard.ghost_follower.config.mode = FollowerMode::EdgeAnchored;
+            }
+        }
+        if let Some(ref v) = config.ghost_follower_expand_trigger {
+            if v == "Hover" {
+                guard.ghost_follower.config.expand_trigger = ExpandTrigger::Hover;
+            } else {
+                guard.ghost_follower.config.expand_trigger = ExpandTrigger::Click;
+            }
+        }
+        if let Some(v) = config.ghost_follower_expand_delay_ms {
+            guard.ghost_follower.config.expand_delay_ms = v as u64;
+        }
+        if let Some(v) = config.ghost_follower_clipboard_depth {
+            guard.ghost_follower.config.clipboard_depth = v as usize;
         }
         if let Some(v) = config.clip_history_max_depth {
             let depth = v as usize;
@@ -2125,12 +2171,16 @@ impl Api for ApiImpl {
             suggestor_snooze_duration_mins: guard.ghost_suggestor_snooze_duration_mins,
             suggestor_offset_x: guard.ghost_suggestor_offset_x,
             suggestor_offset_y: guard.ghost_suggestor_offset_y,
-            follower_enabled: guard.ghost_follower_enabled,
-            follower_edge_right: guard.ghost_follower_edge_right,
-            follower_monitor_anchor: guard.ghost_follower_monitor_anchor,
-            follower_search: guard.ghost_follower_search.clone(),
-            follower_hover_preview: guard.ghost_follower_hover_preview,
-            follower_collapse_delay_secs: guard.ghost_follower_collapse_delay_secs,
+            follower_enabled: guard.ghost_follower.config.enabled,
+            follower_edge_right: guard.ghost_follower.config.edge == FollowerEdge::Right,
+            follower_monitor_anchor: match guard.ghost_follower.config.monitor_anchor {
+                MonitorAnchor::Secondary => 1,
+                MonitorAnchor::Current => 2,
+                _ => 0,
+            },
+            follower_search: guard.ghost_follower.search_filter.clone(),
+            follower_hover_preview: guard.ghost_follower.config.hover_preview,
+            follower_collapse_delay_secs: guard.ghost_follower.config.collapse_delay_secs,
         });
         set_expansion_paused(guard.expansion_paused);
         {
@@ -3436,12 +3486,20 @@ end
                     groups_obj.insert(
                         group.clone(),
                         serde_json::json!({
-                            "ghost_follower_enabled": guard.ghost_follower_enabled,
-                            "ghost_follower_edge_right": guard.ghost_follower_edge_right,
-                            "ghost_follower_monitor_anchor": guard.ghost_follower_monitor_anchor,
-                            "ghost_follower_hover_preview": guard.ghost_follower_hover_preview,
-                            "ghost_follower_collapse_delay_secs": guard.ghost_follower_collapse_delay_secs,
-                            "ghost_follower_opacity": guard.ghost_follower_opacity
+                            "ghost_follower_enabled": guard.ghost_follower.config.enabled,
+                            "ghost_follower_edge_right": guard.ghost_follower.config.edge == FollowerEdge::Right,
+                            "ghost_follower_monitor_anchor": match guard.ghost_follower.config.monitor_anchor {
+                                MonitorAnchor::Secondary => 1,
+                                MonitorAnchor::Current => 2,
+                                _ => 0,
+                            },
+                            "ghost_follower_hover_preview": guard.ghost_follower.config.hover_preview,
+                            "ghost_follower_collapse_delay_secs": guard.ghost_follower.config.collapse_delay_secs,
+                            "ghost_follower_opacity": guard.ghost_follower.config.opacity,
+                            "ghost_follower_mode": format!("{:?}", guard.ghost_follower.config.mode),
+                            "ghost_follower_expand_trigger": format!("{:?}", guard.ghost_follower.config.expand_trigger),
+                            "ghost_follower_expand_delay_ms": guard.ghost_follower.config.expand_delay_ms,
+                            "ghost_follower_clipboard_depth": guard.ghost_follower.config.clipboard_depth
                         }),
                     );
                 }
@@ -3769,6 +3827,10 @@ end
                             .get("ghost_follower_opacity")
                             .and_then(|v| v.as_u64())
                             .map(|n| n as u32),
+                        ghost_follower_mode: obj.get("ghost_follower_mode").and_then(|v| v.as_str()).map(str::to_string),
+                        ghost_follower_expand_trigger: obj.get("ghost_follower_expand_trigger").and_then(|v| v.as_str()).map(str::to_string),
+                        ghost_follower_expand_delay_ms: obj.get("ghost_follower_expand_delay_ms").and_then(|v| v.as_u64()).map(|n| n as u32),
+                        ghost_follower_clipboard_depth: obj.get("ghost_follower_clipboard_depth").and_then(|v| v.as_u64()).map(|n| n as u32),
                         clip_history_max_depth: obj
                             .get("clip_history_max_depth")
                             .and_then(|v| v.as_u64())
@@ -4186,9 +4248,11 @@ end
         search_filter: Option<String>,
     ) -> Result<GhostFollowerStateDto, String> {
         let filter = search_filter.as_deref().unwrap_or("");
-        let pinned = ghost_follower::get_pinned_snippets(filter);
-        let cfg = ghost_follower::get_config();
-        let enabled = ghost_follower::is_enabled();
+        let guard = self.state.lock().map_err(|e| e.to_string())?;
+        let gf_state = &guard.ghost_follower;
+        let pinned = ghost_follower::get_pinned_snippets(gf_state, filter);
+        let cfg = gf_state.config.clone();
+        let enabled = cfg.enabled;
         log::debug!(
             "[GhostFollower] get_ghost_follower_state: enabled={}, pinned_count={}, filter_len={}",
             enabled,
@@ -4198,11 +4262,7 @@ end
 
         #[cfg(target_os = "windows")]
         let (position, saved_position) = {
-            let saved = self
-                .state
-                .lock()
-                .ok()
-                .and_then(|g| g.ghost_follower_position);
+            let saved = guard.ghost_follower.config.position;
             let use_saved = saved.map_or(false, |(x, y)| {
                 x >= -20000 && x <= 20000 && y >= -20000 && y <= 20000
             });
@@ -4231,23 +4291,20 @@ end
         #[cfg(not(target_os = "windows"))]
         let (position, saved_position): (Option<(i32, i32)>, bool) = (None, false);
 
-        let clip_max = self
-            .state
-            .lock()
-            .map_err(|e| e.to_string())?
-            .clip_history_max_depth as u32;
+        let ghost_follower_opacity = gf_state.config.opacity;
+        let _ghost_follower_position = gf_state.config.position;
 
         let collapse_delay = cfg.collapse_delay_secs as u32;
-        let should_collapse = ghost_follower::should_collapse(cfg.collapse_delay_secs);
+        let should_collapse = gf_state.should_collapse();
 
-        let opacity = self
-            .state
-            .lock()
-            .map(|g| (g.ghost_follower_opacity as f64 / 100.0).clamp(0.1, 1.0))
-            .unwrap_or(1.0);
+        let opacity = (ghost_follower_opacity as f64 / 100.0).clamp(0.1, 1.0);
 
         Ok(GhostFollowerStateDto {
             enabled,
+            mode: format!("{:?}", gf_state.config.mode),
+            expand_trigger: format!("{:?}", gf_state.config.expand_trigger),
+            expand_delay_ms: gf_state.config.expand_delay_ms as u32,
+            clipboard_depth: gf_state.config.clipboard_depth as u32,
             pinned: pinned
                 .into_iter()
                 .map(|(s, cat, idx)| PinnedSnippetDto {
@@ -4262,11 +4319,11 @@ end
                     snippet_idx: idx as u32,
                 })
                 .collect(),
-            search_filter: ghost_follower::get_search_filter(),
+            search_filter: gf_state.search_filter.clone(),
             position,
-            edge_right: cfg.edge == ghost_follower::FollowerEdge::Right,
-            monitor_primary: cfg.monitor_anchor == ghost_follower::MonitorAnchor::Primary,
-            clip_history_max_depth: clip_max,
+            edge_right: cfg.edge == FollowerEdge::Right,
+            monitor_primary: cfg.monitor_anchor == MonitorAnchor::Primary,
+            clip_history_max_depth: guard.clip_history_max_depth as u32,
             should_collapse,
             collapse_delay_secs: collapse_delay,
             opacity,
@@ -4298,17 +4355,21 @@ end
 
     async fn ghost_follower_capture_target_window(self) -> Result<(), String> {
         log::debug!("[QuickSearchInsert] ghost_follower_capture_target_window invoked");
-        digicore_text_expander::application::ghost_follower::capture_target_window();
+        ghost_follower::capture_target_window_global();
         Ok(())
     }
 
     async fn ghost_follower_touch(self) -> Result<(), String> {
-        ghost_follower::touch();
+        if let Ok(mut guard) = self.state.lock() {
+            guard.ghost_follower.touch();
+        }
         Ok(())
     }
 
     async fn ghost_follower_set_collapsed(self, collapsed: bool) -> Result<(), String> {
-        ghost_follower::set_collapsed(collapsed);
+        if let Ok(mut guard) = self.state.lock() {
+            guard.ghost_follower.collapsed = collapsed;
+        }
         Ok(())
     }
 
@@ -4323,7 +4384,7 @@ end
     async fn ghost_follower_set_opacity(self, opacity_pct: u32) -> Result<(), String> {
         let val = opacity_pct.clamp(10, 100);
         if let Ok(mut guard) = self.state.lock() {
-            guard.ghost_follower_opacity = val;
+            guard.ghost_follower.config.opacity = val;
         }
         let _ = get_app(&self.app_handle).emit("ghost-follower-update", ());
         Ok(())
@@ -4335,7 +4396,7 @@ end
             return Ok(());
         }
         if let Ok(mut guard) = self.state.lock() {
-            guard.ghost_follower_position = Some((x, y));
+            guard.ghost_follower.config.position = Some((x, y));
         }
         let mut storage = JsonFileStorageAdapter::load();
         storage.set(storage_keys::GHOST_FOLLOWER_POSITION_X, &x.to_string());
@@ -4352,7 +4413,9 @@ end
     }
 
     async fn ghost_follower_set_search(self, filter: String) -> Result<(), String> {
-        ghost_follower::set_search_filter(&filter);
+        if let Ok(mut guard) = self.state.lock() {
+            guard.ghost_follower.search_filter = filter;
+        }
         let _ = get_app(&self.app_handle).emit("ghost-follower-update", ());
         Ok(())
     }
@@ -4412,7 +4475,9 @@ end
         };
         s.pinned = new_pinned.to_string();
         guard.try_save_library().map_err(|e| e.to_string())?;
-        update_library(guard.library.clone());
+        let library_clone = guard.library.clone();
+        guard.ghost_follower.update_library(&library_clone);
+        update_library(library_clone);
         let _ = get_app(&self.app_handle).emit("ghost-follower-update", ());
         Ok(())
     }
