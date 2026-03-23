@@ -40,6 +40,25 @@ pub fn render(app: &mut TextExpanderApp, ui: &mut egui::Ui) {
                 }
             });
 
+            ui.collapsing("Text Expansion", |ui| {
+                ui.label("Expansion Log Path (empty for default):");
+                ui.horizontal(|ui| {
+                    ui.add(egui::TextEdit::singleline(&mut app.expansion_log_path).desired_width(400.0));
+                    if ui.button("Browse").clicked() {
+                        if let Some(path) = rfd::FileDialog::new()
+                            .set_title("Select Expansion Log File")
+                            .add_filter("JSON", &["json"])
+                            .save_file() {
+                            app.expansion_log_path = path.to_string_lossy().to_string();
+                        }
+                    }
+                });
+                if ui.button("Apply Expansion Settings").clicked() {
+                    digicore_text_expander::application::expansion_logger::set_log_path(app.expansion_log_path.clone());
+                    app.status = "Expansion settings applied".to_string();
+                }
+            });
+
             ui.collapsing("Sync (WebDAV)", |ui| {
                 ui.label("WebDAV URL (e.g. https://webdav.example.com/library.json):");
                 ui.text_edit_singleline(&mut app.sync_url);

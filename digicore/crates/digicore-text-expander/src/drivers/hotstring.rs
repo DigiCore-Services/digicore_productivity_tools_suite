@@ -9,6 +9,8 @@
 use crate::application::clipboard_history;
 use crate::application::discovery;
 use crate::application::expansion_diagnostics;
+use crate::application::expansion_logger;
+use crate::application::expansion_stats;
 use crate::application::expansion_engine::is_expansion_paused;
 use crate::application::ghost_follower;
 use crate::application::ghost_suggestor;
@@ -609,11 +611,17 @@ fn do_expand(
                 "warn",
                 format!("Expansion aborted: window changed from '{}' to '{}'", expected, current),
             );
+            let process = if let Ok(g) = state.lock() {
+                g.window.get_active().map(|c| c.process_name.clone()).unwrap_or_default()
+            } else {
+                String::new()
+            };
+            expansion_logger::log_failure(trigger, &current, &process, "window_changed_aborted");
             return;
         }
     }
 
-    crate::application::expansion_stats::record_expansion(
+    expansion_stats::record_expansion(
         trigger,
         expansion.len(),
         trigger_len,
@@ -627,16 +635,22 @@ fn do_expand(
         }
         std::thread::sleep(std::time::Duration::from_millis(20));
         let saved = g.clipboard.get_text().ok();
+        let (process, title) = g.window.get_active().map(|c| (c.process_name.clone(), c.title.clone())).unwrap_or_default();
+        let mut method = "type";
+
         if g.clipboard.set_multi(expansion, html, rtf).is_ok() {
             if g.input.send_ctrl_v().is_ok() {
+                method = "paste";
                 let _ = saved.as_ref().map(|s| g.clipboard.set_text(s));
             } else {
+                method = "type_fallback";
                 let _ = g.input.type_text(expansion);
                 let _ = saved.as_ref().map(|s| g.clipboard.set_text(s));
             }
         } else {
             let _ = g.input.type_text(expansion);
         }
+        expansion_logger::log_success(trigger, expansion.len(), &title, &process, method);
     }
     debug_log("expand: done");
 }

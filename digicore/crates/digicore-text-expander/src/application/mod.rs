@@ -7,6 +7,7 @@ pub mod clipboard_history;
 pub mod discovery;
 pub mod expansion_diagnostics;
 pub mod expansion_engine;
+pub mod expansion_logger;
 pub mod expansion_stats;
 pub mod ghost_follower;
 pub mod ghost_suggestor;

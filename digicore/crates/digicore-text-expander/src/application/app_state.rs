@@ -77,6 +77,7 @@ pub struct AppState {
     pub startup_sync_done: bool,
 
     // Expansion
+    pub expansion_log_path: String,
     pub expansion_paused: bool,
 
     // Auto-load library once on startup (when path exists)
@@ -243,6 +244,7 @@ impl Default for AppState {
             sync_status: SyncResult::Idle,
             sync_rx: None,
             startup_sync_done: false,
+            expansion_log_path: String::new(),
             expansion_paused: false,
             initial_load_attempted: false,
             window_visibility_ensured: false,

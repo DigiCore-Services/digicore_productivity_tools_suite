@@ -47,6 +47,11 @@ impl DataPathResolver {
         Self::root().join("expansion_stats.json")
     }
 
+    /// Directory for application logs.
+    pub fn logs_dir() -> PathBuf {
+        Self::root().join("logs")
+    }
+
     /// Path to the script library JSON file.
     pub fn script_library_path() -> PathBuf {
         Self::root().join("text_expansion_library.json")

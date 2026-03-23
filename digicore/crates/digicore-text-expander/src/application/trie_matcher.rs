@@ -1,6 +1,5 @@
 use aho_corasick::{AhoCorasick, AhoCorasickBuilder, MatchKind};
 use digicore_core::domain::entities::snippet::{Snippet, TriggerType};
-use std::collections::HashMap;
 
 /// TrieMatcher uses Aho-Corasick to match literal (Suffix) triggers in O(1) time.
 pub struct TrieMatcher {

@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 pub struct AppConfig {
     // Library
     pub library_path: String,
+    pub expansion_log_path: String,
 
     // Sync
     pub sync_url: String,
@@ -56,6 +57,7 @@ impl Default for AppConfig {
     fn default() -> Self {
         Self {
             library_path: String::new(),
+            expansion_log_path: String::new(),
             sync_url: String::new(),
             sync_password: String::new(),
             template_date_format: "%Y-%m-%d".to_string(),

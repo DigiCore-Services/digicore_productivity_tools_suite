@@ -52,6 +52,7 @@ pub mod keys {
     pub const COPY_TO_CLIPBOARD_JSON_OUTPUT_DIR: &str = "copy_to_clipboard_json_output_dir";
     pub const COPY_TO_CLIPBOARD_IMAGE_STORAGE_DIR: &str = "copy_to_clipboard_image_storage_dir";
     pub const COPY_TO_CLIPBOARD_OCR_ENABLED: &str = "copy_to_clipboard_ocr_enabled";
+    pub const EXPANSION_LOG_PATH: &str = "expansion_log_path";
     pub const EXPANSION_PAUSED: &str = "expansion_paused";
     /// Tauri UI: last active tab index (0-3).
     pub const UI_LAST_TAB: &str = "ui_last_tab";
