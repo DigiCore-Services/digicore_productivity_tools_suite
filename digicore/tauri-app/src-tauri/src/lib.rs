@@ -13,6 +13,7 @@ mod kms_service;
 mod kms_diagnostic_service;
 mod embedding_service;
 mod indexing_service;
+mod skill_sync;
 
 use crate::api::{save_all_on_exit, Api};
 
@@ -628,6 +629,7 @@ pub fn run() {
     indexing_service.register_provider(Arc::new(indexing_service::NoteIndexProvider));
     indexing_service.register_provider(Arc::new(indexing_service::SnippetIndexProvider));
     indexing_service.register_provider(Arc::new(indexing_service::ClipboardIndexProvider));
+    indexing_service.register_provider(Arc::new(indexing_service::SkillIndexProvider));
 
     tauri::Builder::default()
         .manage(app_state.clone())
@@ -912,6 +914,43 @@ pub fn run() {
                             sql: "ALTER TABLE snippets ADD COLUMN case_adaptive TEXT DEFAULT 'true';",
                             kind: MigrationKind::Up,
                         },
+                        Migration {
+                            version: 14,
+                            description: "kms_skill_hub_foundation",
+                            sql: r#"
+                                CREATE TABLE IF NOT EXISTS kms_skills (
+                                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                    name TEXT NOT NULL UNIQUE,
+                                    description TEXT NOT NULL,
+                                    version TEXT,
+                                    path TEXT NOT NULL,
+                                    instructions TEXT,
+                                    last_modified TEXT,
+                                    sync_status TEXT DEFAULT 'idle',
+                                    last_error TEXT
+                                );
+
+                                -- Sync skills to unified FTS
+                                CREATE TRIGGER IF NOT EXISTS kms_skills_sync_fts_ai AFTER INSERT ON kms_skills
+                                BEGIN
+                                    INSERT INTO kms_unified_fts (entity_type, entity_id, title, content)
+                                    VALUES ('skill', new.name, new.name, new.description || ' ' || COALESCE(new.instructions, ''));
+                                END;
+
+                                CREATE TRIGGER IF NOT EXISTS kms_skills_sync_fts_au AFTER UPDATE ON kms_skills
+                                BEGIN
+                                    DELETE FROM kms_unified_fts WHERE entity_type = 'skill' AND entity_id = old.name;
+                                    INSERT INTO kms_unified_fts (entity_type, entity_id, title, content)
+                                    VALUES ('skill', new.name, new.name, new.description || ' ' || COALESCE(new.instructions, ''));
+                                END;
+
+                                CREATE TRIGGER IF NOT EXISTS kms_skills_sync_fts_ad AFTER DELETE ON kms_skills
+                                BEGIN
+                                    DELETE FROM kms_unified_fts WHERE entity_type = 'skill' AND entity_id = old.name;
+                                END;
+                            "#,
+                            kind: MigrationKind::Up,
+                        },
                     ],
                 )
                 .build(),
@@ -1121,6 +1160,18 @@ pub fn run() {
                         log::info!("[KMS][Startup] Filesystem watcher initialized");
                     }
                 }
+
+                // T+4.5s: Skill Hub Sync
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                log::info!("[SkillSync][Startup] Initializing Skill Hub sync...");
+                let skill_paths = skill_sync::get_default_skill_paths();
+                let handle_skills = handle_for_init.clone();
+                tauri::async_runtime::spawn(async move {
+                    for path in &skill_paths {
+                        let _ = skill_sync::sync_skills_dir(&handle_skills, path).await;
+                    }
+                    skill_sync::start_skill_watcher(handle_skills, skill_paths);
+                });
 
 
                 // T+5s: Appearance enforcement loop
