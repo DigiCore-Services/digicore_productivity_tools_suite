@@ -1,20 +1,23 @@
 import React, { useState, useEffect, useRef, lazy, Suspense } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import { listen } from "@tauri-apps/api/event";
 import { getTaurpc } from "./lib/taurpc";
-import { resolveTheme } from "./lib/theme";
+import { resolveTheme, applyThemeToDocument } from "./lib/theme";
 import { Toaster } from "./components/ui/toaster";
 import { useToast } from "./components/ui/use-toast";
-import { Book, FolderOpen, Search, Settings, Plus, Star, FileText, Sun, Moon, AlertCircle, RefreshCw, Check, Terminal, Activity } from "lucide-react";
+import { Book, FolderOpen, Search, Settings, Plus, Star, FileText, Sun, Moon, AlertCircle, RefreshCw, Check, Terminal, Activity, Cpu } from "lucide-react";
 import { Button } from "./components/ui/button";
 import KmsEditor from "./components/kms/KmsEditor";
 import KmsLogViewer from "./components/kms/KmsLogViewer";
 import VaultSettingsModal from "./components/modals/VaultSettingsModal";
 import { ViewFull } from "./components/modals/ViewFull";
 const ImageViewerModal = lazy(() =>
-  import("./components/modals/ImageViewerModal").then((m) => ({ default: m.ImageViewerModal }))
+    import("./components/modals/ImageViewerModal").then((m) => ({ default: m.ImageViewerModal }))
 );
 import FileExplorer from "./components/kms/FileExplorer";
-import { KmsNoteDto, KmsFileSystemItemDto, KmsLogDto } from "./bindings";
+import SkillHub from "./components/kms/SkillHub";
+import SkillEditor from "./components/kms/SkillEditor";
+import { KmsNoteDto, KmsFileSystemItemDto, KmsLogDto, SkillDto } from "./bindings";
 import { ClipEntry } from "./types";
 
 export default function KmsApp() {
@@ -26,7 +29,10 @@ export default function KmsApp() {
     const [activeContent, setActiveContent] = useState<string>("");
     const [theme, setTheme] = useState<"light" | "dark">("light");
     const [themeOverride, setThemeOverride] = useState<"light" | "dark" | null>(null);
-    const [view, setView] = useState<"explorer" | "search" | "favorites" | "logs">("explorer");
+    const [view, setView] = useState<"explorer" | "search" | "favorites" | "logs" | "skills">("explorer");
+    const [activeSkill, setActiveSkill] = useState<SkillDto | null>(null);
+    const [isSkillEditorOpen, setIsSkillEditorOpen] = useState(false);
+    const [skillRefreshKey, setSkillRefreshKey] = useState(0);
     const [searchQuery, setSearchQuery] = useState("");
     const [searchResults, setSearchResults] = useState<any[]>([]); // SearchResultDto
     const [searchLoading, setSearchLoading] = useState(false);
@@ -457,6 +463,10 @@ export default function KmsApp() {
         setThemeOverride(currentTheme === "dark" ? "light" : "dark");
     };
 
+    useEffect(() => {
+        applyThemeToDocument(currentTheme);
+    }, [currentTheme]);
+
     if (initializing) {
         return (
             <div className="flex items-center justify-center h-screen bg-dc-bg text-dc-text">
@@ -520,6 +530,15 @@ export default function KmsApp() {
                             >
                                 <Star size={16} className={view === "favorites" ? "text-dc-accent" : "text-dc-text-muted"} />
                                 <span className="text-sm">Favorites</span>
+                            </Button>
+                            <Button
+                                variant={view === "skills" ? "secondary" : "ghost"}
+                                size="sm"
+                                className={`w-full justify-start gap-2 h-9 px-2 ${view === "skills" ? "bg-dc-bg-hover text-dc-accent font-medium" : "text-dc-text-muted hover:bg-dc-bg-hover"}`}
+                                onClick={() => setView("skills")}
+                            >
+                                <Cpu size={16} className={view === "skills" ? "text-dc-accent" : "text-dc-text-muted"} />
+                                <span className="text-sm">Skill Hub</span>
                             </Button>
                             <Button
                                 variant={view === "logs" ? "secondary" : "ghost"}
@@ -717,6 +736,11 @@ export default function KmsApp() {
                                     )}
                                 </div>
                             </div>
+                        ) : view === "skills" ? (
+                            <div className="p-4 flex flex-col items-center justify-center py-20 opacity-30 text-center">
+                                <Cpu size={32} className="mb-4" />
+                                <span className="text-xs">Skill Hub active in main view</span>
+                            </div>
                         ) : view === "logs" ? (
                             <KmsLogViewer />
                         ) : (
@@ -789,55 +813,73 @@ export default function KmsApp() {
                     </Button>
                 </div >
 
-                {
-                    activeNote ? (
-                        <KmsEditor
-                            path={activeNote.path}
-                            initialContent={activeContent}
-                            onSave={handleSaveNote}
-                            onDelete={handleDeleteNote}
-                            onRename={(newName) => handleRenameNote(newName).then(() => { })
-                            }
-                            onSelectNote={(path) => {
-                                const note = notes.find(n => n.path === path);
-                                if (note) handleSelectNote(note);
-                            }}
+                {view === "skills" ? (
+                    <div className="flex-1 h-full overflow-hidden">
+                        <SkillHub
+                            refreshKey={skillRefreshKey}
+                            onSelectSkill={(s) => { setActiveSkill(s); setIsSkillEditorOpen(true); }}
+                            onCreateNew={() => { setActiveSkill(null); setIsSkillEditorOpen(true); }}
                         />
-                    ) : (
-                        <div className="flex-1 flex items-center justify-center p-8">
-                            <div className="max-w-md w-full text-center space-y-4">
-                                <div className="mx-auto w-16 h-16 bg-dc-accent/10 rounded-2xl flex items-center justify-center text-dc-accent mb-6">
-                                    <Book size={32} />
-                                </div>
-                                <h2 className="text-2xl font-bold tracking-tight text-dc-text">Select a note to get started</h2>
-                                <p className="text-dc-text-muted text-sm leading-relaxed">
-                                    Every note you create is a local Markdown file stored securely in your vault.
-                                    Use the sidebar to explore your knowledge graph.
-                                </p>
-                                <div className="pt-6 flex justify-center gap-3">
-                                    <Button
-                                        size="sm"
-                                        className="bg-dc-accent hover:bg-dc-accent/90 text-white gap-2 px-6"
-                                        onClick={() => handleCreateNote()}
-                                    >
-                                        <Plus size={16} />
-                                        Create New Note
-                                    </Button>
-                                </div>
+                    </div>
+                ) : activeNote ? (
+                    <KmsEditor
+                        path={activeNote.path}
+                        initialContent={activeContent}
+                        onSave={handleSaveNote}
+                        onDelete={handleDeleteNote}
+                        onRename={(newName) => handleRenameNote(newName).then(() => { })}
+                        onSelectNote={(path) => {
+                            const note = notes.find(n => n.path === path);
+                            if (note) handleSelectNote(note);
+                        }}
+                    />
+                ) : (
+                    <div className="flex-1 flex flex-col items-center justify-center p-8">
+                        <div className="max-w-md w-full text-center space-y-4">
+                            <div className="mx-auto w-16 h-16 bg-dc-accent/10 rounded-2xl flex items-center justify-center text-dc-accent mb-6">
+                                <Book size={32} />
+                            </div>
+                            <h2 className="text-2xl font-bold tracking-tight text-dc-text">Select a note to get started</h2>
+                            <p className="text-dc-text-muted text-sm leading-relaxed">
+                                Every note you create is a local Markdown file stored securely in your vault.
+                                Use the sidebar to explore your knowledge graph.
+                            </p>
+                            <div className="pt-6 flex justify-center gap-3">
+                                <Button
+                                    size="sm"
+                                    className="bg-dc-accent hover:bg-dc-accent/90 text-white gap-2 px-6"
+                                    onClick={() => handleCreateNote()}
+                                >
+                                    <Plus size={16} />
+                                    Create New Note
+                                </Button>
                             </div>
                         </div>
+                    </div>
+                )}
+
+                <AnimatePresence>
+                    {isSkillEditorOpen && (
+                        <SkillEditor
+                            key={activeSkill ? `${activeSkill.metadata.name}-${skillRefreshKey}` : "new-skill"}
+                            skill={activeSkill}
+                            onClose={() => setIsSkillEditorOpen(false)}
+                            onSaved={() => {
+                                setIsSkillEditorOpen(false);
+                                setSkillRefreshKey(prev => prev + 1);
+                            }}
+                        />
                     )}
+                </AnimatePresence>
 
                 {/* Visual Accent */}
-                {
-                    !activeNote && (
-                        <>
-                            <div className="absolute top-0 right-0 w-64 h-64 bg-dc-accent/5 blur-[120px] pointer-events-none rounded-full" />
-                            <div className="absolute bottom-0 left-0 w-96 h-96 bg-dc-accent/5 blur-[160px] pointer-events-none rounded-full" />
-                        </>
-                    )
-                }
-            </main >
+                {!activeNote && view !== "skills" && (
+                    <>
+                        <div className="absolute top-0 right-0 w-64 h-64 bg-dc-accent/5 blur-[120px] pointer-events-none rounded-full" />
+                        <div className="absolute bottom-0 left-0 w-96 h-96 bg-dc-accent/5 blur-[160px] pointer-events-none rounded-full" />
+                    </>
+                )}
+            </main>
 
             <Toaster />
             <VaultSettingsModal
