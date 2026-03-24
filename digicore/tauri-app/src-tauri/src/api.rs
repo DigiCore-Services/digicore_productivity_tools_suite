@@ -1464,6 +1464,30 @@ pub trait Api {
     async fn kms_get_logs(limit: u32) -> Result<Vec<KmsLogDto>, String>;
     async fn kms_clear_logs() -> Result<(), String>;
     async fn kms_get_vault_structure() -> Result<KmsFileSystemItemDto, String>;
+
+    // --- Skill Hub ---
+    async fn kms_list_skills() -> Result<Vec<SkillDto>, String>;
+    async fn kms_get_skill(name: String) -> Result<Option<SkillDto>, String>;
+    async fn kms_save_skill(skill: SkillDto) -> Result<(), String>;
+    async fn kms_delete_skill(name: String) -> Result<(), String>;
+    async fn kms_sync_skills() -> Result<(), String>;
+}
+
+#[taurpc::ipc_type]
+pub struct SkillDto {
+    pub metadata: SkillMetadataDto,
+    pub path: Option<String>,
+    pub instructions: Option<String>,
+    pub resources: Vec<String>,
+}
+
+#[taurpc::ipc_type]
+pub struct SkillMetadataDto {
+    pub name: String,
+    pub description: String,
+    pub version: String,
+    pub author: Option<String>,
+    pub tags: Vec<String>,
 }
 
 #[taurpc::ipc_type]
@@ -1569,7 +1593,7 @@ impl ApiImpl {
 // Ensure KmsIndexingService is imported for the trait methods to find it
 use crate::indexing_service::KmsIndexingService;
 
-fn get_app(app: &Arc<Mutex<Option<AppHandle>>>) -> AppHandle {
+pub(crate) fn get_app(app: &Arc<Mutex<Option<AppHandle>>>) -> AppHandle {
     app.lock()
         .unwrap()
         .clone()
@@ -5214,6 +5238,107 @@ end
         // Emit event to frontend
         let _ = app.emit("kms-vault-path-changed", new_path);
         
+        Ok(())
+    }
+
+    // --- Skill Hub ---
+    async fn kms_list_skills(self) -> Result<Vec<SkillDto>, String> {
+        use digicore_text_expander::ports::skill::SkillRepository;
+        let repo = kms_repository::KmsSkillRepository;
+        let skills = repo.list_skills().await.map_err(|e| e.to_string())?;
+        
+        Ok(skills.into_iter().map(|s| SkillDto {
+            metadata: SkillMetadataDto {
+                name: s.metadata.name,
+                description: s.metadata.description,
+                version: s.metadata.version.unwrap_or_else(|| "1.0.0".to_string()),
+                author: s.metadata.author,
+                tags: s.metadata.tags,
+            },
+            path: Some(s.path.to_string_lossy().to_string()),
+            instructions: Some(s.instructions),
+            resources: Vec::new(),
+        }).collect())
+    }
+
+    async fn kms_get_skill(self, name: String) -> Result<Option<SkillDto>, String> {
+        use digicore_text_expander::ports::skill::SkillRepository;
+        let repo = kms_repository::KmsSkillRepository;
+        let skill = repo.get_skill(&name).await.map_err(|e| e.to_string())?;
+        
+        Ok(skill.map(|s| SkillDto {
+            metadata: SkillMetadataDto {
+                name: s.metadata.name,
+                description: s.metadata.description,
+                version: s.metadata.version.unwrap_or_else(|| "1.0.0".to_string()),
+                author: s.metadata.author,
+                tags: s.metadata.tags,
+            },
+            path: Some(s.path.to_string_lossy().to_string()),
+            instructions: Some(s.instructions),
+            resources: Vec::new(),
+        }))
+    }
+
+    async fn kms_save_skill(self, skill: SkillDto) -> Result<(), String> {
+        let app = get_app(&self.app_handle);
+        let repo = kms_repository::KmsSkillRepository;
+        
+        log::info!("[KmsApi] kms_save_skill: name={}, desc_len={}, inst_len={}", 
+            skill.metadata.name, 
+            skill.metadata.description.len(),
+            skill.instructions.as_ref().map(|s| s.len()).unwrap_or(0)
+        );
+        use digicore_text_expander::ports::skill::SkillRepository;
+        use digicore_core::domain::entities::skill::{Skill, SkillMetadata};
+        
+        let repo = kms_repository::KmsSkillRepository;
+        let skill_entity = Skill {
+            metadata: SkillMetadata {
+                name: skill.metadata.name,
+                description: skill.metadata.description,
+                version: Some(skill.metadata.version),
+                author: skill.metadata.author,
+                tags: skill.metadata.tags,
+            },
+            path: skill.path.map(PathBuf::from).unwrap_or_default(),
+            instructions: skill.instructions.unwrap_or_default(),
+            resources: Vec::new(),
+        };
+        
+        repo.save_skill(&skill_entity).await.map_err(|e| e.to_string())?;
+        
+        // Trigger reindexing for this item
+        let app = get_app(&self.app_handle);
+        let service = app.state::<Arc<indexing_service::KmsIndexingService>>().inner().clone();
+        let app_clone = app.clone();
+        let entity_id = skill_entity.metadata.name.clone();
+        tokio::spawn(async move {
+            let _ = service.index_single_item(&app_clone, "skills", &entity_id).await;
+        });
+        
+        Ok(())
+    }
+
+    async fn kms_delete_skill(self, name: String) -> Result<(), String> {
+        use digicore_text_expander::ports::skill::SkillRepository;
+        let repo = kms_repository::KmsSkillRepository;
+        repo.delete_skill(&name).await.map_err(|e| e.to_string())?;
+        
+        // Cleanup embeddings
+        let _ = kms_repository::delete_embeddings_for_entity("skill", &name);
+        let _ = kms_repository::update_index_status("skills", &name, "deleted", None);
+        
+        Ok(())
+    }
+
+    async fn kms_sync_skills(self) -> Result<(), String> {
+        let app = get_app(&self.app_handle);
+        let service = app.state::<Arc<indexing_service::KmsIndexingService>>();
+        
+        // This will trigger the SkillIndexProvider::index_all which currently lists skills from DB
+        // In Phase 7, we'll make this scan the filesystem first.
+        let _ = service.index_provider_by_id(&app, "skills").await?;
         Ok(())
     }
 }
