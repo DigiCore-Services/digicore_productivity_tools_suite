@@ -1,11 +1,13 @@
 use rusqlite::{params, Connection, OptionalExtension};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use chrono;
 use crate::clipboard_repository;
 use crate::utils::crypto;
 use digicore_text_expander::adapters::storage::JsonFileStorageAdapter;
-use digicore_text_expander::ports::{storage_keys, StoragePort};
+use digicore_text_expander::ports::{storage_keys, StoragePort, skill::SkillRepository};
+use digicore_core::domain::entities::skill::{Skill, SkillMetadata};
+use async_trait::async_trait;
 
 pub fn get_vault_path() -> Result<PathBuf, String> {
     let storage = JsonFileStorageAdapter::load();
@@ -78,8 +80,24 @@ pub fn init(db_path: PathBuf) -> Result<(), String> {
             details TEXT,
             timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
         );
+        
+        CREATE TABLE IF NOT EXISTS kms_skills (
+            name TEXT PRIMARY KEY,
+            description TEXT NOT NULL,
+            version TEXT,
+            author TEXT,
+            tags TEXT,
+            path TEXT NOT NULL,
+            instructions TEXT,
+            last_modified DATETIME
+        );
         "#
     ).map_err(|e| e.to_string())?;
+    
+    // Migration: Add missing columns if they don't exist
+    let _ = conn.execute("ALTER TABLE kms_skills ADD COLUMN version TEXT", []);
+    let _ = conn.execute("ALTER TABLE kms_skills ADD COLUMN author TEXT", []);
+    let _ = conn.execute("ALTER TABLE kms_skills ADD COLUMN tags TEXT", []);
     
     if DB_CONN.set(Mutex::new(conn)).is_err() {
         // Already initialized by another thread, that's fine.
@@ -876,4 +894,163 @@ pub fn search_hybrid(
     }).collect();
 
     Ok(final_results)
+}
+
+// --- Skill Management ---
+
+pub struct KmsSkillRepository;
+
+#[async_trait]
+impl SkillRepository for KmsSkillRepository {
+    async fn list_skills(&self) -> anyhow::Result<Vec<Skill>> {
+        let conn = conn_guard().map_err(|e| anyhow::anyhow!(e))?;
+        let mut stmt = conn.prepare(
+            "SELECT name, description, version, path, instructions, author, tags FROM kms_skills ORDER BY name ASC"
+        )?;
+        
+        let rows = stmt.query_map([], |row| {
+            Ok(Skill {
+                metadata: SkillMetadata {
+                    name: row.get(0)?,
+                    description: row.get(1)?,
+                    version: row.get(2)?,
+                    author: row.get(5)?,
+                    tags: serde_json::from_str(&row.get::<_, String>(6).unwrap_or_else(|_| "[]".to_string())).unwrap_or_default(),
+                },
+                path: PathBuf::from(row.get::<_, String>(3)?),
+                instructions: row.get::<_, Option<String>>(4)?.unwrap_or_default(),
+                resources: Vec::new(), // Populated elsewhere if needed
+            })
+        })?;
+
+        let mut skills = Vec::new();
+        for skill in rows {
+            skills.push(skill?);
+        }
+        Ok(skills)
+    }
+
+    async fn get_skill(&self, name: &str) -> anyhow::Result<Option<Skill>> {
+        let conn = conn_guard().map_err(|e| anyhow::anyhow!(e))?;
+        let mut stmt = conn.prepare(
+            "SELECT name, description, version, path, instructions, author, tags FROM kms_skills WHERE name = ?1"
+        )?;
+        
+        let skill = stmt.query_row(params![name], |row| {
+            Ok(Skill {
+                metadata: SkillMetadata {
+                    name: row.get(0)?,
+                    description: row.get(1)?,
+                    version: row.get(2)?,
+                    author: row.get(5)?,
+                    tags: serde_json::from_str(&row.get::<_, String>(6).unwrap_or_else(|_| "[]".to_string())).unwrap_or_default(),
+                },
+                path: PathBuf::from(row.get::<_, String>(3)?),
+                instructions: row.get::<_, Option<String>>(4)?.unwrap_or_default(),
+                resources: Vec::new(),
+            })
+        }).optional()?;
+
+        Ok(skill)
+    }
+
+    async fn save_skill(&self, skill: &Skill) -> anyhow::Result<()> {
+        let log_msg = format!("save_skill: name={}, desc_len={}, inst_len={}", 
+            skill.metadata.name, 
+            skill.metadata.description.len(),
+            skill.instructions.len()
+        );
+        let log_details = format!("desc='{}', inst='{}'", 
+            skill.metadata.description.replace("'", "''"), 
+            skill.instructions.replace("'", "''")
+        );
+        
+        let conn = conn_guard().map_err(|e| anyhow::anyhow!(e))?;
+        
+        let _ = conn.execute(
+            "INSERT INTO kms_logs (level, message, details) VALUES (?, ?, ?)",
+            params!["INFO", log_msg, log_details]
+        );
+
+        let now = chrono::Local::now().to_rfc3339();
+        
+        conn.execute(
+            "INSERT INTO kms_skills (name, description, version, path, instructions, last_modified, author, tags)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+             ON CONFLICT(name) DO UPDATE SET
+                description = excluded.description,
+                version = excluded.version,
+                path = excluded.path,
+                instructions = excluded.instructions,
+                last_modified = excluded.last_modified,
+                author = excluded.author,
+                tags = excluded.tags",
+            params![
+                skill.metadata.name,
+                skill.metadata.description,
+                skill.metadata.version,
+                skill.path.to_string_lossy(),
+                skill.instructions,
+                now,
+                skill.metadata.author,
+                serde_json::to_string(&skill.metadata.tags).unwrap_or_else(|_| "[]".to_string())
+            ],
+        )?;
+        Ok(())
+    }
+
+    async fn delete_skill(&self, name: &str) -> anyhow::Result<()> {
+        let conn = conn_guard().map_err(|e| anyhow::anyhow!(e))?;
+        conn.execute("DELETE FROM kms_skills WHERE name = ?", [name])?;
+        
+        // Also clean up unified FTS (handled by trigger, but vector map needs manual cleanup if indexed)
+        // Cleanup vector map for 'skill' entity
+        let _ = conn.execute(
+            "DELETE FROM kms_vector_map WHERE entity_type = 'skill' AND entity_id = ?1",
+            params![name]
+        );
+        
+        Ok(())
+    }
+
+    async fn delete_skill_by_path(&self, path: &Path) -> anyhow::Result<()> {
+        let name: Option<String> = {
+            let conn = conn_guard().map_err(|e| anyhow::anyhow!(e))?;
+            let path_str = path.to_string_lossy();
+            
+            conn.query_row(
+                "SELECT name FROM kms_skills WHERE path = ?1",
+                params![path_str],
+                |row| row.get(0)
+            ).optional()?
+        };
+        
+        if let Some(entry_name) = name {
+            self.delete_skill(&entry_name).await?;
+        }
+        
+        Ok(())
+    }
+
+    async fn find_skill_name_by_path(&self, path: &Path) -> anyhow::Result<Option<String>> {
+        let conn = conn_guard().map_err(|e| anyhow::anyhow!(e))?;
+        let path_str = path.to_string_lossy();
+        
+        let name: Option<String> = conn.query_row(
+            "SELECT name FROM kms_skills WHERE path = ?1",
+            params![path_str],
+            |row| row.get(0)
+        ).optional()?;
+        
+        Ok(name)
+    }
+
+    async fn refresh(&self) -> anyhow::Result<()> {
+        // Implementation for scanning filesystem will be added in Sync Engine phase
+        Ok(())
+    }
+
+    fn vault_path(&self) -> PathBuf {
+        get_vault_path().unwrap_or_default()
+    }
 }

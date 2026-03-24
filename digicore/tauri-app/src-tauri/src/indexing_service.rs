@@ -351,3 +351,87 @@ impl SemanticIndexProvider for ClipboardIndexProvider {
         }
     }
 }
+
+// --- Skill Provider ---
+
+pub struct SkillIndexProvider;
+
+#[async_trait]
+impl SemanticIndexProvider for SkillIndexProvider {
+    fn provider_id(&self) -> &str {
+        "skills"
+    }
+
+    async fn index_all(&self, _app: &AppHandle) -> Result<usize, String> {
+        use crate::embedding_service;
+        use digicore_text_expander::ports::skill::SkillRepository;
+        
+        let repo = kms_repository::KmsSkillRepository;
+        let skills = repo.list_skills().await.map_err(|e| e.to_string())?;
+        
+        let mut count = 0;
+        for skill in skills {
+            let entity_id = skill.metadata.name.clone();
+            // Combining Name, Description and Instructions for semantic context
+            let content = format!("Skill: {} | Description: {} | Instructions: {}", 
+                skill.metadata.name, 
+                skill.metadata.description, 
+                skill.instructions
+            );
+            
+            match embedding_service::generate_text_embedding(&content, None) {
+                Ok(vector) => {
+                    let metadata = serde_json::json!({
+                        "name": skill.metadata.name,
+                        "description": skill.metadata.description,
+                        "version": skill.metadata.version,
+                        "path": skill.path.to_string_lossy()
+                    }).to_string();
+                    
+                    kms_repository::upsert_embedding("text", "skill", &entity_id, vector, Some(metadata))?;
+                    // Already handled by triggers for FTS, but we ensure consistency
+                    kms_repository::update_index_status("skills", &entity_id, "indexed", None)?;
+                    count += 1;
+                }
+                Err(e) => {
+                    kms_repository::update_index_status("skills", &entity_id, "failed", Some(&e.to_string()))?;
+                }
+            }
+        }
+        Ok(count)
+    }
+
+    async fn index_item(&self, _app: &AppHandle, entity_id: &str) -> Result<(), String> {
+        use crate::embedding_service;
+        use digicore_text_expander::ports::skill::SkillRepository;
+        
+        let repo = kms_repository::KmsSkillRepository;
+        let skill_opt = repo.get_skill(entity_id).await.map_err(|e| e.to_string())?;
+        let skill = skill_opt.ok_or_else(|| format!("Skill not found: {}", entity_id))?;
+        
+        let content = format!("Skill: {} | Description: {} | Instructions: {}", 
+            skill.metadata.name, 
+            skill.metadata.description, 
+            skill.instructions
+        );
+        
+        match embedding_service::generate_text_embedding(&content, None) {
+            Ok(vector) => {
+                let metadata = serde_json::json!({
+                    "name": skill.metadata.name,
+                    "description": skill.metadata.description,
+                    "version": skill.metadata.version,
+                    "path": skill.path.to_string_lossy()
+                }).to_string();
+                
+                kms_repository::upsert_embedding("text", "skill", &entity_id, vector, Some(metadata))?;
+                kms_repository::update_index_status("skills", &entity_id, "indexed", None)?;
+                Ok(())
+            }
+            Err(e) => {
+                kms_repository::update_index_status("skills", &entity_id, "failed", Some(&e.to_string()))?;
+                Err(e.to_string())
+            }
+        }
+    }
+}
