@@ -217,9 +217,16 @@ export function ScriptTab({ appState }: ScriptTabProps) {
   const [trustedSignerListText, setTrustedSignerListText] = useState("");
   const [blockedSignerListText, setBlockedSignerListText] = useState("");
 
+  const [savedFeedback, setSavedFeedback] = useState<string | null>(null);
+
   useEffect(() => {
     localStorage.setItem("digicore-script-subtab", activeSubTab);
   }, [activeSubTab]);
+
+  const triggerSavedFeedback = (id: string) => {
+    setSavedFeedback(id);
+    setTimeout(() => setSavedFeedback(null), 3000);
+  };
 
   useEffect(() => {
     if (appState) {
@@ -312,6 +319,7 @@ export function ScriptTab({ appState }: ScriptTabProps) {
       } as Parameters<ReturnType<typeof getTaurpc>["update_config"]>[0]);
       await getTaurpc().save_settings();
       pushStatus("Run settings saved.");
+      triggerSavedFeedback("run");
     } catch (e) {
       pushStatus("Error: " + String(e));
     }
@@ -325,6 +333,7 @@ export function ScriptTab({ appState }: ScriptTabProps) {
     try {
       await getTaurpc().save_script_library_js(jsContent);
       pushStatus("Global JavaScript library saved and hot-reloaded.");
+      triggerSavedFeedback("js");
     } catch (e) {
       pushStatus("Error: " + String(e));
     }
@@ -359,6 +368,7 @@ export function ScriptTab({ appState }: ScriptTabProps) {
         }),
       ]);
       pushStatus("Global Python library + Python engine settings saved.");
+      triggerSavedFeedback("py");
     } catch (e) {
       pushStatus("Error: " + String(e));
     }
@@ -393,6 +403,7 @@ export function ScriptTab({ appState }: ScriptTabProps) {
         }),
       ]);
       pushStatus("Global Lua library + Lua engine settings saved.");
+      triggerSavedFeedback("lua");
     } catch (e) {
       pushStatus("Error: " + String(e));
     }
@@ -429,6 +440,7 @@ export function ScriptTab({ appState }: ScriptTabProps) {
         }),
       ]);
       pushStatus("All script libraries and engine settings saved.");
+      triggerSavedFeedback("all");
     } catch (e) {
       pushStatus("Error: " + String(e));
     }
@@ -460,6 +472,7 @@ export function ScriptTab({ appState }: ScriptTabProps) {
         },
       });
       pushStatus("HTTP/Weather engine settings saved.");
+      triggerSavedFeedback("http");
     } catch (e) {
       pushStatus("Error: " + String(e));
     }
@@ -491,6 +504,7 @@ export function ScriptTab({ appState }: ScriptTabProps) {
         },
       });
       pushStatus("DSL engine setting saved.");
+      triggerSavedFeedback("dsl");
     } catch (e) {
       pushStatus("Error: " + String(e));
     }
@@ -737,6 +751,7 @@ export function ScriptTab({ appState }: ScriptTabProps) {
         blocked_fingerprints: parseSignerList(blockedSignerListText),
       } as EngineSignerRegistry);
       pushStatus("Signer registry saved.");
+      triggerSavedFeedback("signer");
     } catch (e) {
       pushStatus("Signer registry save failed: " + String(e));
     }
@@ -879,6 +894,9 @@ export function ScriptTab({ appState }: ScriptTabProps) {
           disabled={!validation.canSave}
         >
           Save All Libraries
+          {savedFeedback === "all" && (
+            <span className="text-green-300 text-sm ml-2 font-medium">Saved!</span>
+          )}
         </button>
       </div>
       <p className="text-sm text-[var(--dc-text-muted)] mb-2">{status}</p>
@@ -964,6 +982,9 @@ export function ScriptTab({ appState }: ScriptTabProps) {
               disabled={!validation.canSave}
             >
               Save & Reload JS
+              {savedFeedback === "js" && (
+                <span className="text-green-500 text-sm ml-2 font-medium animate-pulse">Saved!</span>
+              )}
             </button>
           </div>
           <pre className="mt-2 text-xs whitespace-pre-wrap bg-[var(--dc-bg-alt)] border border-[var(--dc-border)] rounded p-2">
@@ -1045,6 +1066,9 @@ Global library functions become available in all snippets.`}
               disabled={!validation.canSave}
             >
               Save Python Library
+              {savedFeedback === "py" && (
+                <span className="text-green-500 text-sm ml-2 font-medium animate-pulse">Saved!</span>
+              )}
             </button>
           </div>
           <pre className="mt-2 text-xs whitespace-pre-wrap bg-[var(--dc-bg-alt)] border border-[var(--dc-border)] rounded p-2">
@@ -1126,6 +1150,9 @@ Library is prepended before expression/script execution.`}
               disabled={!validation.canSave}
             >
               Save Lua Library
+              {savedFeedback === "lua" && (
+                <span className="text-green-500 text-sm ml-2 font-medium animate-pulse">Saved!</span>
+              )}
             </button>
           </div>
           <pre className="mt-2 text-xs whitespace-pre-wrap bg-[var(--dc-bg-alt)] border border-[var(--dc-border)] rounded p-2">
@@ -1225,6 +1252,9 @@ Library code is prepended before snippet Lua code.`}
               disabled={!validation.canSave}
             >
               Save HTTP/Weather Settings
+              {savedFeedback === "http" && (
+                <span className="text-green-500 text-sm ml-2 font-medium animate-pulse">Saved!</span>
+              )}
             </button>
           </div>
           {!!quickTestResult && (
@@ -1279,6 +1309,9 @@ Weather: {weather:city=Tokyo|country=JP|state=Tokyo|format=summary}`}
             disabled={!validation.canSave}
           >
             Save DSL Setting
+            {savedFeedback === "dsl" && (
+              <span className="text-green-500 text-sm ml-2 font-medium animate-pulse">Saved!</span>
+            )}
           </button>
           <pre className="mt-2 text-xs whitespace-pre-wrap bg-[var(--dc-bg-alt)] border border-[var(--dc-border)] rounded p-2">
             {`Syntax Guide:
@@ -1313,6 +1346,9 @@ Example: {dsl:(10 + 5) * 2}`}
             disabled={!validation.canSave}
           >
             Save Run Settings
+            {savedFeedback === "run" && (
+              <span className="text-green-500 text-sm ml-2 font-medium animate-pulse">Saved!</span>
+            )}
           </button>
           <div className="mt-2 flex gap-2">
             <select
@@ -1650,6 +1686,9 @@ Always prefer allowlisted commands only.`}
             className="mt-2 px-3 py-1.5 bg-[var(--dc-accent)] text-white rounded"
           >
             Save Signer Registry
+            {savedFeedback === "signer" && (
+              <span className="text-green-500 text-sm ml-2 font-medium animate-pulse">Saved!</span>
+            )}
           </button>
         </div>
       </div>
