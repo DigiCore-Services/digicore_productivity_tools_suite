@@ -127,24 +127,63 @@ async fn handle_file_event(app: &AppHandle, path: &Path) -> anyhow::Result<()> {
 
 pub fn get_default_skill_paths() -> Vec<PathBuf> {
     let mut paths = Vec::new();
-    
-    #[cfg(target_os = "windows")]
-    {
-        if let Some(user_profile) = std::env::var_os("USERPROFILE") {
-            let base = PathBuf::from(user_profile);
-            paths.push(base.join(".cursor").join("skills"));
-            paths.push(base.join(".claude").join("skills"));
-        }
+    if let Some(home) = dirs::home_dir() {
+        paths.push(home.join(".cursor").join("skills"));
+        paths.push(home.join(".claude").join("skills"));
+        paths.push(home.join(".gemini").join("antigravity").join("skills"));
     }
-    
-    #[cfg(not(target_os = "windows"))]
-    {
-        if let Some(home) = std::env::var_os("HOME") {
-            let base = PathBuf::from(home);
-            paths.push(base.join(".cursor").join("skills"));
-            paths.push(base.join(".claude").join("skills"));
-        }
-    }
-    
     paths
+}
+
+pub async fn sync_skill_to_targets(skill: &Skill, overwrite: bool) -> anyhow::Result<()> {
+    let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Home dir not found"))?;
+    
+    for target in &skill.metadata.sync_targets {
+        let base_path = if target.starts_with('.') {
+            home.join(target)
+        } else {
+            PathBuf::from(target)
+        };
+        
+        if !base_path.exists() {
+            log::warn!("[SkillSync] Target base path {} does not exist, skipping.", base_path.display());
+            continue;
+        }
+
+        let target_skill_dir = base_path.join(&skill.metadata.name);
+        
+        if target_skill_dir.exists() && !overwrite {
+            // Check if it's identical before skipping
+            // For now, if it exists and overwrite is false, we take the safe route and skip.
+            // The frontend should have caught this and prompted the user.
+            log::info!("[SkillSync] Skill {} already exists in {}, skipping (overwrite=false).", skill.metadata.name, target);
+            continue;
+        }
+
+        // Copy skill directory to target
+        log::info!("[SkillSync] Syncing skill {} to {}", skill.metadata.name, target_skill_dir.display());
+        if !target_skill_dir.exists() {
+            std::fs::create_dir_all(&target_skill_dir)?;
+        }
+        
+        copy_dir_recursive(&skill.path, &target_skill_dir)?;
+    }
+    
+    Ok(())
+}
+
+fn copy_dir_recursive(src: &Path, dst: &Path) -> anyhow::Result<()> {
+    if !dst.exists() {
+        std::fs::create_dir_all(dst)?;
+    }
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            copy_dir_recursive(&entry.path(), &dst.join(entry.file_name()))?;
+        } else {
+            std::fs::copy(entry.path(), dst.join(entry.file_name()))?;
+        }
+    }
+    Ok(())
 }

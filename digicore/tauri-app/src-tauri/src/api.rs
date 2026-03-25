@@ -9,6 +9,7 @@ use crate::{
     kms_diagnostic_service::KmsDiagnosticService,
     embedding_service,
     indexing_service,
+    skill_sync,
     app_state_to_dto, AppearanceTransparencyRuleDto, ConfigUpdateDto, ExpansionStatsDto, GhostFollowerStateDto,
     GhostSuggestorStateDto, ScriptingDslConfigDto, ScriptingEngineConfigDto, ScriptingHttpConfigDto,
     ScriptingDetachedSignatureExportDto, ScriptingLuaConfigDto, ScriptingProfileDiffEntryDto,
@@ -1468,9 +1469,12 @@ pub trait Api {
     // --- Skill Hub ---
     async fn kms_list_skills() -> Result<Vec<SkillDto>, String>;
     async fn kms_get_skill(name: String) -> Result<Option<SkillDto>, String>;
-    async fn kms_save_skill(skill: SkillDto) -> Result<(), String>;
+    async fn kms_save_skill(skill: SkillDto, overwrite: bool) -> Result<(), String>;
     async fn kms_delete_skill(name: String) -> Result<(), String>;
     async fn kms_sync_skills() -> Result<(), String>;
+    async fn kms_add_skill_resource(skill_name: String, source_path: String, target_subdir: Option<String>) -> Result<SkillResourceDto, String>;
+    async fn kms_remove_skill_resource(skill_name: String, rel_path: String) -> Result<(), String>;
+    async fn kms_check_skill_conflicts(skill_name: String, sync_targets: Vec<String>) -> Result<Vec<SyncConflictDto>, String>;
 }
 
 #[taurpc::ipc_type]
@@ -1478,7 +1482,14 @@ pub struct SkillDto {
     pub metadata: SkillMetadataDto,
     pub path: Option<String>,
     pub instructions: Option<String>,
-    pub resources: Vec<String>,
+    pub resources: Vec<SkillResourceDto>,
+}
+
+#[taurpc::ipc_type]
+pub struct SkillResourceDto {
+    pub name: String,
+    pub r#type: String, // "Script" | "Template" | "Reference" | "Other"
+    pub rel_path: String,
 }
 
 #[taurpc::ipc_type]
@@ -1488,6 +1499,19 @@ pub struct SkillMetadataDto {
     pub version: String,
     pub author: Option<String>,
     pub tags: Vec<String>,
+    pub license: Option<String>,
+    pub compatibility: Option<String>,
+    pub metadata: Option<String>, // JSON string for arbitrary KV
+    pub disable_model_invocation: Option<bool>,
+    pub scope: String, // "Global" | "Project"
+    pub sync_targets: Vec<String>,
+}
+
+#[taurpc::ipc_type]
+pub struct SyncConflictDto {
+    pub target: String,
+    pub existing_name: String,
+    pub conflict_type: String, // "NameCollision" | "ContentMismatch"
 }
 
 #[taurpc::ipc_type]
@@ -1588,6 +1612,20 @@ impl ApiImpl {
             .map(|p| p.to_string_lossy().replace('\\', "/"))
             .map_err(|_| format!("Path {} is not within the vault {}", absolute_path.display(), vault.display()))
     }
+}
+
+fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let ty = entry.file_type()?;
+        if ty.is_dir() {
+            copy_dir_recursive(&entry.path(), &dst.join(entry.file_name()))?;
+        } else {
+            std::fs::copy(entry.path(), dst.join(entry.file_name()))?;
+        }
+    }
+    Ok(())
 }
 
 // Ensure KmsIndexingService is imported for the trait methods to find it
@@ -5245,54 +5283,89 @@ end
     async fn kms_list_skills(self) -> Result<Vec<SkillDto>, String> {
         use digicore_text_expander::ports::skill::SkillRepository;
         let repo = kms_repository::KmsSkillRepository;
-        let skills = repo.list_skills().await.map_err(|e| e.to_string())?;
+        let mut skills = repo.list_skills().await.map_err(|e| e.to_string())?;
         
-        Ok(skills.into_iter().map(|s| SkillDto {
-            metadata: SkillMetadataDto {
-                name: s.metadata.name,
-                description: s.metadata.description,
-                version: s.metadata.version.unwrap_or_else(|| "1.0.0".to_string()),
-                author: s.metadata.author,
-                tags: s.metadata.tags,
-            },
-            path: Some(s.path.to_string_lossy().to_string()),
-            instructions: Some(s.instructions),
-            resources: Vec::new(),
-        }).collect())
+        let mut dtos = Vec::new();
+        for s in &mut skills {
+            let _ = s.refresh_resources();
+            dtos.push(SkillDto {
+                metadata: SkillMetadataDto {
+                    name: s.metadata.name.clone(),
+                    description: s.metadata.description.clone(),
+                    version: s.metadata.version.clone().unwrap_or_else(|| "1.0.0".to_string()),
+                    author: s.metadata.author.clone(),
+                    tags: s.metadata.tags.clone(),
+                    license: s.metadata.license.clone(),
+                    compatibility: s.metadata.compatibility.clone(),
+                    metadata: s.metadata.extra_metadata.as_ref().map(|v| v.to_string()),
+                    disable_model_invocation: s.metadata.disable_model_invocation,
+                    scope: match s.metadata.scope {
+                        digicore_core::domain::entities::skill::SkillScope::Global => "Global".to_string(),
+                        digicore_core::domain::entities::skill::SkillScope::Project => "Project".to_string(),
+                    },
+                    sync_targets: s.metadata.sync_targets.clone(),
+                },
+                path: Some(s.path.to_string_lossy().to_string()),
+                instructions: Some(s.instructions.clone()),
+                resources: s.resources.iter().map(|r| SkillResourceDto {
+                    name: r.name.clone(),
+                    r#type: format!("{:?}", r.r#type),
+                    rel_path: r.path.strip_prefix(&s.path).unwrap_or(&r.path).to_string_lossy().replace('\\', "/"),
+                }).collect(),
+            });
+        }
+        Ok(dtos)
     }
 
     async fn kms_get_skill(self, name: String) -> Result<Option<SkillDto>, String> {
         use digicore_text_expander::ports::skill::SkillRepository;
         let repo = kms_repository::KmsSkillRepository;
-        let skill = repo.get_skill(&name).await.map_err(|e| e.to_string())?;
+        let skill_opt = repo.get_skill(&name).await.map_err(|e| e.to_string())?;
         
-        Ok(skill.map(|s| SkillDto {
-            metadata: SkillMetadataDto {
-                name: s.metadata.name,
-                description: s.metadata.description,
-                version: s.metadata.version.unwrap_or_else(|| "1.0.0".to_string()),
-                author: s.metadata.author,
-                tags: s.metadata.tags,
-            },
-            path: Some(s.path.to_string_lossy().to_string()),
-            instructions: Some(s.instructions),
-            resources: Vec::new(),
-        }))
+        if let Some(mut s) = skill_opt {
+            let _ = s.refresh_resources();
+            Ok(Some(SkillDto {
+                metadata: SkillMetadataDto {
+                    name: s.metadata.name,
+                    description: s.metadata.description,
+                    version: s.metadata.version.unwrap_or_else(|| "1.0.0".to_string()),
+                    author: s.metadata.author,
+                    tags: s.metadata.tags,
+                    license: s.metadata.license,
+                    compatibility: s.metadata.compatibility,
+                    metadata: s.metadata.extra_metadata.map(|v| v.to_string()),
+                    disable_model_invocation: s.metadata.disable_model_invocation,
+                    scope: match s.metadata.scope {
+                        digicore_core::domain::entities::skill::SkillScope::Global => "Global".to_string(),
+                        digicore_core::domain::entities::skill::SkillScope::Project => "Project".to_string(),
+                    },
+                    sync_targets: s.metadata.sync_targets.clone(),
+                },
+                path: Some(s.path.to_string_lossy().to_string()),
+                instructions: Some(s.instructions),
+                resources: s.resources.into_iter().map(|r| SkillResourceDto {
+                    name: r.name,
+                    r#type: format!("{:?}", r.r#type),
+                    rel_path: r.path.strip_prefix(&s.path).unwrap_or(&r.path).to_string_lossy().replace('\\', "/"),
+                }).collect(),
+            }))
+        } else {
+            Ok(None)
+        }
     }
 
-    async fn kms_save_skill(self, skill: SkillDto) -> Result<(), String> {
-        let app = get_app(&self.app_handle);
-        let repo = kms_repository::KmsSkillRepository;
-        
-        log::info!("[KmsApi] kms_save_skill: name={}, desc_len={}, inst_len={}", 
-            skill.metadata.name, 
-            skill.metadata.description.len(),
-            skill.instructions.as_ref().map(|s| s.len()).unwrap_or(0)
-        );
+    async fn kms_save_skill(self, skill: SkillDto, overwrite: bool) -> Result<(), String> {
         use digicore_text_expander::ports::skill::SkillRepository;
-        use digicore_core::domain::entities::skill::{Skill, SkillMetadata};
+        use digicore_core::domain::entities::skill::{Skill, SkillMetadata, SkillScope};
         
         let repo = kms_repository::KmsSkillRepository;
+        
+        let scope = if skill.metadata.scope == "Project" {
+            SkillScope::Project
+        } else {
+            SkillScope::Global
+        };
+
         let skill_entity = Skill {
             metadata: SkillMetadata {
                 name: skill.metadata.name,
@@ -5300,23 +5373,89 @@ end
                 version: Some(skill.metadata.version),
                 author: skill.metadata.author,
                 tags: skill.metadata.tags,
+                license: skill.metadata.license,
+                compatibility: skill.metadata.compatibility,
+                extra_metadata: skill.metadata.metadata.and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok()),
+                disable_model_invocation: skill.metadata.disable_model_invocation,
+                scope,
+                sync_targets: skill.metadata.sync_targets,
             },
-            path: skill.path.map(PathBuf::from).unwrap_or_default(),
             instructions: skill.instructions.unwrap_or_default(),
-            resources: Vec::new(),
+            resources: Vec::new(), // Populated by refresh_resources
+            path: PathBuf::from(skill.path.unwrap_or_default()),
         };
         
         repo.save_skill(&skill_entity).await.map_err(|e| e.to_string())?;
         
-        // Trigger reindexing for this item
-        let app = get_app(&self.app_handle);
-        let service = app.state::<Arc<indexing_service::KmsIndexingService>>().inner().clone();
-        let app_clone = app.clone();
-        let entity_id = skill_entity.metadata.name.clone();
-        tokio::spawn(async move {
-            let _ = service.index_single_item(&app_clone, "skills", &entity_id).await;
-        });
+        // Sync to external targets
+        let _ = skill_sync::sync_skill_to_targets(&skill_entity, overwrite).await.map_err(|e| e.to_string());
         
+        // Trigger reindexing
+        let app = get_app(&self.app_handle);
+        let indexing_service = app.state::<std::sync::Arc<indexing_service::KmsIndexingService>>();
+        let _ = indexing_service.index_single_item(&app, "skills", &skill_entity.metadata.name).await;
+        
+        Ok(())
+    }
+
+    async fn kms_add_skill_resource(self, skill_name: String, source_path: String, target_subdir: Option<String>) -> Result<SkillResourceDto, String> {
+        use digicore_text_expander::ports::skill::SkillRepository;
+        let repo = kms_repository::KmsSkillRepository;
+        let mut skill = repo.get_skill(&skill_name).await.map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("Skill {} not found", skill_name))?;
+
+        let source = PathBuf::from(&source_path);
+        if !source.exists() {
+            return Err(format!("Source path {} does not exist", source_path));
+        }
+
+        let target_dir = if let Some(sub) = target_subdir {
+            let d = skill.path.join(sub);
+            std::fs::create_dir_all(&d).map_err(|e| e.to_string())?;
+            d
+        } else {
+            skill.path.clone()
+        };
+
+        let filename = source.file_name().ok_or("Invalid source filename")?;
+        let target_path = target_dir.join(filename);
+
+        if source.is_dir() {
+            copy_dir_recursive(&source, &target_path).map_err(|e| e.to_string())?;
+        } else {
+            std::fs::copy(&source, &target_path).map_err(|e| e.to_string())?;
+        }
+
+        skill.refresh_resources().map_err(|e| e.to_string())?;
+        
+        let resource = skill.resources.iter().find(|r| r.path == target_path)
+            .ok_or("Failed to identify newly added resource")?;
+
+        Ok(SkillResourceDto {
+            name: resource.name.clone(),
+            r#type: format!("{:?}", resource.r#type),
+            rel_path: resource.path.strip_prefix(&skill.path).unwrap_or(&resource.path).to_string_lossy().replace('\\', "/"),
+        })
+    }
+
+    async fn kms_remove_skill_resource(self, skill_name: String, rel_path: String) -> Result<(), String> {
+        use digicore_text_expander::ports::skill::SkillRepository;
+        let repo = kms_repository::KmsSkillRepository;
+        let skill = repo.get_skill(&skill_name).await.map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("Skill {} not found", skill_name))?;
+
+        let abs_path = skill.path.join(rel_path.replace('/', "\\"));
+        
+        if !abs_path.exists() {
+            return Ok(());
+        }
+
+        if abs_path.is_dir() {
+            std::fs::remove_dir_all(&abs_path).map_err(|e| e.to_string())?;
+        } else {
+            std::fs::remove_file(&abs_path).map_err(|e| e.to_string())?;
+        }
+
         Ok(())
     }
 
@@ -5340,6 +5479,31 @@ end
         // In Phase 7, we'll make this scan the filesystem first.
         let _ = service.index_provider_by_id(&app, "skills").await?;
         Ok(())
+    }
+
+    async fn kms_check_skill_conflicts(self, skill_name: String, sync_targets: Vec<String>) -> Result<Vec<SyncConflictDto>, String> {
+        let mut conflicts = Vec::new();
+        let home = dirs::home_dir().ok_or("Could not find home directory")?;
+        
+        for target in &sync_targets {
+             // Basic resolution for hidden folders in home dir
+             let base_path = if target.starts_with('.') {
+                 home.join(target)
+             } else {
+                 PathBuf::from(target)
+             };
+             
+             let skill_path = base_path.join(&skill_name);
+             if skill_path.exists() {
+                 conflicts.push(SyncConflictDto {
+                     target: target.clone(),
+                     existing_name: skill_name.clone(),
+                     conflict_type: "NameCollision".to_string(),
+                 });
+             }
+        }
+        
+        Ok(conflicts)
     }
 }
 
