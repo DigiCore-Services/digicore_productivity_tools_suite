@@ -182,9 +182,10 @@ impl ScriptEnginePort for BoaScriptEngine {
         vec!["js"]
     }
 
-    fn load_global_library(&mut self, _path: &Path) -> Result<(), ScriptError> {
-        // Boa 0.18: loading external file would require reading and eval'ing.
-        // For now mark as loaded; full impl in Phase E (Script Library GUI).
+    fn load_global_library(&self, path: &Path) -> Result<(), ScriptError> {
+        let content = std::fs::read_to_string(path)
+            .map_err(|e| ScriptError::new(format!("Failed to read JS library: {}", e)))?;
+        set_global_library(content);
         if let Ok(mut g) = self.global_library_loaded.lock() {
             *g = true;
         }

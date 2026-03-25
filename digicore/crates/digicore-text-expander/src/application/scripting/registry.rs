@@ -9,19 +9,26 @@ use super::config::get_config;
 use super::http_port::HttpFetcherPort;
 use super::reqwest_fetcher::ReqwestHttpFetcher;
 use super::ScriptEnginePort;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-/// Registry holding script engine and HTTP fetcher. Set at startup or for tests.
+/// Registry holding script engines and HTTP fetcher. Set at startup or for tests.
 pub struct ScriptingRegistry {
-    pub engine: Arc<dyn ScriptEnginePort>,
+    pub engines: HashMap<String, Arc<dyn ScriptEnginePort>>,
     pub http_fetcher: Arc<dyn HttpFetcherPort>,
 }
 
 impl Default for ScriptingRegistry {
     fn default() -> Self {
+        let mut engines: HashMap<String, Arc<dyn ScriptEnginePort>> = HashMap::new();
+        engines.insert("js".to_string(), Arc::new(BoaScriptEngine::new()));
+        engines.insert("py".to_string(), Arc::new(super::embedded_py::EmbeddedPyEngine::new()));
+        engines.insert("lua".to_string(), Arc::new(super::embedded_lua::EmbeddedLuaEngine::new()));
+        engines.insert("run".to_string(), Arc::new(super::run_executor::RunScriptEngine::new()));
+
         Self {
-            engine: Arc::new(BoaScriptEngine::new()),
+            engines,
             http_fetcher: default_http_fetcher(),
         }
     }
@@ -48,7 +55,7 @@ pub fn get_registry() -> ScriptingRegistry {
         }
         if let Some(ref r) = *g {
             return ScriptingRegistry {
-                engine: Arc::clone(&r.engine),
+                engines: r.engines.clone(),
                 http_fetcher: Arc::clone(&r.http_fetcher),
             };
         }

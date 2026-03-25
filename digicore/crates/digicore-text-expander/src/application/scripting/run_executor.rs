@@ -4,6 +4,8 @@
 //! Errors: [Run disabled by config], [Run blocked: not in allowlist], [Run Error: ...]
 
 use super::config::get_config;
+use super::{ScriptContext, ScriptEnginePort, ScriptError};
+use std::path::Path;
 use std::process::Command;
 
 /// Check if command is allowed by allowlist. Empty allowlist = block all.
@@ -49,40 +51,65 @@ pub fn is_run_allowed(cmd: &str, allowlist: &str) -> bool {
     false
 }
 
-/// Execute run command. Returns stdout or error string.
-pub fn execute_run(cmd: &str) -> String {
-    let cfg = get_config();
-    if cfg.run.disabled {
-        return "[Run disabled by config]".to_string();
+/// Run command engine implementing ScriptEnginePort.
+#[derive(Default)]
+pub struct RunScriptEngine;
+
+impl RunScriptEngine {
+    pub fn new() -> Self {
+        Self
     }
-    if !is_run_allowed(cmd, &cfg.run.allowlist) {
-        return "[Run blocked: not in allowlist]".to_string();
-    }
+}
 
-    #[cfg(target_os = "windows")]
-    let output = Command::new("cmd")
-        .args(["/C", cmd])
-        .output();
+impl ScriptEnginePort for RunScriptEngine {
+    fn execute(
+        &self,
+        _script_type: &str,
+        cmd: &str,
+        _context: &ScriptContext,
+    ) -> Result<String, ScriptError> {
+        let cfg = get_config();
+        if cfg.run.disabled {
+            return Err(ScriptError::new("[Run disabled by config]").with_script_type("run"));
+        }
+        if !is_run_allowed(cmd, &cfg.run.allowlist) {
+            return Err(ScriptError::new("[Run blocked: not in allowlist]").with_script_type("run"));
+        }
 
-    #[cfg(not(target_os = "windows"))]
-    let output = Command::new("sh")
-        .args(["-c", cmd])
-        .output();
+        #[cfg(target_os = "windows")]
+        let output = Command::new("cmd")
+            .args(["/C", cmd])
+            .output();
 
-    match output {
-        Ok(o) => {
-            if o.status.success() {
-                String::from_utf8_lossy(&o.stdout).trim().to_string()
-            } else {
-                let stderr = String::from_utf8_lossy(&o.stderr);
-                if stderr.is_empty() {
-                    format!("[Run Error: exit code {}]", o.status.code().unwrap_or(-1))
+        #[cfg(not(target_os = "windows"))]
+        let output = Command::new("sh")
+            .args(["-c", cmd])
+            .output();
+
+        match output {
+            Ok(o) => {
+                if o.status.success() {
+                    Ok(String::from_utf8_lossy(&o.stdout).trim().to_string())
                 } else {
-                    format!("[Run Error: {}]", stderr.trim())
+                    let stderr = String::from_utf8_lossy(&o.stderr);
+                    let msg = if stderr.is_empty() {
+                        format!("[Run Error: exit code {}]", o.status.code().unwrap_or(-1))
+                    } else {
+                        format!("[Run Error: {}]", stderr.trim())
+                    };
+                    Err(ScriptError::new(msg).with_script_type("run"))
                 }
             }
+            Err(e) => Err(ScriptError::new(format!("[Run Error: {}]", e)).with_script_type("run")),
         }
-        Err(e) => format!("[Run Error: {}]", e),
+    }
+
+    fn supported_types(&self) -> Vec<&'static str> {
+        vec!["run"]
+    }
+
+    fn load_global_library(&self, _path: &Path) -> Result<(), ScriptError> {
+        Ok(())
     }
 }
 
