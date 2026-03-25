@@ -64,7 +64,7 @@ impl ScriptEnginePort for MockScriptEngine {
         vec!["js"]
     }
 
-    fn load_global_library(&mut self, _path: &Path) -> Result<(), ScriptError> {
+    fn load_global_library(&self, _path: &Path) -> Result<(), ScriptError> {
         Ok(())
     }
 }

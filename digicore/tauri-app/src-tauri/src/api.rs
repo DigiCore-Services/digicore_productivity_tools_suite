@@ -31,7 +31,8 @@ use digicore_text_expander::application::ghost_follower::{
 };
 use digicore_text_expander::application::ghost_suggestor;
 use digicore_text_expander::application::scripting::{
-    get_scripting_config, set_global_library, set_scripting_config,
+    get_scripting_config, set_scripting_config,
+    get_script_logs, clear_script_logs, load_and_apply_script_libraries,
 };
 use digicore_text_expander::application::template_processor::{self, InteractiveVarType};
 use digicore_text_expander::application::variable_input;
@@ -1399,6 +1400,9 @@ pub trait Api {
     async fn delete_appearance_transparency_rule(app_process: String) -> Result<(), String>;
     async fn apply_appearance_transparency_now(app_process: String, opacity: u32) -> Result<u32, String>;
     async fn restore_appearance_defaults() -> Result<u32, String>;
+
+    async fn get_script_logs() -> Result<Vec<ScriptLogEntryDto>, String>;
+    async fn clear_script_logs() -> Result<(), String>;
     async fn get_ghost_suggestor_state() -> Result<GhostSuggestorStateDto, String>;
     async fn ghost_suggestor_accept() -> Result<Option<(String, String)>, String>;
     async fn ghost_suggestor_snooze() -> Result<(), String>;
@@ -1548,6 +1552,16 @@ pub struct KmsFileSystemItemDto {
 pub struct KmsLinksDto {
     pub outgoing: Vec<KmsNoteDto>,
     pub incoming: Vec<KmsNoteDto>,
+}
+
+#[taurpc::ipc_type]
+pub struct ScriptLogEntryDto {
+    pub timestamp: String,
+    pub script_type: String,
+    pub message: String,
+    pub duration_ms: u64,
+    pub code_len: u32,
+    pub is_error: bool,
 }
 
 #[taurpc::ipc_type]
@@ -1859,6 +1873,26 @@ fn open_file_in_default_app(path: &str) -> Result<(), String> {
 
 #[taurpc::resolvers]
 impl Api for ApiImpl {
+
+    async fn get_script_logs(self) -> Result<Vec<ScriptLogEntryDto>, String> {
+        let logs = get_script_logs();
+        Ok(logs
+            .into_iter()
+            .map(|e| ScriptLogEntryDto {
+                timestamp: e.timestamp,
+                script_type: e.script_type,
+                message: e.message,
+                duration_ms: e.duration_ms as u64,
+                code_len: e.code_len as u32,
+                is_error: e.is_error,
+            })
+            .collect())
+    }
+
+    async fn clear_script_logs(self) -> Result<(), String> {
+        clear_script_logs();
+        Ok(())
+    }
 
     async fn greet(self, name: String) -> String {
 
@@ -2626,7 +2660,7 @@ function greet(name) { return "Hello, " + name + "!"; }
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
         std::fs::write(&lib_path, &content).map_err(|e| e.to_string())?;
-        set_global_library(content);
+        load_and_apply_script_libraries();
         diag_log(
             "info",
             format!("[Scripting][JavaScript] Saved global library to {}", lib_path.display()),
@@ -2655,6 +2689,7 @@ def py_greet(name: str) -> str:
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
         std::fs::write(&lib_path, &content).map_err(|e| e.to_string())?;
+        load_and_apply_script_libraries();
         diag_log(
             "info",
             format!("[Scripting][Python] Saved global library to {}", lib_path.display()),
@@ -2684,6 +2719,7 @@ end
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
         std::fs::write(&lib_path, &content).map_err(|e| e.to_string())?;
+        load_and_apply_script_libraries();
         diag_log(
             "info",
             format!("[Scripting][Lua] Saved global library to {}", lib_path.display()),

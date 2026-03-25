@@ -7,6 +7,8 @@ mod boa_engine;
 mod clipboard_resolver;
 mod config;
 mod dsl_evaluator;
+mod embedded_lua;
+mod embedded_py;
 mod http_fetcher;
 mod http_port;
 mod js_sandbox;
@@ -20,11 +22,17 @@ mod reqwest_fetcher;
 mod run_executor;
 mod script_context_builder;
 mod script_library_loader;
+mod script_logger;
 mod script_type_registry;
 mod url_allowlist;
 mod weather_lookup;
 
 pub use boa_engine::{set_global_library, BoaScriptEngine};
+pub use embedded_lua::EmbeddedLuaEngine;
+pub use embedded_py::EmbeddedPyEngine;
+pub use lua_executor::LuaScriptEngine;
+pub use py_executor::PyScriptEngine;
+pub use script_logger::{get_logs as get_script_logs, clear_logs as clear_script_logs, ScriptLogEntry};
 pub use clipboard_resolver::{escape_for_js_string, resolve_clipboard_in_js};
 pub use config::{
     get_config as get_scripting_config, load_config as load_scripting_config,
@@ -177,7 +185,7 @@ pub trait ScriptEnginePort: Send + Sync {
     fn supported_types(&self) -> Vec<&'static str>;
 
     /// Load global library from path (for hot-reload).
-    fn load_global_library(&mut self, path: &Path) -> Result<(), ScriptError>;
+    fn load_global_library(&self, path: &Path) -> Result<(), ScriptError>;
 }
 
 #[cfg(test)]

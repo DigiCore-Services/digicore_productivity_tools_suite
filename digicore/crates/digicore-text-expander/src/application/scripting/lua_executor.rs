@@ -4,52 +4,79 @@
 //! Code should print to stdout (e.g. print(1+2)).
 
 use super::config::get_config;
+use super::{ScriptContext, ScriptEnginePort, ScriptError};
 use std::fs;
+use std::path::Path;
 use std::process::Command;
 
-/// Execute Lua code. Returns stdout or error string.
-/// Code is written to temp file and executed. Code should call print() for output.
-pub fn execute_lua(code: &str) -> String {
-    let cfg = get_config();
-    if !cfg.lua.enabled {
-        return "[Lua disabled by config]".to_string();
+/// Lua-based scripting engine implementing ScriptEnginePort.
+#[derive(Default)]
+pub struct LuaScriptEngine;
+
+impl LuaScriptEngine {
+    pub fn new() -> Self {
+        Self
     }
+}
 
-    let lua = if cfg.lua.path.is_empty() {
-        "lua"
-    } else {
-        cfg.lua.path.trim()
-    };
+impl ScriptEnginePort for LuaScriptEngine {
+    fn execute(
+        &self,
+        _script_type: &str,
+        code: &str,
+        _context: &ScriptContext,
+    ) -> Result<String, ScriptError> {
+        let cfg = get_config();
+        if !cfg.lua.enabled {
+            return Ok("[Lua disabled by config]".to_string());
+        }
 
-    let mut combined = load_lua_library(&cfg.lua.library_path);
-    if !combined.is_empty() && !combined.ends_with('\n') {
-        combined.push('\n');
-    }
-    combined.push_str(code);
+        let lua = if cfg.lua.path.is_empty() {
+            "lua"
+        } else {
+            cfg.lua.path.trim()
+        };
 
-    let tmp = std::env::temp_dir().join(format!("digicore_lua_{}.lua", std::process::id()));
-    if fs::write(&tmp, combined).is_err() {
-        return "[Lua Error: failed to write temp file]".to_string();
-    }
+        let mut combined = load_lua_library(&cfg.lua.library_path);
+        if !combined.is_empty() && !combined.ends_with('\n') {
+            combined.push('\n');
+        }
+        combined.push_str(code);
 
-    let output = Command::new(lua).arg(&tmp).output();
+        let tmp = std::env::temp_dir().join(format!("digicore_lua_{}.lua", std::process::id()));
+        if fs::write(&tmp, combined).is_err() {
+            return Err(ScriptError::new("[Lua Error: failed to write temp file]").with_script_type("lua"));
+        }
 
-    let _ = fs::remove_file(&tmp);
+        let output = Command::new(lua).arg(&tmp).output();
 
-    match output {
-        Ok(o) => {
-            if o.status.success() {
-                String::from_utf8_lossy(&o.stdout).trim().to_string()
-            } else {
-                let stderr = String::from_utf8_lossy(&o.stderr);
-                if stderr.is_empty() {
-                    format!("[Lua Error: exit code {}]", o.status.code().unwrap_or(-1))
+        let _ = fs::remove_file(&tmp);
+
+        match output {
+            Ok(o) => {
+                if o.status.success() {
+                    Ok(String::from_utf8_lossy(&o.stdout).trim().to_string())
                 } else {
-                    format!("[Lua Error: {}]", stderr.trim())
+                    let stderr = String::from_utf8_lossy(&o.stderr);
+                    let msg = if stderr.is_empty() {
+                        format!("[Lua Error: exit code {}]", o.status.code().unwrap_or(-1))
+                    } else {
+                        format!("[Lua Error: {}]", stderr.trim())
+                    };
+                    Err(ScriptError::new(msg).with_script_type("lua"))
                 }
             }
+            Err(e) => Err(ScriptError::new(format!("[Lua Error: {}]", e)).with_script_type("lua")),
         }
-        Err(e) => format!("[Lua Error: {}]", e),
+    }
+
+    fn supported_types(&self) -> Vec<&'static str> {
+        vec!["lua"]
+    }
+
+    fn load_global_library(&self, _path: &Path) -> Result<(), ScriptError> {
+        // Managed by config library_path for now.
+        Ok(())
     }
 }
 

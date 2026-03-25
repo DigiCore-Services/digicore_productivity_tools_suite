@@ -6,9 +6,6 @@ use super::clipboard_resolver::resolve_clipboard_in_js;
 use super::config::get_config;
 use super::dsl_evaluator::evaluate as evaluate_dsl;
 use super::placeholder_parser::find_balanced_tag;
-use super::lua_executor::execute_lua;
-use super::py_executor::execute_py;
-use super::run_executor::execute_run;
 use super::script_context_builder::build_from_template_config;
 use super::weather_lookup::resolve_weather_placeholder;
 use super::get_registry;
@@ -34,29 +31,52 @@ pub fn dispatch(
     user_vars: Option<&std::collections::HashMap<String, String>>,
 ) -> Option<String> {
     let registry = get_registry();
+    let script_ctx = build_from_template_config(
+        date_format,
+        time_format,
+        clipboard,
+        clip_history,
+        user_vars,
+    );
+
     match prefix {
-        "js" => {
-            let script_ctx = build_from_template_config(
-                date_format,
-                time_format,
-                clipboard,
-                clip_history,
-                user_vars,
-            );
-            let inner_resolved = resolve_clipboard_in_js(inner, clipboard);
+        "js" | "py" | "lua" | "run" => {
+            let engine = registry.engines.get(prefix)?;
+            let inner_resolved = if prefix == "js" {
+                resolve_clipboard_in_js(inner, clipboard)
+            } else {
+                inner.to_string()
+            };
+
             let cfg = get_config();
-            let do_log = cfg.debug_logging && cfg.js.debug_execution;
+            let do_log = cfg.debug_logging; // simplified for now
             let start = if do_log { Some(Instant::now()) } else { None };
             let code_len = inner_resolved.len();
-            let exec_result = registry.engine.execute("js", &inner_resolved, &script_ctx);
-            if let (true, Some(t0)) = (do_log, start) {
+
+            let exec_result = engine.execute(prefix, &inner_resolved, &script_ctx);
+
+            if let Some(t0) = start {
                 let dur_ms = t0.elapsed().as_millis();
-                match &exec_result {
-                    Ok(_) => eprintln!("[DigiCore] script js ok len={} dur_ms={}", code_len, dur_ms),
-                    Err(e) => eprintln!(
-                        "[DigiCore] script js err len={} dur_ms={} msg={}",
-                        code_len, dur_ms, e.message
-                    ),
+                let is_error = exec_result.is_err();
+                let message = match &exec_result {
+                    Ok(_) => format!("Success ({}ms)", dur_ms),
+                    Err(e) => e.message.clone(),
+                };
+                
+                super::script_logger::log_script_execution(
+                    super::script_logger::create_log_entry(
+                        prefix,
+                        message,
+                        dur_ms,
+                        code_len,
+                        is_error,
+                    )
+                );
+                
+                if is_error {
+                    eprintln!("[DigiCore] script {} err len={} dur_ms={} msg={}", prefix, code_len, dur_ms, &exec_result.as_ref().err().unwrap().message);
+                } else {
+                    eprintln!("[DigiCore] script {} ok len={} dur_ms={}", prefix, code_len, dur_ms);
                 }
             }
             Some(exec_result.unwrap_or_else(|e| e.message))
@@ -89,24 +109,6 @@ pub fn dispatch(
             }
             let expr = inner.trim();
             let result = evaluate_dsl(expr);
-            Some(result)
-        }
-        "py" => Some(execute_py(inner.trim())),
-        "lua" => Some(execute_lua(inner.trim())),
-        "run" => {
-            let cmd = inner.trim();
-            let cfg = get_config();
-            let do_log = cfg.debug_logging;
-            let start = if do_log { Some(Instant::now()) } else { None };
-            let result = execute_run(cmd);
-            if let (true, Some(t0)) = (do_log, start) {
-                let dur_ms = t0.elapsed().as_millis();
-                eprintln!(
-                    "[DigiCore] script run ok cmd_len={} dur_ms={}",
-                    cmd.len(),
-                    dur_ms
-                );
-            }
             Some(result)
         }
         "weather" => {
