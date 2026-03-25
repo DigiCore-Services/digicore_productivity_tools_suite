@@ -37,6 +37,7 @@ interface SkillEditorProps {
     skill: SkillDto | null; // null means create new
     onClose: () => void;
     onSaved: () => void;
+    onDirtyChange?: (dirty: boolean) => void;
 }
 
 interface ResourceTreeNode {
@@ -217,7 +218,7 @@ const TEMPLATES = [
     }
 ];
 
-export default function SkillEditor({ skill, onClose, onSaved }: SkillEditorProps) {
+export default function SkillEditor({ skill, onClose, onSaved, onDirtyChange }: SkillEditorProps) {
     const { toast } = useToast();
     const [step, setStep] = useState<"template" | "edit">(skill ? "edit" : "template");
     const [currentSkill, setCurrentSkill] = useState<SkillDto>(skill || {
@@ -243,6 +244,12 @@ export default function SkillEditor({ skill, onClose, onSaved }: SkillEditorProp
     const [saving, setSaving] = useState(false);
     const [tagInput, setTagInput] = useState("");
     const [existingTags, setExistingTags] = useState<string[]>([]);
+    const initialSkillRef = React.useRef(JSON.stringify(currentSkill));
+
+    useEffect(() => {
+        const isDirty = JSON.stringify(currentSkill) !== initialSkillRef.current;
+        onDirtyChange?.(isDirty);
+    }, [currentSkill, onDirtyChange]);
 
     useEffect(() => {
         const fetchTags = async () => {

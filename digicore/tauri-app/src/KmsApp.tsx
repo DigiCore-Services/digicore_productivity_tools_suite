@@ -32,6 +32,7 @@ export default function KmsApp() {
     const [view, setView] = useState<"explorer" | "search" | "favorites" | "logs" | "skills">("explorer");
     const [activeSkill, setActiveSkill] = useState<SkillDto | null>(null);
     const [isSkillEditorOpen, setIsSkillEditorOpen] = useState(false);
+    const [isSkillDirty, setIsSkillDirty] = useState(false);
     const [skillRefreshKey, setSkillRefreshKey] = useState(0);
     const [searchQuery, setSearchQuery] = useState("");
     const [searchResults, setSearchResults] = useState<any[]>([]); // SearchResultDto
@@ -140,11 +141,20 @@ export default function KmsApp() {
         }
     };
 
+    const checkUnsavedSkillChanges = () => {
+        if (isSkillEditorOpen && isSkillDirty) {
+            return window.confirm("You have unsaved changes in the Skill Editor. Discard changes and continue?");
+        }
+        return true;
+    };
+
     const handleSelectNote = async (note: KmsNoteDto) => {
+        if (!checkUnsavedSkillChanges()) return;
         try {
             const content = await getTaurpc().kms_load_note(note.path);
             setActiveContent(content);
             setActiveNote(note);
+            setIsSkillEditorOpen(false);
         } catch (error) {
             toast({
                 title: "Error Loading Note",
@@ -193,6 +203,7 @@ export default function KmsApp() {
     };
 
     const handleCreateNote = async (parentPath?: string) => {
+        if (!checkUnsavedSkillChanges()) return;
         if (!vaultPath) return;
 
         const targetDir = parentPath || `${vaultPath}\\notes`;
@@ -221,6 +232,7 @@ export default function KmsApp() {
     };
 
     const handleCreateFolder = async (parentPath?: string) => {
+        if (!checkUnsavedSkillChanges()) return;
         if (!vaultPath) return;
         const targetParent = parentPath || vaultPath;
         const name = window.prompt("Enter notebook name:");
@@ -414,6 +426,7 @@ export default function KmsApp() {
     };
 
     const handleNavigateToResult = async (result: any) => {
+        if (!checkUnsavedSkillChanges()) return;
         if (result.entity_type === "note") {
             const note = notes.find(n => n.path === result.entity_id);
             if (note) handleSelectNote(note);
@@ -546,7 +559,12 @@ export default function KmsApp() {
                                 variant={view === "explorer" ? "secondary" : "ghost"}
                                 size="sm"
                                 className={`w-full justify-start gap-2 h-9 px-2 ${view === "explorer" ? "bg-dc-bg-hover text-dc-accent font-medium" : "text-dc-text-muted hover:bg-dc-bg-hover"}`}
-                                onClick={() => setView("explorer")}
+                                onClick={() => {
+                                    if (!checkUnsavedSkillChanges()) return;
+                                    setView("explorer");
+                                    setIsSkillEditorOpen(false);
+                                    setActiveNote(null);
+                                }}
                             >
                                 <FolderOpen size={16} className={view === "explorer" ? "text-dc-accent" : "text-dc-text-muted"} />
                                 <span className="text-sm">Explorer</span>
@@ -555,7 +573,11 @@ export default function KmsApp() {
                                 variant={view === "search" ? "secondary" : "ghost"}
                                 size="sm"
                                 className={`w-full justify-start gap-2 h-9 px-2 ${view === "search" ? "bg-dc-bg-hover text-dc-accent font-medium" : "text-dc-text-muted hover:bg-dc-bg-hover"}`}
-                                onClick={() => setView("search")}
+                                onClick={() => {
+                                    if (!checkUnsavedSkillChanges()) return;
+                                    setView("search");
+                                    setIsSkillEditorOpen(false);
+                                }}
                             >
                                 <Search size={16} className={view === "search" ? "text-dc-accent" : "text-dc-text-muted"} />
                                 <span className="text-sm">Semantic Search</span>
@@ -564,7 +586,11 @@ export default function KmsApp() {
                                 variant={view === "favorites" ? "secondary" : "ghost"}
                                 size="sm"
                                 className={`w-full justify-start gap-2 h-9 px-2 ${view === "favorites" ? "bg-dc-bg-hover text-dc-accent font-medium" : "text-dc-text-muted hover:bg-dc-bg-hover"}`}
-                                onClick={() => setView("favorites")}
+                                onClick={() => {
+                                    if (!checkUnsavedSkillChanges()) return;
+                                    setView("favorites");
+                                    setIsSkillEditorOpen(false);
+                                }}
                             >
                                 <Star size={16} className={view === "favorites" ? "text-dc-accent" : "text-dc-text-muted"} />
                                 <span className="text-sm">Favorites</span>
@@ -573,7 +599,12 @@ export default function KmsApp() {
                                 variant={view === "skills" ? "secondary" : "ghost"}
                                 size="sm"
                                 className={`w-full justify-start gap-2 h-9 px-2 ${view === "skills" ? "bg-dc-bg-hover text-dc-accent font-medium" : "text-dc-text-muted hover:bg-dc-bg-hover"}`}
-                                onClick={() => setView("skills")}
+                                onClick={() => {
+                                    if (!checkUnsavedSkillChanges()) return;
+                                    setView("skills");
+                                    setIsSkillEditorOpen(false);
+                                    setActiveNote(null);
+                                }}
                             >
                                 <Cpu size={16} className={view === "skills" ? "text-dc-accent" : "text-dc-text-muted"} />
                                 <span className="text-sm">Skill Hub</span>
@@ -582,7 +613,11 @@ export default function KmsApp() {
                                 variant={view === "logs" ? "secondary" : "ghost"}
                                 size="sm"
                                 className={`w-full justify-start gap-2 h-9 px-2 ${view === "logs" ? "bg-dc-bg-hover text-dc-accent font-medium" : "text-dc-text-muted hover:bg-dc-bg-hover"}`}
-                                onClick={() => setView("logs")}
+                                onClick={() => {
+                                    if (!checkUnsavedSkillChanges()) return;
+                                    setView("logs");
+                                    setIsSkillEditorOpen(false);
+                                }}
                             >
                                 <Activity size={16} className={view === "logs" ? "text-dc-accent" : "text-dc-text-muted"} />
                                 <span className="text-sm">Operational Logs</span>
@@ -900,9 +935,14 @@ export default function KmsApp() {
                         <SkillEditor
                             key={activeSkill ? `${activeSkill.metadata.name}-${skillRefreshKey}` : "new-skill"}
                             skill={activeSkill}
-                            onClose={() => setIsSkillEditorOpen(false)}
+                            onClose={() => {
+                                if (!checkUnsavedSkillChanges()) return;
+                                setIsSkillEditorOpen(false);
+                            }}
+                            onDirtyChange={setIsSkillDirty}
                             onSaved={() => {
                                 setIsSkillEditorOpen(false);
+                                setIsSkillDirty(false);
                                 setSkillRefreshKey(prev => prev + 1);
                             }}
                         />
