@@ -367,6 +367,7 @@ impl SemanticIndexProvider for SkillIndexProvider {
         use digicore_text_expander::ports::skill::SkillRepository;
         
         let repo = kms_repository::KmsSkillRepository;
+        let _ = repo.refresh().await.map_err(|e| e.to_string())?;
         let skills = repo.list_skills().await.map_err(|e| e.to_string())?;
         
         let mut count = 0;

@@ -56,7 +56,7 @@ pub struct AppStateDto {
     pub sync_url: String,
     pub sync_status: String,
     pub expansion_paused: bool,
-    pub dummy_field_for_regeneration: Option<String>,
+    pub dummy_field_for_regeneration: Option<String>, // force-regeneration-1774393600
     pub template_date_format: String,
     pub template_time_format: String,
     pub discovery_enabled: bool,

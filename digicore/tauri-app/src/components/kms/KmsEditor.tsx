@@ -5,6 +5,7 @@ import { Markdown } from "tiptap-markdown";
 import CodeMirror from "@uiw/react-codemirror";
 import { markdown } from "@codemirror/lang-markdown";
 import { MermaidExtension } from "./MermaidExtension";
+import { FrontmatterExtension } from "./FrontmatterExtension";
 import { Button } from "../ui/button";
 import { Eye, Code, Save, Trash2, Sparkles, ChevronRight, ChevronLeft, FileText, ExternalLink, Link2 } from "lucide-react";
 import { getTaurpc } from "../../lib/taurpc";
@@ -19,9 +20,10 @@ interface KmsEditorProps {
     onDelete?: () => void;
     onRename?: (newName: string) => Promise<void>;
     onSelectNote?: (path: string) => void;
+    onOpenSkillEditor?: () => void;
 }
 
-export default function KmsEditor({ path, initialContent, onSave, onDelete, onRename, onSelectNote }: KmsEditorProps) {
+export default function KmsEditor({ path, initialContent, onSave, onDelete, onRename, onSelectNote, onOpenSkillEditor }: KmsEditorProps) {
     const [mode, setMode] = useState<"wysiwyg" | "source">("wysiwyg");
     const [content, setContent] = useState(initialContent);
     const [isDirty, setIsDirty] = useState(false);
@@ -42,9 +44,10 @@ export default function KmsEditor({ path, initialContent, onSave, onDelete, onRe
             StarterKit.configure({
                 codeBlock: false,
             }),
+            FrontmatterExtension,
             MermaidExtension,
             Markdown.configure({
-                html: false,
+                html: true,
                 tightLists: true,
             }) as any,
         ],
@@ -56,14 +59,18 @@ export default function KmsEditor({ path, initialContent, onSave, onDelete, onRe
         },
         onUpdate: ({ editor }) => {
             const md = (editor.storage as any).markdown.getMarkdown();
-            setContent(md);
+            // Post-process: convert the wrapped frontmatter back to standard --- format
+            const finalMd = unwrapFrontmatter(md);
+            setContent(finalMd);
             setIsDirty(true);
         },
     });
 
     useEffect(() => {
         if (editor && initialContent !== content) {
-            editor.commands.setContent(initialContent);
+            // Pre-process: detect frontmatter and wrap it for the FrontmatterExtension
+            const processed = wrapFrontmatter(initialContent);
+            editor.commands.setContent(processed);
             setContent(initialContent);
             setIsDirty(false);
         }
@@ -211,6 +218,22 @@ export default function KmsEditor({ path, initialContent, onSave, onDelete, onRe
                             </Button>
                         </Tooltip>
                     </div>
+
+                    {filename.toLowerCase() === "skill.md" && onOpenSkillEditor && (
+                        <div className="flex items-center gap-1 border-r border-dc-border pr-3 mr-1">
+                            <Tooltip content="Manage Skill Metadata">
+                                <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className="h-8 gap-2 px-3 text-xs text-dc-accent hover:bg-dc-accent/10 border border-dc-accent/20"
+                                    onClick={onOpenSkillEditor}
+                                >
+                                    <Sparkles size={14} />
+                                    Edit Skill
+                                </Button>
+                            </Tooltip>
+                        </div>
+                    )}
 
                     <Button
                         variant={isDirty ? "default" : "secondary"}
@@ -383,6 +406,39 @@ export default function KmsEditor({ path, initialContent, onSave, onDelete, onRe
         </div>
     );
 }
+
+// --- Helper Functions for Frontmatter Handling ---
+
+function wrapFrontmatter(md: string): string {
+    if (!md) return md;
+    const trimmed = md.trim();
+    if (trimmed.startsWith('---')) {
+        const parts = trimmed.split('---');
+        if (parts.length >= 3) {
+            const frontmatter = parts[1].trim();
+            const remainder = parts.slice(2).join('---').trim();
+            // Use PRE tag to preserve whitespace during Tiptap parsing
+            return `<pre data-type="frontmatter">${frontmatter}</pre>\n\n${remainder}`;
+        }
+    }
+    return md;
+}
+
+function unwrapFrontmatter(md: string): string {
+    if (!md) return md;
+    const regex = /<pre data-type="frontmatter">([\s\S]*?)<\/pre>/;
+    const match = md.match(regex);
+    if (match) {
+        const fm = match[1].trim();
+        const body = md.replace(regex, '').trim();
+        return `---\n${fm}\n---\n\n${body}`;
+    }
+
+    // Fallback: if it was converted to Horizontal Rules by standard markdown rendering
+    // This is a bit more complex to reverse accurately without a dedicated extension parser
+    return md;
+}
+
 function ResultItem({ result, onSelect }: { result: SearchResultDto, onSelect?: (path: string) => void }) {
     return (
         <div

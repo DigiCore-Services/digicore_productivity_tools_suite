@@ -154,6 +154,44 @@ export default function KmsApp() {
         }
     };
 
+    const handleOpenSkillEditor = async (filePath: string) => {
+        // Path should be like .../skills/skill-name/SKILL.md
+        const parts = filePath.split(/[\\/]/);
+        // Find "skills" folder in the path to identify the skill name correctly
+        const skillsIdx = parts.findIndex(p => p.toLowerCase() === "skills");
+
+        if (skillsIdx !== -1 && skillsIdx + 1 < parts.length) {
+            const skillName = parts[skillsIdx + 1];
+            try {
+                const skill = await getTaurpc().kms_get_skill(skillName);
+                if (skill) {
+                    setActiveSkill(skill);
+                    setView("skills");
+                    setIsSkillEditorOpen(true);
+                } else {
+                    toast({
+                        title: "Skill Not Found",
+                        description: `Could not find managed metadata for skill "${skillName}"`,
+                        variant: "destructive"
+                    });
+                }
+            } catch (error) {
+                console.error("Failed to open skill editor:", error);
+                toast({
+                    title: "Navigation Error",
+                    description: "Failed to load skill metadata from the database",
+                    variant: "destructive"
+                });
+            }
+        } else {
+            toast({
+                title: "Invalid Skill Path",
+                description: "This SKILL.md does not appear to be within a managed skills directory.",
+                variant: "default"
+            });
+        }
+    };
+
     const handleCreateNote = async (parentPath?: string) => {
         if (!vaultPath) return;
 
@@ -737,10 +775,8 @@ export default function KmsApp() {
                                 </div>
                             </div>
                         ) : view === "skills" ? (
-                            <div className="p-4 flex flex-col items-center justify-center py-20 opacity-30 text-center">
-                                <Cpu size={32} className="mb-4" />
-                                <span className="text-xs">Skill Hub active in main view</span>
-                            </div>
+                            null
+
                         ) : view === "logs" ? (
                             <KmsLogViewer />
                         ) : (
@@ -832,6 +868,7 @@ export default function KmsApp() {
                             const note = notes.find(n => n.path === path);
                             if (note) handleSelectNote(note);
                         }}
+                        onOpenSkillEditor={() => handleOpenSkillEditor(activeNote.path)}
                     />
                 ) : (
                     <div className="flex-1 flex flex-col items-center justify-center p-8">
