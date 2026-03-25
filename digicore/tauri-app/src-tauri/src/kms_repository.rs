@@ -1,12 +1,12 @@
 use rusqlite::{params, Connection, OptionalExtension};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 use chrono;
 use crate::clipboard_repository;
 use crate::utils::crypto;
 use digicore_text_expander::adapters::storage::JsonFileStorageAdapter;
 use digicore_text_expander::ports::{storage_keys, StoragePort, skill::SkillRepository};
-use digicore_core::domain::entities::skill::{Skill, SkillMetadata};
+use digicore_core::domain::entities::skill::{Skill, SkillMetadata, SkillScope};
 use async_trait::async_trait;
 
 pub fn get_vault_path() -> Result<PathBuf, String> {
@@ -89,7 +89,13 @@ pub fn init(db_path: PathBuf) -> Result<(), String> {
             tags TEXT,
             path TEXT NOT NULL,
             instructions TEXT,
-            last_modified DATETIME
+            last_modified DATETIME,
+            license TEXT,
+            compatibility TEXT,
+            extra_metadata TEXT,
+            disable_model_invocation INTEGER DEFAULT 0,
+            scope TEXT DEFAULT 'Global',
+            sync_targets TEXT DEFAULT '[]'
         );
         "#
     ).map_err(|e| e.to_string())?;
@@ -98,6 +104,12 @@ pub fn init(db_path: PathBuf) -> Result<(), String> {
     let _ = conn.execute("ALTER TABLE kms_skills ADD COLUMN version TEXT", []);
     let _ = conn.execute("ALTER TABLE kms_skills ADD COLUMN author TEXT", []);
     let _ = conn.execute("ALTER TABLE kms_skills ADD COLUMN tags TEXT", []);
+    let _ = conn.execute("ALTER TABLE kms_skills ADD COLUMN license TEXT", []);
+    let _ = conn.execute("ALTER TABLE kms_skills ADD COLUMN compatibility TEXT", []);
+    let _ = conn.execute("ALTER TABLE kms_skills ADD COLUMN extra_metadata TEXT", []);
+    let _ = conn.execute("ALTER TABLE kms_skills ADD COLUMN disable_model_invocation INTEGER DEFAULT 0", []);
+    let _ = conn.execute("ALTER TABLE kms_skills ADD COLUMN scope TEXT DEFAULT 'Global'", []);
+    let _ = conn.execute("ALTER TABLE kms_skills ADD COLUMN sync_targets TEXT DEFAULT '[]'", []);
     
     if DB_CONN.set(Mutex::new(conn)).is_err() {
         // Already initialized by another thread, that's fine.
@@ -905,10 +917,13 @@ impl SkillRepository for KmsSkillRepository {
     async fn list_skills(&self) -> anyhow::Result<Vec<Skill>> {
         let conn = conn_guard().map_err(|e| anyhow::anyhow!(e))?;
         let mut stmt = conn.prepare(
-            "SELECT name, description, version, path, instructions, author, tags FROM kms_skills ORDER BY name ASC"
+            "SELECT name, description, version, path, instructions, author, tags, license, compatibility, extra_metadata, disable_model_invocation, scope, sync_targets FROM kms_skills ORDER BY name ASC"
         )?;
         
         let rows = stmt.query_map([], |row| {
+            let scope_str: String = row.get(11)?;
+            let scope = if scope_str == "Project" { SkillScope::Project } else { SkillScope::Global };
+            
             Ok(Skill {
                 metadata: SkillMetadata {
                     name: row.get(0)?,
@@ -916,6 +931,12 @@ impl SkillRepository for KmsSkillRepository {
                     version: row.get(2)?,
                     author: row.get(5)?,
                     tags: serde_json::from_str(&row.get::<_, String>(6).unwrap_or_else(|_| "[]".to_string())).unwrap_or_default(),
+                    license: row.get(7)?,
+                    compatibility: row.get(8)?,
+                    extra_metadata: row.get::<_, Option<String>>(9)?.and_then(|s| serde_json::from_str(&s).ok()),
+                    disable_model_invocation: Some(row.get::<_, i32>(10)? != 0),
+                    scope,
+                    sync_targets: serde_json::from_str(&row.get::<_, String>(12).unwrap_or_else(|_| "[]".to_string())).unwrap_or_default(),
                 },
                 path: PathBuf::from(row.get::<_, String>(3)?),
                 instructions: row.get::<_, Option<String>>(4)?.unwrap_or_default(),
@@ -933,10 +954,13 @@ impl SkillRepository for KmsSkillRepository {
     async fn get_skill(&self, name: &str) -> anyhow::Result<Option<Skill>> {
         let conn = conn_guard().map_err(|e| anyhow::anyhow!(e))?;
         let mut stmt = conn.prepare(
-            "SELECT name, description, version, path, instructions, author, tags FROM kms_skills WHERE name = ?1"
+            "SELECT name, description, version, path, instructions, author, tags, license, compatibility, extra_metadata, disable_model_invocation, scope, sync_targets FROM kms_skills WHERE name = ?1"
         )?;
         
         let skill = stmt.query_row(params![name], |row| {
+            let scope_str: String = row.get(11)?;
+            let scope = if scope_str == "Project" { SkillScope::Project } else { SkillScope::Global };
+
             Ok(Skill {
                 metadata: SkillMetadata {
                     name: row.get(0)?,
@@ -944,6 +968,12 @@ impl SkillRepository for KmsSkillRepository {
                     version: row.get(2)?,
                     author: row.get(5)?,
                     tags: serde_json::from_str(&row.get::<_, String>(6).unwrap_or_else(|_| "[]".to_string())).unwrap_or_default(),
+                    license: row.get(7)?,
+                    compatibility: row.get(8)?,
+                    extra_metadata: row.get::<_, Option<String>>(9)?.and_then(|s| serde_json::from_str(&s).ok()),
+                    disable_model_invocation: Some(row.get::<_, i32>(10)? != 0),
+                    scope,
+                    sync_targets: serde_json::from_str(&row.get::<_, String>(12).unwrap_or_else(|_| "[]".to_string())).unwrap_or_default(),
                 },
                 path: PathBuf::from(row.get::<_, String>(3)?),
                 instructions: row.get::<_, Option<String>>(4)?.unwrap_or_default(),
@@ -974,9 +1004,25 @@ impl SkillRepository for KmsSkillRepository {
 
         let now = chrono::Local::now().to_rfc3339();
         
+        // Ensure managed directory exists
+        let vault = self.vault_path();
+        let skill_dir = vault.join("skills").join(&skill.metadata.name);
+        if !skill_dir.exists() {
+            std::fs::create_dir_all(&skill_dir).map_err(|e| anyhow::anyhow!("Failed to create skill directory: {}", e))?;
+        }
+        
+        // Write SKILL.md
+        let markdown = skill.to_markdown()?;
+        std::fs::write(skill_dir.join("SKILL.md"), markdown).map_err(|e| anyhow::anyhow!("Failed to write SKILL.md: {}", e))?;
+
+        let scope_str = match skill.metadata.scope {
+            digicore_core::domain::entities::skill::SkillScope::Global => "Global",
+            digicore_core::domain::entities::skill::SkillScope::Project => "Project",
+        };
+
         conn.execute(
-            "INSERT INTO kms_skills (name, description, version, path, instructions, last_modified, author, tags)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+            "INSERT INTO kms_skills (name, description, version, path, instructions, last_modified, author, tags, license, compatibility, extra_metadata, disable_model_invocation, scope, sync_targets)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
              ON CONFLICT(name) DO UPDATE SET
                 description = excluded.description,
                 version = excluded.version,
@@ -984,16 +1030,28 @@ impl SkillRepository for KmsSkillRepository {
                 instructions = excluded.instructions,
                 last_modified = excluded.last_modified,
                 author = excluded.author,
-                tags = excluded.tags",
+                tags = excluded.tags,
+                license = excluded.license,
+                compatibility = excluded.compatibility,
+                extra_metadata = excluded.extra_metadata,
+                disable_model_invocation = excluded.disable_model_invocation,
+                scope = excluded.scope,
+                sync_targets = excluded.sync_targets",
             params![
                 skill.metadata.name,
                 skill.metadata.description,
                 skill.metadata.version,
-                skill.path.to_string_lossy(),
+                skill_dir.to_string_lossy(),
                 skill.instructions,
                 now,
                 skill.metadata.author,
-                serde_json::to_string(&skill.metadata.tags).unwrap_or_else(|_| "[]".to_string())
+                serde_json::to_string(&skill.metadata.tags).unwrap_or_else(|_| "[]".to_string()),
+                skill.metadata.license,
+                skill.metadata.compatibility,
+                skill.metadata.extra_metadata.as_ref().map(|v| serde_json::to_string(v).unwrap_or_default()),
+                if skill.metadata.disable_model_invocation.unwrap_or(false) { 1 } else { 0 },
+                scope_str,
+                serde_json::to_string(&skill.metadata.sync_targets).unwrap_or_else(|_| "[]".to_string())
             ],
         )?;
         Ok(())
@@ -1013,18 +1071,8 @@ impl SkillRepository for KmsSkillRepository {
         Ok(())
     }
 
-    async fn delete_skill_by_path(&self, path: &Path) -> anyhow::Result<()> {
-        let name: Option<String> = {
-            let conn = conn_guard().map_err(|e| anyhow::anyhow!(e))?;
-            let path_str = path.to_string_lossy();
-            
-            conn.query_row(
-                "SELECT name FROM kms_skills WHERE path = ?1",
-                params![path_str],
-                |row| row.get(0)
-            ).optional()?
-        };
-        
+    async fn delete_skill_by_path(&self, path: &std::path::Path) -> anyhow::Result<()> {
+        let name = self.find_skill_name_by_path(path).await?;
         if let Some(entry_name) = name {
             self.delete_skill(&entry_name).await?;
         }
@@ -1032,7 +1080,7 @@ impl SkillRepository for KmsSkillRepository {
         Ok(())
     }
 
-    async fn find_skill_name_by_path(&self, path: &Path) -> anyhow::Result<Option<String>> {
+    async fn find_skill_name_by_path(&self, path: &std::path::Path) -> anyhow::Result<Option<String>> {
         let conn = conn_guard().map_err(|e| anyhow::anyhow!(e))?;
         let path_str = path.to_string_lossy();
         
@@ -1046,7 +1094,51 @@ impl SkillRepository for KmsSkillRepository {
     }
 
     async fn refresh(&self) -> anyhow::Result<()> {
-        // Implementation for scanning filesystem will be added in Sync Engine phase
+        let vault_path = get_vault_path().map_err(|e| anyhow::anyhow!(e))?;
+        let skills_dir = vault_path.join("skills");
+        
+        if !skills_dir.exists() {
+            return Ok(());
+        }
+
+        let mut discovered_names = Vec::new();
+
+        for entry in std::fs::read_dir(&skills_dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            
+            if path.is_dir() {
+                match Skill::from_dir(path.clone()) {
+                    Ok(skill) => {
+                        discovered_names.push(skill.metadata.name.clone());
+                        self.save_skill(&skill).await?;
+                    }
+                    Err(e) => {
+                        log::warn!("[KMS][Skills] Failed to parse skill at {:?}: {}", path, e);
+                    }
+                }
+            }
+        }
+
+        // Cleanup: remove skills from DB that were not found on disk
+        let conn = conn_guard().map_err(|e| anyhow::anyhow!(e))?;
+        let mut stmt = conn.prepare("SELECT name FROM kms_skills")?;
+        let db_names_iter = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        
+        let mut to_delete = Vec::new();
+        for name_res in db_names_iter {
+            let name = name_res?;
+            if !discovered_names.contains(&name) {
+                to_delete.push(name);
+            }
+        }
+
+        for name in to_delete {
+            log::info!("[KMS][Skills] Removing stale skill from DB: {}", name);
+            conn.execute("DELETE FROM kms_skills WHERE name = ?1", params![name])?;
+            let _ = update_index_status("skills", &name, "deleted", None);
+        }
+
         Ok(())
     }
 
