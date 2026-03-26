@@ -1,14 +1,15 @@
-import React, { useState, useEffect, useRef, lazy, Suspense } from "react";
+import React, { useState, useEffect, useRef, lazy, Suspense, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { listen } from "@tauri-apps/api/event";
 import { getTaurpc } from "./lib/taurpc";
 import { resolveTheme, applyThemeToDocument } from "./lib/theme";
 import { Toaster } from "./components/ui/toaster";
 import { useToast } from "./components/ui/use-toast";
-import { Book, FolderOpen, Search, Settings, Plus, Star, FileText, Sun, Moon, AlertCircle, RefreshCw, Check, Terminal, Activity, Cpu } from "lucide-react";
+import { Book, FolderOpen, Search, Settings, Plus, Star, FileText, Sun, Moon, AlertCircle, RefreshCw, Check, Terminal, Activity, Cpu, Maximize2, Minimize2 } from "lucide-react";
 import { Button } from "./components/ui/button";
 import KmsEditor from "./components/kms/KmsEditor";
 import KmsLogViewer from "./components/kms/KmsLogViewer";
+import KmsHistoryBrowser from "./components/kms/KmsHistoryBrowser";
 import VaultSettingsModal from "./components/modals/VaultSettingsModal";
 import { ViewFull } from "./components/modals/ViewFull";
 const ImageViewerModal = lazy(() =>
@@ -54,6 +55,25 @@ export default function KmsApp() {
         return saved ? Number.parseInt(saved) : 280;
     });
     const [isResizing, setIsResizing] = useState(false);
+    const [isZenMode, setIsZenMode] = useState(() => {
+        const saved = localStorage.getItem("kms-zen-mode");
+        return saved === "true";
+    });
+    const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+
+    const currentTheme = themeOverride || theme;
+
+    const toggleTheme = useCallback(() => {
+        setThemeOverride(currentTheme === "dark" ? "light" : "dark");
+    }, [currentTheme]);
+
+    const toggleZenMode = useCallback(() => {
+        setIsZenMode(prev => {
+            const next = !prev;
+            localStorage.setItem("kms-zen-mode", String(next));
+            return next;
+        });
+    }, []);
 
     useEffect(() => {
         const init = async () => {
@@ -101,6 +121,17 @@ export default function KmsApp() {
             unlistenSyncComplete.then(f => f());
         };
     }, [toast]);
+
+    useEffect(() => {
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if (e.altKey && e.key.toLowerCase() === 'z') {
+                e.preventDefault();
+                toggleZenMode();
+            }
+        };
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [toggleZenMode]);
 
     const refreshNotes = async () => {
         try {
@@ -508,11 +539,6 @@ export default function KmsApp() {
         }
     };
 
-    const currentTheme = themeOverride || theme;
-
-    const toggleTheme = () => {
-        setThemeOverride(currentTheme === "dark" ? "light" : "dark");
-    };
 
     useEffect(() => {
         applyThemeToDocument(currentTheme);
@@ -532,357 +558,343 @@ export default function KmsApp() {
     return (
         <div className="flex h-screen bg-dc-bg text-dc-text font-sans overflow-hidden select-none" data-theme={currentTheme}>
             {/* Sidebar */}
-            <aside
-                className="border-r border-dc-border flex flex-col bg-dc-bg-secondary/30 backdrop-blur-md relative"
-                style={{ width: sidebarWidth }}
-            >
-                <div className="p-4 border-b border-dc-border flex items-center gap-2">
-                    <div className="p-1.5 bg-dc-accent rounded-lg text-white">
-                        < Book size={18} />
+            {!isZenMode && (
+                <aside
+                    className="border-r border-dc-border flex flex-col bg-dc-bg-secondary/30 backdrop-blur-md relative"
+                    style={{ width: sidebarWidth }}
+                >
+                    <div className="p-4 border-b border-dc-border flex items-center gap-2">
+                        <div className="p-1.5 bg-dc-accent rounded-lg text-white">
+                            < Book size={18} />
+                        </div>
+                        <span className="font-semibold tracking-tight">DigiCore KMS</span>
                     </div>
-                    <span className="font-semibold tracking-tight">DigiCore KMS</span>
-                </div>
-                <div className="flex items-center gap-4 px-4 py-2">
-                    <div className="flex items-center gap-1.5 px-3 py-1 bg-dc-bg-secondary/50 rounded-full border border-dc-border">
-                        <div className={`w-1.5 h-1.5 rounded-full ${syncStatus === "Idle" ? "bg-dc-green" : syncStatus.toLowerCase().includes("error") || syncStatus.toLowerCase().includes("failed") ? "bg-dc-red" : "bg-dc-amber animate-pulse"}`} />
-                        <span className="text-[10px] text-dc-text-muted uppercase tracking-wider font-bold">
-                            Sync: <span className={syncStatus !== "Idle" ? "text-dc-text" : ""}>{syncStatus}</span>
-                        </span>
-                    </div>
-                </div>
-
-                <div className="flex-1 overflow-y-auto p-4 space-y-6">
-                    <div>
-                        <div className="text-[10px] font-bold text-dc-text-muted uppercase tracking-wider mb-2 px-2">Navigation</div>
-                        <nav className="space-y-1">
-                            <Button
-                                variant={view === "explorer" ? "secondary" : "ghost"}
-                                size="sm"
-                                className={`w-full justify-start gap-2 h-9 px-2 ${view === "explorer" ? "bg-dc-bg-hover text-dc-accent font-medium" : "text-dc-text-muted hover:bg-dc-bg-hover"}`}
-                                onClick={() => {
-                                    if (!checkUnsavedSkillChanges()) return;
-                                    setView("explorer");
-                                    setIsSkillEditorOpen(false);
-                                    setActiveNote(null);
-                                }}
-                            >
-                                <FolderOpen size={16} className={view === "explorer" ? "text-dc-accent" : "text-dc-text-muted"} />
-                                <span className="text-sm">Explorer</span>
-                            </Button>
-                            <Button
-                                variant={view === "search" ? "secondary" : "ghost"}
-                                size="sm"
-                                className={`w-full justify-start gap-2 h-9 px-2 ${view === "search" ? "bg-dc-bg-hover text-dc-accent font-medium" : "text-dc-text-muted hover:bg-dc-bg-hover"}`}
-                                onClick={() => {
-                                    if (!checkUnsavedSkillChanges()) return;
-                                    setView("search");
-                                    setIsSkillEditorOpen(false);
-                                }}
-                            >
-                                <Search size={16} className={view === "search" ? "text-dc-accent" : "text-dc-text-muted"} />
-                                <span className="text-sm">Semantic Search</span>
-                            </Button>
-                            <Button
-                                variant={view === "favorites" ? "secondary" : "ghost"}
-                                size="sm"
-                                className={`w-full justify-start gap-2 h-9 px-2 ${view === "favorites" ? "bg-dc-bg-hover text-dc-accent font-medium" : "text-dc-text-muted hover:bg-dc-bg-hover"}`}
-                                onClick={() => {
-                                    if (!checkUnsavedSkillChanges()) return;
-                                    setView("favorites");
-                                    setIsSkillEditorOpen(false);
-                                }}
-                            >
-                                <Star size={16} className={view === "favorites" ? "text-dc-accent" : "text-dc-text-muted"} />
-                                <span className="text-sm">Favorites</span>
-                            </Button>
-                            <Button
-                                variant={view === "skills" ? "secondary" : "ghost"}
-                                size="sm"
-                                className={`w-full justify-start gap-2 h-9 px-2 ${view === "skills" ? "bg-dc-bg-hover text-dc-accent font-medium" : "text-dc-text-muted hover:bg-dc-bg-hover"}`}
-                                onClick={() => {
-                                    if (!checkUnsavedSkillChanges()) return;
-                                    setView("skills");
-                                    setIsSkillEditorOpen(false);
-                                    setActiveNote(null);
-                                }}
-                            >
-                                <Cpu size={16} className={view === "skills" ? "text-dc-accent" : "text-dc-text-muted"} />
-                                <span className="text-sm">Skill Hub</span>
-                            </Button>
-                            <Button
-                                variant={view === "logs" ? "secondary" : "ghost"}
-                                size="sm"
-                                className={`w-full justify-start gap-2 h-9 px-2 ${view === "logs" ? "bg-dc-bg-hover text-dc-accent font-medium" : "text-dc-text-muted hover:bg-dc-bg-hover"}`}
-                                onClick={() => {
-                                    if (!checkUnsavedSkillChanges()) return;
-                                    setView("logs");
-                                    setIsSkillEditorOpen(false);
-                                }}
-                            >
-                                <Activity size={16} className={view === "logs" ? "text-dc-accent" : "text-dc-text-muted"} />
-                                <span className="text-sm">Operational Logs</span>
-                            </Button>
-                        </nav>
+                    <div className="flex items-center gap-4 px-4 py-2">
+                        <div className="flex items-center gap-1.5 px-3 py-1 bg-dc-bg-secondary/50 rounded-full border border-dc-border">
+                            <div className={`w-1.5 h-1.5 rounded-full ${syncStatus === "Idle" ? "bg-dc-green" : syncStatus.toLowerCase().includes("error") || syncStatus.toLowerCase().includes("failed") ? "bg-dc-red" : "bg-dc-amber animate-pulse"}`} />
+                            <span className="text-[10px] text-dc-text-muted uppercase tracking-wider font-bold">
+                                Sync: <span className={syncStatus !== "Idle" ? "text-dc-text" : ""}>{syncStatus}</span>
+                            </span>
+                        </div>
                     </div>
 
-                    <div className="flex-1 overflow-y-auto pt-0">
-                        {view === "explorer" ? (
-                            <div className="p-4 space-y-4">
-                                <div>
-                                    <div className="text-[10px] font-bold text-dc-text-muted uppercase tracking-wider mb-2 px-2 flex justify-between items-center">
-                                        Vault Explorer
-                                        <div className="flex items-center gap-2">
-                                            <div title="New Notebook/Folder">
-                                                <FolderOpen
-                                                    size={14}
-                                                    className="cursor-pointer hover:text-dc-accent transition-colors"
-                                                    onClick={() => handleCreateFolder()}
-                                                />
-                                            </div>
-                                            <div title="New Note">
-                                                <Plus
-                                                    size={14}
-                                                    className="cursor-pointer hover:text-dc-accent transition-colors"
-                                                    onClick={() => handleCreateNote()}
-                                                />
-                                            </div>
-                                            <div title="Force Reindex Vault">
-                                                <RefreshCw
-                                                    size={14}
-                                                    className={`cursor-pointer transition-colors ${syncStatus !== "Idle" ? "text-dc-amber animate-spin" : "hover:text-dc-accent"}`}
-                                                    onClick={async () => {
-                                                        try {
-                                                            await getTaurpc().kms_reindex_all();
-                                                            refreshNotes();
-                                                            refreshStructure();
-                                                            toast({ title: "Reindex Triggered", description: "Indexing vault contents." });
-                                                        } catch (err: any) {
-                                                            toast({ title: "Reindex Failed", description: String(err), variant: "destructive" });
-                                                        }
-                                                    }}
-                                                />
+                    <div className="flex-1 overflow-y-auto p-4 space-y-6">
+                        <div>
+                            <div className="text-[10px] font-bold text-dc-text-muted uppercase tracking-wider mb-2 px-2">Navigation</div>
+                            <nav className="space-y-1">
+                                <Button
+                                    variant={view === "explorer" ? "secondary" : "ghost"}
+                                    size="sm"
+                                    className={`w-full justify-start gap-2 h-9 px-2 ${view === "explorer" ? "bg-dc-bg-hover text-dc-accent font-medium" : "text-dc-text-muted hover:bg-dc-bg-hover"}`}
+                                    onClick={() => {
+                                        if (!checkUnsavedSkillChanges()) return;
+                                        setView("explorer");
+                                        setIsSkillEditorOpen(false);
+                                        setActiveNote(null);
+                                    }}
+                                >
+                                    <FolderOpen size={16} className={view === "explorer" ? "text-dc-accent" : "text-dc-text-muted"} />
+                                    <span className="text-sm">Explorer</span>
+                                </Button>
+                                <Button
+                                    variant={view === "search" ? "secondary" : "ghost"}
+                                    size="sm"
+                                    className={`w-full justify-start gap-2 h-9 px-2 ${view === "search" ? "bg-dc-bg-hover text-dc-accent font-medium" : "text-dc-text-muted hover:bg-dc-bg-hover"}`}
+                                    onClick={() => {
+                                        if (!checkUnsavedSkillChanges()) return;
+                                        setView("search");
+                                        setIsSkillEditorOpen(false);
+                                    }}
+                                >
+                                    <Search size={16} className={view === "search" ? "text-dc-accent" : "text-dc-text-muted"} />
+                                    <span className="text-sm">Semantic Search</span>
+                                </Button>
+                                <Button
+                                    variant={view === "favorites" ? "secondary" : "ghost"}
+                                    size="sm"
+                                    className={`w-full justify-start gap-2 h-9 px-2 ${view === "favorites" ? "bg-dc-bg-hover text-dc-accent font-medium" : "text-dc-text-muted hover:bg-dc-bg-hover"}`}
+                                    onClick={() => {
+                                        if (!checkUnsavedSkillChanges()) return;
+                                        setView("favorites");
+                                        setIsSkillEditorOpen(false);
+                                    }}
+                                >
+                                    <Star size={16} className={view === "favorites" ? "text-dc-accent" : "text-dc-text-muted"} />
+                                    <span className="text-sm">Favorites</span>
+                                </Button>
+                                <Button
+                                    variant={view === "skills" ? "secondary" : "ghost"}
+                                    size="sm"
+                                    className={`w-full justify-start gap-2 h-9 px-2 ${view === "skills" ? "bg-dc-bg-hover text-dc-accent font-medium" : "text-dc-text-muted hover:bg-dc-bg-hover"}`}
+                                    onClick={() => {
+                                        if (!checkUnsavedSkillChanges()) return;
+                                        setView("skills");
+                                        setIsSkillEditorOpen(false);
+                                        setActiveNote(null);
+                                    }}
+                                >
+                                    <Cpu size={16} className={view === "skills" ? "text-dc-accent" : "text-dc-text-muted"} />
+                                    <span className="text-sm">Skill Hub</span>
+                                </Button>
+                                <Button
+                                    variant={view === "logs" ? "secondary" : "ghost"}
+                                    size="sm"
+                                    className={`w-full justify-start gap-2 h-9 px-2 ${view === "logs" ? "bg-dc-bg-hover text-dc-accent font-medium" : "text-dc-text-muted hover:bg-dc-bg-hover"}`}
+                                    onClick={() => {
+                                        if (!checkUnsavedSkillChanges()) return;
+                                        setView("logs");
+                                        setIsSkillEditorOpen(false);
+                                    }}
+                                >
+                                    <Activity size={16} className={view === "logs" ? "text-dc-accent" : "text-dc-text-muted"} />
+                                    <span className="text-sm">Operational Logs</span>
+                                </Button>
+                            </nav>
+                        </div>
+
+                        <div className="flex-1 overflow-y-auto pt-0">
+                            {view === "explorer" ? (
+                                <div className="p-4 space-y-4">
+                                    <div>
+                                        <div className="text-[10px] font-bold text-dc-text-muted uppercase tracking-wider mb-2 px-2 flex justify-between items-center">
+                                            Vault Explorer
+                                            <div className="flex items-center gap-2">
+                                                <div title="New Notebook/Folder">
+                                                    <FolderOpen
+                                                        size={14}
+                                                        className="cursor-pointer hover:text-dc-accent transition-colors"
+                                                        onClick={() => handleCreateFolder()}
+                                                    />
+                                                </div>
+                                                <div title="New Note">
+                                                    <Plus
+                                                        size={14}
+                                                        className="cursor-pointer hover:text-dc-accent transition-colors"
+                                                        onClick={() => handleCreateNote()}
+                                                    />
+                                                </div>
+                                                <div title="Force Reindex Vault">
+                                                    <RefreshCw
+                                                        size={14}
+                                                        className={`cursor-pointer transition-colors ${syncStatus !== "Idle" ? "text-dc-amber animate-spin" : "hover:text-dc-accent"}`}
+                                                        onClick={async () => {
+                                                            try {
+                                                                await getTaurpc().kms_reindex_all();
+                                                                refreshNotes();
+                                                                refreshStructure();
+                                                                toast({ title: "Reindex Triggered", description: "Indexing vault contents." });
+                                                            } catch (err: any) {
+                                                                toast({ title: "Reindex Failed", description: String(err), variant: "destructive" });
+                                                            }
+                                                        }}
+                                                    />
+                                                </div>
                                             </div>
                                         </div>
-                                    </div>
-                                    <div className="flex-1 overflow-y-auto min-h-0">
-                                        <FileExplorer
-                                            structure={vaultStructure}
-                                            activeNote={activeNote}
-                                            onSelectNote={handleSelectNote}
-                                            onCreateNote={handleCreateNote}
-                                            onCreateFolder={handleCreateFolder}
-                                            onRenameNote={async (oldPath: string, newName: string) => {
-                                                if (window.confirm(`Rename note to '${newName}'?`)) {
-                                                    await handleRenameNote(newName, oldPath);
-                                                }
-                                            }}
-                                            onDeleteNote={async (path: string) => {
-                                                if (window.confirm("Are you sure you want to delete this note?")) {
-                                                    await handleDeleteNote(path);
-                                                }
-                                            }}
-                                            onRenameFolder={handleRenameFolder}
-                                            onDeleteFolder={handleDeleteFolder}
-                                            onMoveItem={handleMoveItem}
-                                        />
+                                        <div className="flex-1 overflow-y-auto min-h-0">
+                                            <FileExplorer
+                                                structure={vaultStructure}
+                                                activeNote={activeNote}
+                                                onSelectNote={handleSelectNote}
+                                                onCreateNote={handleCreateNote}
+                                                onCreateFolder={handleCreateFolder}
+                                                onRenameNote={async (oldPath: string, newName: string) => {
+                                                    if (window.confirm(`Rename note to '${newName}'?`)) {
+                                                        await handleRenameNote(newName, oldPath);
+                                                    }
+                                                }}
+                                                onDeleteNote={async (path: string) => {
+                                                    if (window.confirm("Are you sure you want to delete this note?")) {
+                                                        await handleDeleteNote(path);
+                                                    }
+                                                }}
+                                                onRenameFolder={handleRenameFolder}
+                                                onDeleteFolder={handleDeleteFolder}
+                                                onMoveItem={handleMoveItem}
+                                            />
+                                        </div>
                                     </div>
                                 </div>
-                            </div>
-                        ) : view === "search" ? (
-                            <div className="p-4 space-y-4">
-                                <div className="text-[10px] font-bold text-dc-text-muted uppercase tracking-wider mb-2 px-2">Knowledge Search</div>
-                                <div className="relative group px-1">
-                                    <Search size={14} className="absolute left-4 top-1/2 -translate-y-1/2 text-dc-text-muted group-focus-within:text-dc-accent transition-colors" />
-                                    <input
-                                        autoFocus
-                                        placeholder="Recall anything..."
-                                        className="w-full bg-dc-bg-secondary text-dc-text border border-dc-border rounded-xl py-2 pl-10 pr-4 text-xs focus:outline-none focus:border-dc-accent/50 focus:bg-dc-bg-hover/50 transition-all font-medium placeholder:text-dc-text-muted/50"
-                                        value={searchQuery}
-                                        onChange={(e) => setSearchQuery(e.target.value)}
-                                        onKeyDown={(e) => e.key === "Enter" && handleSearch()}
-                                    />
-                                    <div className="absolute right-3 top-1/2 -translate-y-1/2 flex gap-1">
-                                        {searchQuery && (
-                                            <div className="text-[8px] bg-dc-bg font-mono border border-dc-border rounded px-1 text-dc-text-muted opacity-50 shadow-sm">ENTER</div>
+                            ) : view === "search" ? (
+                                <div className="p-4 space-y-4">
+                                    <div className="text-[10px] font-bold text-dc-text-muted uppercase tracking-wider mb-2 px-2">Knowledge Search</div>
+                                    <div className="relative group px-1">
+                                        <Search size={14} className="absolute left-4 top-1/2 -translate-y-1/2 text-dc-text-muted group-focus-within:text-dc-accent transition-colors" />
+                                        <input
+                                            autoFocus
+                                            placeholder="Recall anything..."
+                                            className="w-full bg-dc-bg-secondary text-dc-text border border-dc-border rounded-xl py-2 pl-10 pr-4 text-xs focus:outline-none focus:border-dc-accent/50 focus:bg-dc-bg-hover/50 transition-all font-medium placeholder:text-dc-text-muted/50"
+                                            value={searchQuery}
+                                            onChange={(e) => setSearchQuery(e.target.value)}
+                                            onKeyDown={(e) => e.key === "Enter" && handleSearch()}
+                                        />
+                                        <div className="absolute right-3 top-1/2 -translate-y-1/2 flex gap-1">
+                                            {searchQuery && (
+                                                <div className="text-[8px] bg-dc-bg font-mono border border-dc-border rounded px-1 text-dc-text-muted opacity-50 shadow-sm">ENTER</div>
+                                            )}
+                                        </div>
+                                    </div>
+
+                                    {/* Search Mode Selector */}
+                                    <div className="flex bg-dc-bg-secondary/50 rounded-lg p-0.5 border border-dc-border mx-1">
+                                        {(["Hybrid", "Semantic", "Keyword"] as const).map((mode) => (
+                                            <button
+                                                key={mode}
+                                                onClick={() => setSearchMode(mode)}
+                                                className={`flex-1 py-1 text-[10px] font-bold uppercase tracking-tight rounded-md transition-all ${searchMode === mode
+                                                    ? "bg-dc-accent text-white shadow-sm"
+                                                    : "text-dc-text-muted hover:text-dc-text hover:bg-dc-bg-hover"
+                                                    }`}
+                                            >
+                                                {mode}
+                                            </button>
+                                        ))}
+                                    </div>
+
+                                    <div className="space-y-1 pb-10">
+                                        {searchLoading ? (
+                                            <div className="flex flex-col items-center justify-center py-12 gap-3 opacity-50">
+                                                <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-dc-accent" />
+                                                <span className="text-[10px] uppercase font-bold tracking-[0.2em] text-dc-accent">Thinking...</span>
+                                                <Button variant="ghost" size="sm" onClick={cancelSearch} className="mt-2 text-xs border border-dc-border hover:bg-dc-bg-hover">
+                                                    Cancel Search
+                                                </Button>
+                                            </div>
+                                        ) : searchResults.length === 0 && searchQuery ? (
+                                            <div className="text-center py-12 px-6">
+                                                <div className="w-10 h-10 bg-dc-bg-hover rounded-full flex items-center justify-center mx-auto mb-3 opacity-50">
+                                                    <Search size={16} />
+                                                </div>
+                                                <p className="text-[10px] text-dc-text-muted italic leading-relaxed">We couldn't find any direct or semantic matches for your query.</p>
+                                            </div>
+                                        ) : (
+                                            searchResults.map((result, idx) => (
+                                                <Button
+                                                    key={`${result.entity_id}-${idx}`}
+                                                    variant="ghost"
+                                                    size="sm"
+                                                    className="w-full justify-start gap-2 py-3 px-3 h-auto hover:bg-dc-bg-hover group border border-transparent hover:border-dc-accent/20 rounded-xl transition-all mb-1"
+                                                    onClick={() => handleNavigateToResult(result)}
+                                                >
+                                                    <div className="flex flex-col items-start text-left w-full gap-1">
+                                                        <div className="flex items-center justify-between w-full">
+                                                            <div className="flex items-center gap-1.5 overflow-hidden flex-1 mr-2">
+                                                                <span className="text-[9px] font-bold text-dc-accent uppercase tracking-tighter opacity-80 whitespace-nowrap">
+                                                                    {result.entity_type === "clipboard" ? `CLIPBOARD (${result.modality})` : result.entity_type}
+                                                                </span>
+                                                                {result.modality === "image" && <div className="p-0.5 bg-dc-accent/10 rounded text-dc-accent"><Book size={10} strokeWidth={3} /></div>}
+                                                                {result.modality === "text" && result.entity_type === "clipboard" && <div className="p-0.5 bg-dc-accent/5 rounded text-dc-accent/60"><FileText size={10} strokeWidth={3} /></div>}
+                                                            </div>
+                                                            <span className="text-[8px] opacity-40 font-mono italic shrink-0">{Math.round((1 - result.distance) * 100)}% Match</span>
+                                                        </div>
+
+                                                        <span className="text-sm font-medium truncate group-hover:text-dc-accent transition-colors">
+                                                            {result.entity_type === "note"
+                                                                ? result.entity_id.split(/[\\/]/).pop()?.replace(".md", "")
+                                                                : result.entity_type === "snippet"
+                                                                    ? `Snippet: ${result.entity_id}`
+                                                                    : (() => {
+                                                                        if (result.entity_type === "clipboard") {
+                                                                            try {
+                                                                                const meta = JSON.parse(result.metadata || "{}");
+                                                                                return meta.process_name || `Clipboard ${result.entity_id}`;
+                                                                            } catch {
+                                                                                return `Clipboard ${result.entity_id}`;
+                                                                            }
+                                                                        }
+                                                                        return result.entity_id;
+                                                                    })()
+                                                            }
+                                                        </span>
+
+                                                        {(result.snippet || result.metadata) && (
+                                                            <span className="text-[10px] text-dc-text-muted mt-1 leading-normal line-clamp-3 opacity-70 group-hover:opacity-100 transition-opacity">
+                                                                {result.snippet || (() => {
+                                                                    if (result.entity_type === "snippet") {
+                                                                        try {
+                                                                            const meta = JSON.parse(result.metadata || "{}");
+                                                                            return meta.content || result.metadata;
+                                                                        } catch {
+                                                                            return result.metadata;
+                                                                        }
+                                                                    }
+                                                                    if (result.entity_type === "clipboard" && result.metadata) {
+                                                                        try {
+                                                                            const meta = JSON.parse(result.metadata);
+                                                                            return (meta.content || "").substring(0, 150);
+                                                                        } catch {
+                                                                            return result.metadata.substring(0, 150);
+                                                                        }
+                                                                    }
+                                                                    return result.metadata;
+                                                                })()}
+                                                            </span>
+                                                        )}
+                                                    </div>
+                                                </Button>
+                                            ))
                                         )}
                                     </div>
                                 </div>
+                            ) : view === "skills" ? (
+                                null
 
-                                {/* Search Mode Selector */}
-                                <div className="flex bg-dc-bg-secondary/50 rounded-lg p-0.5 border border-dc-border mx-1">
-                                    {(["Hybrid", "Semantic", "Keyword"] as const).map((mode) => (
-                                        <button
-                                            key={mode}
-                                            onClick={() => setSearchMode(mode)}
-                                            className={`flex-1 py-1 text-[10px] font-bold uppercase tracking-tight rounded-md transition-all ${searchMode === mode
-                                                ? "bg-dc-accent text-white shadow-sm"
-                                                : "text-dc-text-muted hover:text-dc-text hover:bg-dc-bg-hover"
-                                                }`}
-                                        >
-                                            {mode}
-                                        </button>
-                                    ))}
+                            ) : view === "logs" ? (
+                                <KmsLogViewer />
+                            ) : (
+                                <div className="p-4 flex flex-col items-center justify-center py-20 opacity-30 text-center">
+                                    <Star size={32} className="mb-4" />
+                                    <span className="text-xs">Favorites placeholder</span>
                                 </div>
+                            )}
+                        </div>
+                    </div >
 
-                                <div className="space-y-1 pb-10">
-                                    {searchLoading ? (
-                                        <div className="flex flex-col items-center justify-center py-12 gap-3 opacity-50">
-                                            <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-dc-accent" />
-                                            <span className="text-[10px] uppercase font-bold tracking-[0.2em] text-dc-accent">Thinking...</span>
-                                            <Button variant="ghost" size="sm" onClick={cancelSearch} className="mt-2 text-xs border border-dc-border hover:bg-dc-bg-hover">
-                                                Cancel Search
-                                            </Button>
-                                        </div>
-                                    ) : searchResults.length === 0 && searchQuery ? (
-                                        <div className="text-center py-12 px-6">
-                                            <div className="w-10 h-10 bg-dc-bg-hover rounded-full flex items-center justify-center mx-auto mb-3 opacity-50">
-                                                <Search size={16} />
-                                            </div>
-                                            <p className="text-[10px] text-dc-text-muted italic leading-relaxed">We couldn't find any direct or semantic matches for your query.</p>
-                                        </div>
-                                    ) : (
-                                        searchResults.map((result, idx) => (
-                                            <Button
-                                                key={`${result.entity_id}-${idx}`}
-                                                variant="ghost"
-                                                size="sm"
-                                                className="w-full justify-start gap-2 py-3 px-3 h-auto hover:bg-dc-bg-hover group border border-transparent hover:border-dc-accent/20 rounded-xl transition-all mb-1"
-                                                onClick={() => handleNavigateToResult(result)}
-                                            >
-                                                <div className="flex flex-col items-start text-left w-full gap-1">
-                                                    <div className="flex items-center justify-between w-full">
-                                                        <div className="flex items-center gap-1.5 overflow-hidden flex-1 mr-2">
-                                                            <span className="text-[9px] font-bold text-dc-accent uppercase tracking-tighter opacity-80 whitespace-nowrap">
-                                                                {result.entity_type === "clipboard" ? `CLIPBOARD (${result.modality})` : result.entity_type}
-                                                            </span>
-                                                            {result.modality === "image" && <div className="p-0.5 bg-dc-accent/10 rounded text-dc-accent"><Book size={10} strokeWidth={3} /></div>}
-                                                            {result.modality === "text" && result.entity_type === "clipboard" && <div className="p-0.5 bg-dc-accent/5 rounded text-dc-accent/60"><FileText size={10} strokeWidth={3} /></div>}
-                                                        </div>
-                                                        <span className="text-[8px] opacity-40 font-mono italic shrink-0">{Math.round((1 - result.distance) * 100)}% Match</span>
-                                                    </div>
-
-                                                    <span className="text-sm font-medium truncate group-hover:text-dc-accent transition-colors">
-                                                        {result.entity_type === "note"
-                                                            ? result.entity_id.split(/[\\/]/).pop()?.replace(".md", "")
-                                                            : result.entity_type === "snippet"
-                                                                ? `Snippet: ${result.entity_id}`
-                                                                : (() => {
-                                                                    if (result.entity_type === "clipboard") {
-                                                                        try {
-                                                                            const meta = JSON.parse(result.metadata || "{}");
-                                                                            return meta.process_name || `Clipboard ${result.entity_id}`;
-                                                                        } catch {
-                                                                            return `Clipboard ${result.entity_id}`;
-                                                                        }
-                                                                    }
-                                                                    return result.entity_id;
-                                                                })()
-                                                        }
-                                                    </span>
-
-                                                    {(result.snippet || result.metadata) && (
-                                                        <span className="text-[10px] text-dc-text-muted mt-1 leading-normal line-clamp-3 opacity-70 group-hover:opacity-100 transition-opacity">
-                                                            {result.snippet || (() => {
-                                                                if (result.entity_type === "snippet") {
-                                                                    try {
-                                                                        const meta = JSON.parse(result.metadata || "{}");
-                                                                        return meta.content || result.metadata;
-                                                                    } catch {
-                                                                        return result.metadata;
-                                                                    }
-                                                                }
-                                                                if (result.entity_type === "clipboard" && result.metadata) {
-                                                                    try {
-                                                                        const meta = JSON.parse(result.metadata);
-                                                                        return (meta.content || "").substring(0, 150);
-                                                                    } catch {
-                                                                        return result.metadata.substring(0, 150);
-                                                                    }
-                                                                }
-                                                                return result.metadata;
-                                                            })()}
-                                                        </span>
-                                                    )}
-                                                </div>
-                                            </Button>
-                                        ))
-                                    )}
+                    <div className="p-4 border-t border-dc-border bg-dc-bg-secondary/50 space-y-2">
+                        <div className="flex flex-col gap-1">
+                            <Button
+                                variant="ghost"
+                                size="sm"
+                                className="w-full justify-start gap-2 h-9 px-2 text-dc-text-muted hover:text-dc-text"
+                                onClick={() => setIsSettingsOpen(true)}
+                            >
+                                <Settings size={16} className="text-dc-text-muted" />
+                                <span className="text-sm">Vault Settings</span>
+                            </Button>
+                            <Button
+                                variant="ghost"
+                                size="sm"
+                                className="w-full justify-start gap-2 h-7 px-2 text-[10px] text-dc-accent hover:text-dc-accent hover:bg-dc-accent/10"
+                                onClick={handleRepairDatabase}
+                            >
+                                <AlertCircle size={12} />
+                                <span>Repair KMS Index</span>
+                            </Button>
+                        </div>
+                        <div className="px-2 pb-1 flex items-center justify-between text-[10px] text-dc-text-muted opacity-50">
+                            <span className="truncate flex-1" title={vaultPath || ""}>{vaultPath}</span>
+                            {syncStatus !== "Idle" && (
+                                <div className="flex items-center gap-1.5 text-dc-accent animate-pulse">
+                                    <RefreshCw size={10} className="animate-spin" />
+                                    <span>{syncStatus}</span>
                                 </div>
-                            </div>
-                        ) : view === "skills" ? (
-                            null
-
-                        ) : view === "logs" ? (
-                            <KmsLogViewer />
-                        ) : (
-                            <div className="p-4 flex flex-col items-center justify-center py-20 opacity-30 text-center">
-                                <Star size={32} className="mb-4" />
-                                <span className="text-xs">Favorites placeholder</span>
-                            </div>
-                        )}
+                            )}
+                        </div>
                     </div>
-                </div >
 
-                <div className="p-4 border-t border-dc-border bg-dc-bg-secondary/50 space-y-2">
-                    <div className="flex flex-col gap-1">
-                        <Button
-                            variant="ghost"
-                            size="sm"
-                            className="w-full justify-start gap-2 h-9 px-2 text-dc-text-muted hover:text-dc-text"
-                            onClick={() => setIsSettingsOpen(true)}
-                        >
-                            <Settings size={16} className="text-dc-text-muted" />
-                            <span className="text-sm">Vault Settings</span>
-                        </Button>
-                        <Button
-                            variant="ghost"
-                            size="sm"
-                            className="w-full justify-start gap-2 h-7 px-2 text-[10px] text-dc-accent hover:text-dc-accent hover:bg-dc-accent/10"
-                            onClick={handleRepairDatabase}
-                        >
-                            <AlertCircle size={12} />
-                            <span>Repair KMS Index</span>
-                        </Button>
-                    </div>
-                    <div className="px-2 pb-1 flex items-center justify-between text-[10px] text-dc-text-muted opacity-50">
-                        <span className="truncate flex-1" title={vaultPath || ""}>{vaultPath}</span>
-                        {syncStatus !== "Idle" && (
-                            <div className="flex items-center gap-1.5 text-dc-accent animate-pulse">
-                                <RefreshCw size={10} className="animate-spin" />
-                                <span>{syncStatus}</span>
-                            </div>
-                        )}
-                    </div>
-                </div>
-
-                {/* Resize Handle */}
-                <div
-                    className={`absolute top-0 right-0 w-1 h-full cursor-col-resize transition-colors z-50 ${isResizing ? "bg-dc-accent" : "hover:bg-dc-accent/30"}`}
-                    onMouseDown={(e) => {
-                        e.preventDefault();
-                        setIsResizing(true);
-                    }}
-                />
-            </aside >
+                    {/* Resize Handle */}
+                    <div
+                        className={`absolute top-0 right-0 w-1 h-full cursor-col-resize transition-colors z-50 ${isResizing ? "bg-dc-accent" : "hover:bg-dc-accent/30"}`}
+                        onMouseDown={(e) => {
+                            e.preventDefault();
+                            setIsResizing(true);
+                        }}
+                    />
+                </aside >
+            )}
 
             {/* Main Content Area */}
             < main className="flex-1 flex flex-col bg-dc-bg relative" >
-                {/* Theme Toggle Overlay */}
-                < div className="absolute top-4 right-4 z-50" >
-                    <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-9 w-9 p-0 bg-dc-bg-secondary/50 backdrop-blur-md border border-dc-border shadow-sm hover:bg-dc-bg-hover"
-                        onClick={toggleTheme}
-                        title={`Switch to ${currentTheme === "dark" ? "light" : "dark"} mode`}
-                    >
-                        {currentTheme === "dark" ? (
-                            <Sun size={18} className="text-amber-400" />
-                        ) : (
-                            <Moon size={18} className="text-slate-700" />
-                        )}
-                    </Button>
-                </div >
 
                 {view === "skills" ? (
                     <div className="flex-1 h-full overflow-hidden">
@@ -893,18 +905,49 @@ export default function KmsApp() {
                         />
                     </div>
                 ) : activeNote ? (
-                    <KmsEditor
-                        path={activeNote.path}
-                        initialContent={activeContent}
-                        onSave={handleSaveNote}
-                        onDelete={handleDeleteNote}
-                        onRename={(newName) => handleRenameNote(newName).then(() => { })}
-                        onSelectNote={(path) => {
-                            const note = notes.find(n => n.path === path);
-                            if (note) handleSelectNote(note);
-                        }}
-                        onOpenSkillEditor={() => handleOpenSkillEditor(activeNote.path)}
-                    />
+                    <div className="flex-1 flex overflow-hidden">
+                        <KmsEditor
+                            path={activeNote.path}
+                            initialContent={activeContent}
+                            onSave={handleSaveNote}
+                            onDelete={handleDeleteNote}
+                            onRename={(newName) => handleRenameNote(newName).then(() => { })}
+                            onSelectNote={(path: string) => {
+                                const note = notes.find(n => n.path === path);
+                                if (note) handleSelectNote(note);
+                            }}
+                            onOpenSkillEditor={() => handleOpenSkillEditor(activeNote.path)}
+                            isZenMode={isZenMode}
+                            onToggleZenMode={toggleZenMode}
+                            onToggleHistory={() => setIsHistoryOpen(!isHistoryOpen)}
+                            isHistoryOpen={isHistoryOpen}
+                            onToggleTheme={toggleTheme}
+                            currentTheme={currentTheme}
+                            vaultPath={vaultPath}
+                        />
+                        <AnimatePresence>
+                            {isHistoryOpen && (
+                                <motion.aside
+                                    initial={{ width: 0, opacity: 0 }}
+                                    animate={{ width: 320, opacity: 1 }}
+                                    exit={{ width: 0, opacity: 0 }}
+                                    transition={{ duration: 0.2, ease: "easeOut" }}
+                                    className="border-l border-dc-border h-full bg-dc-bg-secondary/30 backdrop-blur-sm shadow-2xl z-20"
+                                >
+                                    <KmsHistoryBrowser
+                                        relPath={activeNote.path}
+                                        onRestore={() => {
+                                            handleSelectNote(activeNote);
+                                            toast({
+                                                title: "Version Restored",
+                                                description: "The selected version has been restored and loaded.",
+                                            });
+                                        }}
+                                    />
+                                </motion.aside>
+                            )}
+                        </AnimatePresence>
+                    </div>
                 ) : (
                     <div className="flex-1 flex flex-col items-center justify-center p-8">
                         <div className="max-w-md w-full text-center space-y-4">

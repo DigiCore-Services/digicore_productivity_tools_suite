@@ -17,8 +17,9 @@ use crate::{
     ScriptingSignerRegistryDto, CopyToClipboardConfigDto, CopyToClipboardStatsDto,
     ScriptingPyConfigDto, SettingsBundlePreviewDto, SettingsImportResultDto, SnippetLogicTestResultDto,
     UiPrefsDto,
-
 };
+use crate::kms_git_service::{KmsGitService, KmsVersion};
+
 use digicore_core::domain::Snippet;
 use digicore_text_expander::adapters::storage::JsonFileStorageAdapter;
 use digicore_text_expander::application::clipboard_history::{self, ClipboardHistoryConfig};
@@ -1311,7 +1312,7 @@ pub struct RichTextDto {
 
 // Export to frontend src/ (outside src-tauri) to avoid watcher rebuild loop
 
-#[taurpc::procedures]
+#[taurpc::procedures(export_to = "../src/bindings_new.ts")]
 
 
 pub trait Api {
@@ -1470,6 +1471,10 @@ pub trait Api {
     async fn kms_clear_logs() -> Result<(), String>;
     async fn kms_get_vault_structure() -> Result<KmsFileSystemItemDto, String>;
 
+    // --- KMS Versioning ---
+    async fn kms_get_history(rel_path: String) -> Result<Vec<KmsVersion>, String>;
+    async fn kms_restore_version(hash: String, rel_path: String) -> Result<(), String>;
+
     // --- Skill Hub ---
     async fn kms_list_skills() -> Result<Vec<SkillDto>, String>;
     async fn kms_get_skill(name: String) -> Result<Option<SkillDto>, String>;
@@ -1559,7 +1564,7 @@ pub struct ScriptLogEntryDto {
     pub timestamp: String,
     pub script_type: String,
     pub message: String,
-    pub duration_ms: u64,
+    pub duration_ms: f64,
     pub code_len: u32,
     pub is_error: bool,
 }
@@ -1882,7 +1887,7 @@ impl Api for ApiImpl {
                 timestamp: e.timestamp,
                 script_type: e.script_type,
                 message: e.message,
-                duration_ms: e.duration_ms as u64,
+                duration_ms: e.duration_ms as f64,
                 code_len: e.code_len as u32,
                 is_error: e.is_error,
             })
@@ -2007,7 +2012,7 @@ impl Api for ApiImpl {
 
         if let Some(old) = old_trigger {
             if old != new_trigger {
-                let _ = crate::kms_repository::delete_embedding("text", "snippet", &old);
+                let _ = crate::kms_repository::delete_embeddings_for_entity("snippet", &old);
                 let _ = crate::kms_repository::update_index_status("snippets", &old, "deleted", None);
             }
         }
@@ -2043,8 +2048,11 @@ impl Api for ApiImpl {
         }
 
         if let Some(t) = trigger {
-            let _ = crate::kms_repository::delete_embedding("text", "snippet", &t);
-            let _ = crate::kms_repository::update_index_status("snippets", &t, "deleted", None);
+            let triggers = vec![t]; // Wrap the single trigger in a Vec for iteration
+            for t in triggers {
+                let _ = crate::kms_repository::delete_embeddings_for_entity("snippet", &t);
+                let _ = crate::kms_repository::update_index_status("snippets", &t, "deleted", None);
+            }
         }
 
         let _ = crate::api::get_app(&self.app_handle).emit("ghost-follower-update", ());
@@ -4777,7 +4785,7 @@ end
         }
 
         // Initialize DB if needed
-        kms_repository::init_database()?;
+        kms_repository::init_database().map_err(|e| e.to_string())?;
         
         // Background sync
         let app_clone = app.clone();
@@ -4804,7 +4812,7 @@ end
         }
 
         // Ensure repository is initialized
-        kms_repository::init_database()?;
+        kms_repository::init_database().map_err(|e| e.to_string())?;
 
         // Background sync to avoid blocking app initialization
         let app_clone = app.clone();
@@ -4825,7 +4833,7 @@ end
     async fn kms_get_note_links(self, path: String) -> Result<KmsLinksDto, String> {
         let path_buf = PathBuf::from(&path);
         let rel_path = self.get_relative_path(&path_buf)?;
-        let (outgoing_rows, incoming_rows) = kms_repository::get_links_for_note(&rel_path)?;
+        let (outgoing_rows, incoming_rows) = kms_repository::get_links_for_note(&rel_path).map_err(|e| e.to_string())?;
 
         let map_to_dto = |r: kms_repository::KmsNoteRow| {
             let abs_path = self.resolve_absolute_path(&r.path).to_string_lossy().to_string();
@@ -4845,9 +4853,25 @@ end
             incoming: incoming_rows.into_iter().map(map_to_dto).collect(),
         })
     }
+ 
+    async fn kms_get_history(self, rel_path: String) -> Result<Vec<KmsVersion>, String> {
+        KmsGitService::get_history(&rel_path).map_err(|e| e.to_string())
+    }
+ 
+    async fn kms_restore_version(self, hash: String, rel_path: String) -> Result<(), String> {
+        let app = get_app(&self.app_handle);
+        KmsGitService::restore_version(&hash, &rel_path).map_err(|e| e.to_string())?;
+        
+        // After restoration, trigger a sync to update DB and UI
+        let abs_path = self.resolve_absolute_path(&rel_path);
+        let _ = sync_single_note_to_db_internal(&app, &abs_path).await;
+        let _ = app.emit("kms-sync-complete", ());
+        
+        Ok(())
+    }
 
     async fn kms_list_notes(self) -> Result<Vec<KmsNoteDto>, String> {
-        let rows = kms_repository::list_notes()?;
+        let rows = kms_repository::list_notes().map_err(|e| e.to_string())?;
         Ok(rows
             .into_iter()
             .map(|r| {
@@ -4885,8 +4909,9 @@ end
         let title = path_buf.file_stem()
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| "Untitled".to_string());
-
-        sync_note_index_internal(&rel_path, &title, &content).await?;
+        
+        // Use repo directly if service doesn't handle indexing yet
+        kms_repository::upsert_unified_fts("note", &rel_path, &title, &content).map_err(|e| e.to_string())?;
 
         // Background sync to ensure all backlinks/links are updated across the vault
         let vault = self.get_vault_path();
@@ -4929,7 +4954,7 @@ end
         
         let rel_path = self.get_relative_path(&abs_path)?;
         
-        kms_repository::delete_folder_recursive(&rel_path)?;
+        kms_repository::delete_folder_recursive(&rel_path).map_err(|e| e.to_string())?;
         std::fs::remove_dir_all(&abs_path).map_err(|e| format!("Failed to delete folder: {e}"))?;
         
         Ok(())
@@ -4943,7 +4968,7 @@ end
     }
 
     async fn kms_get_logs(self, limit: u32) -> Result<Vec<KmsLogDto>, String> {
-        let logs = kms_repository::list_logs(limit)?;
+        let logs = kms_repository::list_logs(limit).map_err(|e| e.to_string())?;
         Ok(logs.into_iter().map(|l| KmsLogDto {
             id: l.id,
             level: l.level,
@@ -4954,7 +4979,7 @@ end
     }
 
     async fn kms_clear_logs(self) -> Result<(), String> {
-        kms_repository::clear_logs()
+        kms_repository::clear_logs().map_err(|e| e.to_string())
     }
 
     async fn kms_create_folder(self, path: String) -> Result<(), String> {
@@ -4972,7 +4997,7 @@ end
             return Err("Vault not initialized".to_string());
         }
 
-        let db_notes = kms_repository::list_notes()?;
+        let db_notes = kms_repository::list_notes().map_err(|e| e.to_string())?;
         let mut note_map: HashMap<String, KmsNoteDto> = db_notes
             .into_iter()
             .map(|r| {
@@ -5068,7 +5093,7 @@ end
             let vector = embedding_service::generate_text_embedding(&query, None)
                 .map_err(|e| format!("Embedding error: {e}"))?;
 
-            let results = kms_repository::search_hybrid(&query, &modality, vector, &search_mode, limit)?;
+            let results = kms_repository::search_hybrid(&query, &modality, vector, &search_mode, limit).map_err(|e| e.to_string())?;
             
             Ok(results
                 .into_iter()
@@ -5140,7 +5165,7 @@ end
         let categories = ["notes", "snippets", "clipboard"];
         
         for cat in categories {
-            let (indexed, failed, total) = match kms_repository::get_category_counts(cat) {
+            let (indexed, failed, total) = match kms_repository::get_category_counts(cat).map_err(|e| e.to_string()) {
                 Ok(counts) => counts,
                 Err(e) => {
                     log::warn!("[Api] Failed to get counts for category '{}': {}. Returning zeros.", cat, e);
@@ -5169,7 +5194,7 @@ end
     }
 
     async fn kms_get_indexing_details(self, provider_id: String) -> Result<Vec<KmsIndexStatusRow>, String> {
-        let rows = kms_repository::get_detailed_status(&provider_id)?;
+        let rows = kms_repository::get_detailed_status(&provider_id).map_err(|e| e.to_string())?;
         Ok(rows.into_iter().map(|r| KmsIndexStatusRow {
             entity_type: r.entity_type,
             entity_id: r.entity_id,
@@ -5191,7 +5216,7 @@ end
         let app = get_app(&self.app_handle);
         let service = app.state::<Arc<indexing_service::KmsIndexingService>>();
         
-        let failures = kms_repository::get_detailed_status(&provider_id)?;
+        let failures = kms_repository::get_detailed_status(&provider_id).map_err(|e| e.to_string())?;
         for fail in failures {
             let _ = service.index_single_item(&app, &provider_id, &fail.entity_id).await;
         }
@@ -5199,7 +5224,7 @@ end
     }
 
     async fn kms_repair_database(self) -> Result<(), String> {
-        kms_repository::repair_database()?;
+        kms_repository::repair_database().map_err(|e| e.to_string())?;
         Ok(())
     }
 
@@ -5607,7 +5632,7 @@ pub(crate) async fn sync_note_index_internal(rel_path_raw: &str, title: &str, co
     
     KmsDiagnosticService::debug(&format!("Indexing note: {}", rel_path), None);
     
-    kms_repository::upsert_note(rel_path, title, &preview, "indexed", None)?;
+    kms_repository::upsert_note(rel_path, title, &preview, "indexed", None).map_err(|e| e.to_string())?;
 
     // Link Extraction & Resolution
     let _ = kms_repository::delete_links_for_source(rel_path);
@@ -5683,7 +5708,7 @@ pub(crate) async fn sync_note_index_internal(rel_path_raw: &str, title: &str, co
     let rel_path_clone = rel_path.to_string();
     tokio::task::spawn_blocking(move || {
         if let Ok(vector) = embedding_service::generate_text_embedding(&content_to_embed, None) {
-            let _ = kms_repository::upsert_embedding("text", "note", &rel_path_clone, vector, None);
+            let _ = kms_repository::upsert_embedding("text", "note", &rel_path_clone, &vector, None);
         }
     });
     
@@ -5725,7 +5750,7 @@ pub(crate) async fn sync_vault_files_to_db_internal(_app: &tauri::AppHandle, vau
     }
 
     // 1. Get current DB state
-    let db_notes = kms_repository::list_notes()?;
+    let db_notes = kms_repository::list_notes().map_err(|e| e.to_string())?;
     let mut db_paths: HashMap<String, (String, String, Option<String>)> = db_notes.into_iter()
         .map(|n| (n.path, (n.title, n.sync_status, n.last_modified))).collect();
 
@@ -5815,7 +5840,7 @@ pub(crate) async fn sync_vault_files_to_db_internal(_app: &tauri::AppHandle, vau
 
 /// Synchronizes a single note file to the database.
 pub(crate) async fn sync_single_note_to_db_internal(_app: &tauri::AppHandle, abs_path: &Path) -> Result<(), String> {
-    let vault_path = kms_repository::get_vault_path()?;
+    let vault_path = kms_repository::get_vault_path().map_err(|e| e.to_string())?;
     let rel_path = abs_path
         .strip_prefix(&vault_path)
         .map(|p| p.to_string_lossy().replace('\\', "/"))
@@ -5836,7 +5861,7 @@ pub(crate) async fn sync_single_note_to_db_internal(_app: &tauri::AppHandle, abs
         }
         Err(e) => {
             log::warn!("[KMS][Sync] Failed to read {}: {}. Marking as failed.", rel_path, e);
-            kms_repository::upsert_note(&rel_path, &current_title, "", "failed", Some(&e.to_string()))?;
+            let _ = kms_repository::upsert_note(&rel_path, &current_title, "", "failed", Some(&e.to_string()));
             Err(e.to_string())
         }
     }
