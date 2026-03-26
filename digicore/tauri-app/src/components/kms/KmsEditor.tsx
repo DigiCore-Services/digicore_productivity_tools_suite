@@ -4,10 +4,15 @@ import StarterKit from "@tiptap/starter-kit";
 import { Markdown } from "tiptap-markdown";
 import CodeMirror from "@uiw/react-codemirror";
 import { markdown } from "@codemirror/lang-markdown";
+import { Image } from "@tiptap/extension-image";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import { MermaidExtension } from "./MermaidExtension";
+import { MathExtension } from "./MathExtension";
+import { AdmonitionExtension } from "./AdmonitionExtension";
 import { FrontmatterExtension } from "./FrontmatterExtension";
 import { Button } from "../ui/button";
-import { Eye, Code, Save, Trash2, Sparkles, ChevronRight, ChevronLeft, FileText, ExternalLink, Link2 } from "lucide-react";
+import { Eye, Code, Save, Trash2, Sparkles, ChevronRight, ChevronLeft, FileText, ExternalLink, Link2, Sun, Moon, Maximize2, Minimize2, History } from "lucide-react";
+import { WikiLinkExtension } from "./WikiLinkExtension";
 import { getTaurpc } from "../../lib/taurpc";
 import { KmsNoteDto, SearchResultDto, KmsLinksDto } from "../../bindings";
 import { Tooltip } from "../ui/tooltip";
@@ -21,9 +26,16 @@ interface KmsEditorProps {
     onRename?: (newName: string) => Promise<void>;
     onSelectNote?: (path: string) => void;
     onOpenSkillEditor?: () => void;
+    isZenMode?: boolean;
+    onToggleZenMode?: () => void;
+    onToggleTheme?: () => void;
+    onToggleHistory?: () => void;
+    isHistoryOpen?: boolean;
+    currentTheme?: "light" | "dark";
+    vaultPath?: string | null;
 }
 
-export default function KmsEditor({ path, initialContent, onSave, onDelete, onRename, onSelectNote, onOpenSkillEditor }: KmsEditorProps) {
+export default function KmsEditor({ path, initialContent, onSave, onDelete, onRename, onSelectNote, onOpenSkillEditor, isZenMode, onToggleZenMode, onToggleHistory, isHistoryOpen, onToggleTheme, currentTheme, vaultPath }: KmsEditorProps) {
     const [mode, setMode] = useState<"wysiwyg" | "source">("wysiwyg");
     const [content, setContent] = useState(initialContent);
     const [isDirty, setIsDirty] = useState(false);
@@ -46,6 +58,25 @@ export default function KmsEditor({ path, initialContent, onSave, onDelete, onRe
             }),
             FrontmatterExtension,
             MermaidExtension,
+            MathExtension,
+            AdmonitionExtension,
+            WikiLinkExtension.configure({
+                onLinkClick: (target) => {
+                    if (onSelectNote) {
+                        onSelectNote(target);
+                    }
+                },
+            }),
+            Image.configure({
+                allowBase64: true,
+                HTMLAttributes: {
+                    class: "rounded-xl border border-dc-border shadow-lg max-w-full h-auto my-4 mx-auto block",
+                },
+            }).configure({
+                HTMLAttributes: {
+                    "data-type": "vault-image",
+                },
+            }),
             Markdown.configure({
                 html: true,
                 tightLists: true,
@@ -59,8 +90,13 @@ export default function KmsEditor({ path, initialContent, onSave, onDelete, onRe
         },
         onUpdate: ({ editor }) => {
             const md = (editor.storage as any).markdown.getMarkdown();
-            // Post-process: convert the wrapped frontmatter back to standard --- format
-            const finalMd = unwrapFrontmatter(md);
+            // Post-process: convert the wrapped nodes back to standard Markdown format
+            let finalMd = unwrapFrontmatter(md);
+            finalMd = unwrapMath(finalMd);
+            finalMd = unwrapAdmonitions(finalMd);
+            finalMd = unwrapWikiLinks(finalMd);
+            finalMd = unwrapImages(finalMd);
+
             setContent(finalMd);
             setIsDirty(true);
         },
@@ -68,8 +104,13 @@ export default function KmsEditor({ path, initialContent, onSave, onDelete, onRe
 
     useEffect(() => {
         if (editor && initialContent !== content) {
-            // Pre-process: detect frontmatter and wrap it for the FrontmatterExtension
-            const processed = wrapFrontmatter(initialContent);
+            // Pre-process: detect specialized blocks and wrap them for Tiptap extensions
+            let processed = wrapFrontmatter(initialContent);
+            processed = wrapMath(processed);
+            processed = wrapAdmonitions(processed);
+            processed = wrapWikiLinks(processed);
+            processed = wrapImages(processed, vaultPath);
+
             editor.commands.setContent(processed);
             setContent(initialContent);
             setIsDirty(false);
@@ -153,7 +194,10 @@ export default function KmsEditor({ path, initialContent, onSave, onDelete, onRe
     return (
         <div className="flex flex-col h-full overflow-hidden bg-dc-bg">
             {/* Editor Toolbar */}
-            <header className="flex items-center justify-between px-6 py-3 border-b border-dc-border bg-dc-bg-secondary/30 backdrop-blur-sm">
+            <header className={cn(
+                "flex items-center justify-between px-6 py-3 border-b border-dc-border bg-dc-bg-secondary/30 backdrop-blur-sm transition-all",
+                isZenMode && "opacity-20 hover:opacity-100 border-transparent bg-transparent"
+            )}>
                 <div className="flex items-center gap-4">
                     <div className="flex items-center gap-2 bg-dc-bg-hover p-1 rounded-lg border border-dc-border">
                         <Button
@@ -205,7 +249,8 @@ export default function KmsEditor({ path, initialContent, onSave, onDelete, onRe
                     )}
                 </div>
 
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-4">
+
                     <div className="flex items-center gap-1 border-r border-dc-border pr-3 mr-1">
                         <Tooltip content="Delete Note">
                             <Button
@@ -246,8 +291,62 @@ export default function KmsEditor({ path, initialContent, onSave, onDelete, onRe
                         disabled={!isDirty || saving}
                     >
                         <Save size={14} className={saving ? "animate-pulse" : ""} />
-                        {saving ? "Saving..." : isDirty ? "Save Changes" : "Saved"}
+                        {saving ? "Saving..." : isDirty ? "Save Changes" : isZenMode ? "" : "Saved"}
                     </Button>
+
+                    <div className="flex items-center gap-2 border-l border-dc-border pl-4 ml-2">
+
+                        {onToggleTheme && !isZenMode && (
+                            <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-8 w-8 p-0 text-dc-text-muted hover:bg-dc-bg-hover"
+                                onClick={onToggleTheme}
+                                title={`Switch to ${currentTheme === "dark" ? "light" : "dark"} mode`}
+                            >
+                                {currentTheme === "dark" ? (
+                                    <Sun size={16} className="text-amber-400" />
+                                ) : (
+                                    <Moon size={16} className="text-slate-400" />
+                                )}
+                            </Button>
+                        )}
+                        {onToggleZenMode && (
+                            <Tooltip content={isZenMode ? "Exit Zen Mode (Alt+Z)" : "Enter Zen Mode (Alt+Z)"}>
+                                <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className={cn(
+                                        "h-8 gap-2 px-3 transition-all border border-transparent self-center",
+                                        isZenMode ? "bg-dc-accent text-white hover:bg-dc-accent/90 border-dc-accent" : "text-dc-text-muted hover:bg-dc-accent/10 hover:text-dc-accent hover:border-dc-accent/30"
+                                    )}
+                                    onClick={onToggleZenMode}
+                                >
+                                    {isZenMode ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+                                    <span className="text-[10px] font-bold uppercase tracking-widest px-1">
+                                        {isZenMode ? "Exit Zen" : "Zen Mode"}
+                                    </span>
+                                </Button>
+
+                            </Tooltip>
+                        )}
+                        {onToggleHistory && !isZenMode && (
+                            <Tooltip content={isHistoryOpen ? "Hide History" : "View Versions"}>
+                                <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className={cn(
+                                        "h-8 w-8 p-0 transition-all border border-transparent",
+                                        isHistoryOpen ? "bg-dc-accent/20 text-dc-accent border-dc-accent/40" : "text-dc-text-muted hover:bg-dc-bg-hover hover:text-dc-accent"
+                                    )}
+                                    onClick={onToggleHistory}
+                                >
+                                    <History size={16} />
+                                </Button>
+                            </Tooltip>
+                        )}
+
+                    </div>
                 </div>
             </header>
 
@@ -390,21 +489,81 @@ export default function KmsEditor({ path, initialContent, onSave, onDelete, onRe
             )}
 
             {/* Bottom Status bar */}
-            <footer className="px-6 py-2 border-t border-dc-border bg-dc-bg-secondary/40 flex justify-between items-center text-[10px] text-dc-text-muted">
-                <div className="flex gap-4">
-                    <span>{content.split(/\s+/).filter(Boolean).length} words</span>
-                    <span>{content.length} characters</span>
-                </div>
-                <div className="flex items-center gap-2">
-                    <div className={cn(
-                        "w-1.5 h-1.5 rounded-full",
-                        isDirty ? "bg-amber-400 animate-pulse" : "bg-emerald-400"
-                    )} />
-                    <span className="opacity-70">{isDirty ? "Draft - Unsaved changes" : "All changes saved locally"}</span>
-                </div>
-            </footer>
+            {!isZenMode && (
+                <footer className="px-6 py-2 border-t border-dc-border bg-dc-bg-secondary/40 flex justify-between items-center text-[10px] text-dc-text-muted">
+                    <div className="flex gap-4">
+                        <span>{content.split(/\s+/).filter(Boolean).length} words</span>
+                        <span>{content.length} characters</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                        <div className={cn(
+                            "w-1.5 h-1.5 rounded-full",
+                            isDirty ? "bg-amber-400 animate-pulse" : "bg-emerald-400"
+                        )} />
+                        <span className="opacity-70">{isDirty ? "Draft - Unsaved changes" : "All changes saved locally"}</span>
+                    </div>
+                </footer>
+            )}
         </div>
     );
+}
+
+// --- Helper Functions for Wiki-link Handling ---
+
+function wrapWikiLinks(md: string): string {
+    if (!md) return md;
+    // Look for [[link]] but NOT inside existing HTML tags or code blocks
+    // Simple version first: replace all [[...]] that are not already in a data-target
+    return md.replace(/\[\[([^\]]+)\]\]/g, (match, target) => {
+        // Basic check to see if we are already inside a span we created
+        // (Though wrap is usually called on fresh markdown)
+        return `<span data-type="wiki-link" data-target="${target}">[[${target}]]</span>`;
+    });
+}
+
+function unwrapWikiLinks(md: string): string {
+    if (!md) return md;
+    return md.replace(/<span\s+[^>]*data-type="wiki-link"[^>]*data-target="([^"]+)"[^>]*>\[\[.*?\]\]<\/span>/g, '[[$1]]');
+}
+
+// --- Helper Functions for Image Handling ---
+
+function wrapImages(md: string, vaultPath: string | null | undefined): string {
+    if (!md) return md;
+    // Look for ![alt](src)
+    return md.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (match, alt, src) => {
+        if (src.startsWith('http') || src.startsWith('data:')) {
+            return match;
+        }
+
+        // It's a local path. If we have a vaultPath, try to resolve it.
+        if (vaultPath) {
+            // Normalize path (handle relative to vault root)
+            let fullPath = src;
+            if (!src.includes(':') && !src.startsWith('/') && !src.startsWith('\\')) {
+                // Assume relative to vault root for now, or we could resolve relative to the current note
+                // For simplicity, let's assume all vault images are relative to vault root
+                fullPath = vaultPath + (vaultPath.endsWith('/') || vaultPath.endsWith('\\') ? '' : '/') + src;
+            } else if (src.startsWith('/') || src.startsWith('\\')) {
+                fullPath = vaultPath + src;
+            }
+
+            try {
+                const assetUrl = convertFileSrc(fullPath);
+                return `<img src="${assetUrl}" alt="${alt}" data-path="${src}" data-type="vault-image" />`;
+            } catch (e) {
+                console.error("Failed to convert image path:", e);
+                return match;
+            }
+        }
+        return match;
+    });
+}
+
+function unwrapImages(md: string): string {
+    if (!md) return md;
+    // Look for our specific img tag with data-path
+    return md.replace(/<img\s+[^>]*data-type="vault-image"[^>]*data-path="([^"]+)"[^>]*alt="([^"]*)"[^>]*\/?>/g, '![$2]($1)');
 }
 
 // --- Helper Functions for Frontmatter Handling ---
@@ -437,6 +596,35 @@ function unwrapFrontmatter(md: string): string {
     // Fallback: if it was converted to Horizontal Rules by standard markdown rendering
     // This is a bit more complex to reverse accurately without a dedicated extension parser
     return md;
+}
+
+function wrapMath(md: string): string {
+    if (!md) return md;
+    // Replace block math $$ ... $$
+    let processed = md.replace(/\$\$([\s\S]+?)\$\$/g, '<div data-type="math" data-display="true">$1</div>');
+    // Replace inline math $ ... $ (avoiding $ in other contexts is tricky but this is a common approach)
+    processed = processed.replace(/\$([^$]+?)\$/g, '<span data-type="math" data-display="false">$1</span>');
+    return processed;
+}
+
+function unwrapMath(md: string): string {
+    if (!md) return md;
+    // Reverse display math
+    let processed = md.replace(/<div data-type="math" data-display="true">([\s\S]+?)<\/div>/g, '$$\n$1\n$$');
+    // Reverse inline math
+    processed = processed.replace(/<span data-type="math" data-display="false">([\s\S]+?)<\/span>/g, '$$$1$$');
+    return processed;
+}
+
+function wrapAdmonitions(md: string): string {
+    if (!md) return md;
+    // Support ::: type ... ::: blocks
+    return md.replace(/:::(\w+)\n?([\s\S]+?)\n?:::/g, '<div data-type="admonition" data-admonition-type="$1">$2</div>');
+}
+
+function unwrapAdmonitions(md: string): string {
+    if (!md) return md;
+    return md.replace(/<div data-type="admonition" data-admonition-type="(\w+)">([\s\S]+?)<\/div>/g, ':::$1\n$2\n:::');
 }
 
 function ResultItem({ result, onSelect }: { result: SearchResultDto, onSelect?: (path: string) => void }) {
