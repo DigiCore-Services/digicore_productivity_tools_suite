@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 use crate::kms_error::{KmsError, KmsResult};
 use crate::kms_repository;
 use crate::kms_diagnostic_service::KmsDiagnosticService;
+use crate::kms_git_service::KmsGitService;
 use tauri::AppHandle;
 use regex::Regex;
 
@@ -63,8 +64,7 @@ impl KmsService {
         let title = new_abs_path.file_stem()
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| "Untitled".to_string());
-        kms_repository::rename_note(&old_rel_path, &new_rel_path, &title)
-            .map_err(KmsError::from)?;
+        kms_repository::rename_note(&old_rel_path, &new_rel_path, &title)?;
 
         // 3. Backlink Refactoring
         let old_title = old_abs_path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
@@ -73,8 +73,7 @@ impl KmsService {
         }
         
         // 4. Update Link Graph paths
-        kms_repository::update_links_on_path_change(&old_rel_path, &new_rel_path)
-            .map_err(KmsError::from)?;
+        kms_repository::update_links_on_path_change(&old_rel_path, &new_rel_path)?;
 
         KmsDiagnosticService::info(
             &format!("Renamed note: {} -> {}", old_rel_path, new_rel_path),
@@ -85,8 +84,7 @@ impl KmsService {
     }
 
     async fn refactor_backlinks(old_rel_path: &str, old_title: &str, new_title: &str) -> KmsResult<()> {
-        let (_, backlinkers) = kms_repository::get_links_for_note(old_rel_path)
-            .map_err(KmsError::from)?;
+        let (_, backlinkers) = kms_repository::get_links_for_note(old_rel_path)?;
             
         let escaped_old = regex::escape(old_title);
         let re_pattern = format!(r"\[\[{}(?:\|([^\]]+))?\]\]", escaped_old);
@@ -144,8 +142,7 @@ impl KmsService {
 
         std::fs::rename(&old_abs_path, &new_abs_path).map_err(KmsError::Io)?;
         
-        kms_repository::rename_folder(&old_rel_path, &new_rel_path)
-            .map_err(KmsError::from)?;
+        kms_repository::rename_folder(&old_rel_path, &new_rel_path)?;
         
         KmsDiagnosticService::info(
             &format!("Renamed folder: {} -> {}", old_rel_path, new_rel_path),
@@ -189,17 +186,14 @@ impl KmsService {
         // If it's a folder, we need recursive rename.
         if item_abs_path.is_dir() {
             std::fs::rename(&item_abs_path, &new_abs_path).map_err(KmsError::Io)?;
-            kms_repository::rename_folder(&old_rel_path, &new_rel_path)
-                .map_err(KmsError::from)?;
+            kms_repository::rename_folder(&old_rel_path, &new_rel_path)?;
         } else {
             std::fs::rename(&item_abs_path, &new_abs_path).map_err(KmsError::Io)?;
             let title = new_abs_path.file_stem()
                 .map(|s| s.to_string_lossy().to_string())
                 .unwrap_or_else(|| "Untitled".to_string());
-            kms_repository::rename_note(&old_rel_path, &new_rel_path, &title)
-                .map_err(KmsError::from)?;
-            kms_repository::update_links_on_path_change(&old_rel_path, &new_rel_path)
-                .map_err(KmsError::from)?;
+            kms_repository::rename_note(&old_rel_path, &new_rel_path, &title)?;
+            kms_repository::update_links_on_path_change(&old_rel_path, &new_rel_path)?;
         }
 
         KmsDiagnosticService::info(
@@ -235,6 +229,9 @@ impl KmsService {
         // This part usually involves calling sync_note_index_internal which is in api.rs
         // We should eventually move that to a service too.
         
+        // 4. Git Auto-commit
+        let _ = KmsGitService::commit_path(&rel_path, &format!("Auto-save: node update {}", rel_path));
+        
         KmsDiagnosticService::debug(&format!("Saved note: {}", rel_path), None);
         Ok(())
     }
@@ -250,7 +247,7 @@ impl KmsService {
             std::fs::remove_file(&path_buf).map_err(KmsError::Io)?;
         }
         
-        kms_repository::delete_note(&rel_path).map_err(KmsError::from)?;
+        kms_repository::delete_note(&rel_path)?;
         
         KmsDiagnosticService::info(&format!("Deleted note: {}", rel_path), None);
         Ok(())

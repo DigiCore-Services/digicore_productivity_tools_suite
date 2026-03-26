@@ -1,6 +1,7 @@
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
+use crate::kms_error::{KmsError, KmsResult};
 use chrono;
 use crate::clipboard_repository;
 use crate::utils::crypto;
@@ -9,10 +10,10 @@ use digicore_text_expander::ports::{storage_keys, StoragePort, skill::SkillRepos
 use digicore_core::domain::entities::skill::{Skill, SkillMetadata, SkillScope};
 use async_trait::async_trait;
 
-pub fn get_vault_path() -> Result<PathBuf, String> {
+pub fn get_vault_path() -> KmsResult<PathBuf> {
     let storage = JsonFileStorageAdapter::load();
     let path_str = storage.get(storage_keys::KMS_VAULT_PATH)
-        .ok_or_else(|| "KMS Vault Path not configured".to_string())?;
+        .ok_or_else(|| KmsError::Config("KMS Vault Path not configured".to_string()))?;
     Ok(PathBuf::from(path_str))
 }
 
@@ -57,14 +58,14 @@ pub struct SearchResult {
     pub metadata: Option<String>,
 }
 
-pub fn init(db_path: PathBuf) -> Result<(), String> {
+pub fn init(db_path: PathBuf) -> KmsResult<()> {
     if DB_CONN.get().is_some() {
         return Ok(());
     }
     unsafe {
         rusqlite::ffi::sqlite3_auto_extension(Some(std::mem::transmute(sqlite_vec::sqlite3_vec_init as *const ())));
     }
-    let conn = Connection::open(&db_path).map_err(|e| e.to_string())?;
+    let conn = Connection::open(&db_path)?;
 
     // Tables are created via migrations in lib.rs, 
     // but we ensure journaling and sync modes here for this connection.
@@ -117,18 +118,30 @@ pub fn init(db_path: PathBuf) -> Result<(), String> {
     Ok(())
 }
 
-pub fn init_database() -> Result<(), String> {
+pub fn init_database() -> KmsResult<()> {
     init(clipboard_repository::default_db_path())
 }
 
-fn conn_guard() -> Result<std::sync::MutexGuard<'static, Connection>, String> {
+fn conn_guard() -> KmsResult<std::sync::MutexGuard<'static, Connection>> {
     let conn = DB_CONN
         .get()
-        .ok_or_else(|| "KMS repository not initialized".to_string())?;
-    conn.lock().map_err(|e| e.to_string())
+        .ok_or_else(|| KmsError::NotInitialized)?;
+    conn.lock().map_err(|e| KmsError::General(e.to_string()))
 }
 
-pub fn upsert_note(path: &str, title: &str, preview: &str, sync_status: &str, error: Option<&str>) -> Result<(), String> {
+/// Executes a closure within a database transaction.
+pub fn transactional<F, T>(f: F) -> KmsResult<T>
+where
+    F: FnOnce(&Transaction) -> KmsResult<T>,
+{
+    let mut conn = conn_guard()?;
+    let tx = conn.transaction()?;
+    let result = f(&tx)?;
+    tx.commit()?;
+    Ok(result)
+}
+
+pub fn upsert_note(path: &str, title: &str, preview: &str, sync_status: &str, error: Option<&str>) -> KmsResult<()> {
     let conn = conn_guard()?;
     let now = chrono::Local::now().to_rfc3339();
     conn.execute(
@@ -148,16 +161,14 @@ pub fn upsert_note(path: &str, title: &str, preview: &str, sync_status: &str, er
             sync_status, 
             error
         ],
-    )
-    .map_err(|e| e.to_string())?;
+    )?;
     Ok(())
 }
 
-pub fn list_notes() -> Result<Vec<KmsNoteRow>, String> {
+pub fn list_notes() -> KmsResult<Vec<KmsNoteRow>> {
     let conn = conn_guard()?;
     let mut stmt = conn
-        .prepare("SELECT id, path, title, content_preview, last_modified, is_favorite, sync_status, last_error FROM kms_notes ORDER BY last_modified DESC")
-        .map_err(|e| e.to_string())?;
+        .prepare("SELECT id, path, title, content_preview, last_modified, is_favorite, sync_status, last_error FROM kms_notes ORDER BY last_modified DESC")?;
     let rows = stmt
         .query_map([], |row| {
             Ok(KmsNoteRow {
@@ -170,17 +181,16 @@ pub fn list_notes() -> Result<Vec<KmsNoteRow>, String> {
                 sync_status: row.get(6)?,
                 last_error: row.get(7)?,
             })
-        })
-        .map_err(|e| e.to_string())?;
+        })?;
 
     let mut notes = Vec::new();
     for note in rows {
-        notes.push(note.map_err(|e| e.to_string())?);
+        notes.push(note?);
     }
     Ok(notes)
 }
 
-pub fn update_index_status(entity_type: &str, entity_id: &str, status: &str, error: Option<&str>) -> Result<(), String> {
+pub fn update_index_status(entity_type: &str, entity_id: &str, status: &str, error: Option<&str>) -> KmsResult<()> {
     let conn = conn_guard()?;
     conn.execute(
         "INSERT INTO kms_index_status (entity_type, entity_id, status, error, updated_at)
@@ -190,17 +200,15 @@ pub fn update_index_status(entity_type: &str, entity_id: &str, status: &str, err
             error = excluded.error,
             updated_at = CURRENT_TIMESTAMP",
         params![entity_type, entity_id, status, error],
-    )
-    .map_err(|e| e.to_string())?;
+    )?;
     Ok(())
 }
 
-pub fn get_detailed_status(category: &str) -> Result<Vec<KmsIndexStatusRow>, String> {
+pub fn get_detailed_status(category: &str) -> KmsResult<Vec<KmsIndexStatusRow>> {
     let conn = conn_guard()?;
     
     if category == "notes" {
-        let mut stmt = conn.prepare("SELECT path, 'notes', sync_status, last_error, last_modified FROM kms_notes WHERE sync_status = 'failed'")
-            .map_err(|e| e.to_string())?;
+        let mut stmt = conn.prepare("SELECT path, 'notes', sync_status, last_error, last_modified FROM kms_notes WHERE sync_status = 'failed'")?;
         let rows = stmt.query_map([], |row| {
             Ok(KmsIndexStatusRow {
                 entity_id: row.get(0)?,
@@ -209,17 +217,16 @@ pub fn get_detailed_status(category: &str) -> Result<Vec<KmsIndexStatusRow>, Str
                 error: row.get(3)?,
                 updated_at: row.get::<_, Option<String>>(4)?.unwrap_or_default(),
             })
-        }).map_err(|e| e.to_string())?;
+        })?;
         
         let mut results = Vec::new();
         for r in rows {
-            results.push(r.map_err(|e| e.to_string())?);
+            results.push(r?);
         }
         return Ok(results);
     }
 
-    let mut stmt = conn.prepare("SELECT entity_id, entity_type, status, error, updated_at FROM kms_index_status WHERE entity_type = ?1")
-        .map_err(|e| e.to_string())?;
+    let mut stmt = conn.prepare("SELECT entity_id, entity_type, status, error, updated_at FROM kms_index_status WHERE entity_type = ?1")?;
     let rows = stmt.query_map(params![category], |row| {
         Ok(KmsIndexStatusRow {
             entity_id: row.get(0)?,
@@ -228,54 +235,53 @@ pub fn get_detailed_status(category: &str) -> Result<Vec<KmsIndexStatusRow>, Str
             error: row.get(3)?,
             updated_at: row.get(4)?,
         })
-    }).map_err(|e| e.to_string())?;
+    })?;
 
     let mut results = Vec::new();
     for r in rows {
-        results.push(r.map_err(|e| e.to_string())?);
+        results.push(r?);
     }
     Ok(results)
 }
 
-pub fn get_category_counts(category: &str) -> Result<(u32, u32, u32), String> {
+pub fn get_category_counts(category: &str) -> KmsResult<(u32, u32, u32)> {
     let conn = conn_guard()?;
     
     if category == "notes" {
-        let total: u32 = conn.query_row("SELECT COUNT(*) FROM kms_notes", [], |r| r.get(0)).map_err(|e| e.to_string())?;
-        let indexed: u32 = conn.query_row("SELECT COUNT(*) FROM kms_notes WHERE sync_status = 'indexed'", [], |r| r.get(0)).map_err(|e| e.to_string())?;
-        let failed: u32 = conn.query_row("SELECT COUNT(*) FROM kms_notes WHERE sync_status = 'failed'", [], |r| r.get(0)).map_err(|e| e.to_string())?;
+        let total: u32 = conn.query_row("SELECT COUNT(*) FROM kms_notes", [], |r| r.get(0))?;
+        let indexed: u32 = conn.query_row("SELECT COUNT(*) FROM kms_notes WHERE sync_status = 'indexed'", [], |r| r.get(0))?;
+        let failed: u32 = conn.query_row("SELECT COUNT(*) FROM kms_notes WHERE sync_status = 'failed'", [], |r| r.get(0))?;
         return Ok((indexed, failed, total));
     }
     
     // For snippets/clipboard, we need to know the total baseline.
     // For now, let's use the counts from the source tables.
     let total: u32 = if category == "snippets" {
-        conn.query_row("SELECT COUNT(*) FROM snippets", [], |r| r.get(0)).map_err(|e| e.to_string())?
+        conn.query_row("SELECT COUNT(*) FROM snippets", [], |r| r.get(0))?
     } else if category == "clipboard" {
-        conn.query_row("SELECT COUNT(*) FROM clipboard_history", [], |r| r.get(0)).map_err(|e| e.to_string())?
+        conn.query_row("SELECT COUNT(*) FROM clipboard_history", [], |r| r.get(0))?
     } else {
         0
     };
     
-    let indexed: u32 = conn.query_row("SELECT COUNT(*) FROM kms_index_status WHERE entity_type = ?1 AND status = 'indexed'", params![category], |r| r.get(0)).map_err(|e| e.to_string())?;
-    let failed: u32 = conn.query_row("SELECT COUNT(*) FROM kms_index_status WHERE entity_type = ?1 AND status = 'failed'", params![category], |r| r.get(0)).map_err(|e| e.to_string())?;
+    let indexed: u32 = conn.query_row("SELECT COUNT(*) FROM kms_index_status WHERE entity_type = ?1 AND status = 'indexed'", params![category], |r| r.get(0))?;
+    let failed: u32 = conn.query_row("SELECT COUNT(*) FROM kms_index_status WHERE entity_type = ?1 AND status = 'failed'", params![category], |r| r.get(0))?;
     
     Ok((indexed, failed, total))
 }
 
-pub fn insert_log(level: &str, message: &str, details: Option<&str>) -> Result<(), String> {
+pub fn insert_log(level: &str, message: &str, details: Option<&str>) -> KmsResult<()> {
     let conn = conn_guard()?;
     conn.execute(
         "INSERT INTO kms_logs (level, message, details) VALUES (?1, ?2, ?3)",
         params![level, message, details],
-    ).map_err(|e| e.to_string())?;
+    )?;
     Ok(())
 }
 
-pub fn list_logs(limit: u32) -> Result<Vec<KmsLog>, String> {
+pub fn list_logs(limit: u32) -> KmsResult<Vec<KmsLog>> {
     let conn = conn_guard()?;
-    let mut stmt = conn.prepare("SELECT id, level, message, details, timestamp FROM kms_logs ORDER BY id DESC LIMIT ?1")
-        .map_err(|e| e.to_string())?;
+    let mut stmt = conn.prepare("SELECT id, level, message, details, timestamp FROM kms_logs ORDER BY id DESC LIMIT ?1")?;
     
     let rows = stmt.query_map(params![limit], |row| {
         Ok(KmsLog {
@@ -285,50 +291,47 @@ pub fn list_logs(limit: u32) -> Result<Vec<KmsLog>, String> {
             details: row.get(3)?,
             timestamp: row.get(4)?,
         })
-    }).map_err(|e| e.to_string())?;
+    })?;
     
     let mut logs = Vec::new();
     for r in rows {
-        logs.push(r.map_err(|e| e.to_string())?);
+        logs.push(r?);
     }
     Ok(logs)
 }
 
-pub fn clear_logs() -> Result<(), String> {
+pub fn clear_logs() -> KmsResult<()> {
     let conn = conn_guard()?;
-    conn.execute("DELETE FROM kms_logs", []).map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM kms_logs", [])?;
     Ok(())
 }
 
-pub fn delete_note(path: &str) -> Result<(), String> {
-    let conn = conn_guard()?;
-    
-    // 1. Find vector IDs to delete
-    let mut stmt = conn.prepare("SELECT vec_id FROM kms_vector_map WHERE entity_type = 'note' AND entity_id = ?1")
-        .map_err(|e| e.to_string())?;
-    let vec_ids: Vec<i64> = stmt.query_map(params![path], |row| row.get(0))
-        .map_err(|e| e.to_string())?
-        .filter_map(|r| r.ok())
-        .collect();
+pub fn delete_note(path: &str) -> KmsResult<()> {
+    transactional(|tx| {
+        // 1. Find vector IDs to delete
+        let mut stmt = tx.prepare("SELECT vec_id FROM kms_vector_map WHERE entity_type = 'note' AND entity_id = ?1")?;
+        let vec_ids: Vec<i64> = stmt.query_map(params![path], |row| row.get(0))?
+            .filter_map(|r| r.ok())
+            .collect();
 
-    // 2. Delete from vector tables
-    for vid in vec_ids {
-        let _ = conn.execute("DELETE FROM kms_embeddings_text WHERE rowid = ?1", params![vid]);
-        let _ = conn.execute("DELETE FROM kms_embeddings_image WHERE rowid = ?1", params![vid]);
-    }
-    
-    // 3. Delete from support tables (mapping, links)
-    let _ = conn.execute("DELETE FROM kms_vector_map WHERE entity_type = 'note' AND entity_id = ?1", params![path]);
-    let _ = conn.execute("DELETE FROM kms_links WHERE source_path = ?1 OR target_path = ?1", params![path]);
-    
-    // 4. Delete from main table (triggers triggers for FTS, and CASCADE for tags)
-    conn.execute("DELETE FROM kms_notes WHERE path = ?1", params![path])
-        .map_err(|e| e.to_string())?;
+        // 2. Delete from vector tables
+        for vid in vec_ids {
+            let _ = tx.execute("DELETE FROM kms_embeddings_text WHERE rowid = ?1", params![vid]);
+            let _ = tx.execute("DELETE FROM kms_embeddings_image WHERE rowid = ?1", params![vid]);
+        }
         
-    Ok(())
+        // 3. Delete from support tables (mapping, links)
+        tx.execute("DELETE FROM kms_vector_map WHERE entity_type = 'note' AND entity_id = ?1", params![path])?;
+        tx.execute("DELETE FROM kms_links WHERE source_path = ?1 OR target_path = ?1", params![path])?;
+        
+        // 4. Delete from main table (triggers triggers for FTS, and CASCADE for tags)
+        tx.execute("DELETE FROM kms_notes WHERE path = ?1", params![path])?;
+            
+        Ok(())
+    })
 }
 
-pub fn repair_database() -> Result<(), String> {
+pub fn repair_database() -> KmsResult<()> {
     let conn = conn_guard()?;
     
     log::warn!("[KMS] Executing surgical database repair (KMS Reset)...");
@@ -347,108 +350,117 @@ pub fn repair_database() -> Result<(), String> {
     let _ = conn.execute("DROP TABLE IF EXISTS kms_vector_map", []);
 
     // RESET Migration history for KMS versions (v4-v7)
-    // Based on user screenshots, the tracking table is `_sqlx_migrations` (from tauri-plugin-sql / sqlx)
     let _ = conn.execute("DELETE FROM _sqlx_migrations WHERE version IN (4, 5, 6, 7)", []);
     
-    // Attempt VACUUM to ensure b-tree integrity after dropping corrupted virtual tables
+    // Attempt VACUUM
     let _ = conn.execute("VACUUM", []);
 
-    // Log success
     log::info!("[KMS] Surgical repair complete. KMS Tables dropped and migrations reset.");
     
     Ok(())
 }
 
-pub fn rename_note(old_path: &str, new_path: &str, new_title: &str) -> Result<(), String> {
-    let conn = conn_guard()?;
-    
-    // 1. Update the note metadata
-    conn.execute(
-        "UPDATE kms_notes SET path = ?1, title = ?2 WHERE path = ?3",
-        params![new_path, new_title, old_path],
-    )
-    .map_err(|e| e.to_string())?;
+pub fn rename_note(old_path: &str, new_path: &str, new_title: &str) -> KmsResult<()> {
+    transactional(|tx| {
+        // 1. Update the note metadata
+        tx.execute(
+            "UPDATE kms_notes SET path = ?1, title = ?2 WHERE path = ?3",
+            params![new_path, new_title, old_path],
+        )?;
 
-    // 2. Update the vector mapping (path is the entity_id for notes)
-    let _ = conn.execute(
-        "UPDATE kms_vector_map SET entity_id = ?1 WHERE entity_type = 'note' AND entity_id = ?2",
-        params![new_path, old_path]
-    );
+        // 2. Update the vector mapping (path is the entity_id for notes)
+        tx.execute(
+            "UPDATE kms_vector_map SET entity_id = ?1 WHERE entity_type = 'note' AND entity_id = ?2",
+            params![new_path, old_path]
+        )?;
 
-    Ok(())
+        Ok(())
+    })
 }
 
-pub fn rename_folder(old_path: &str, new_path: &str) -> Result<(), String> {
-    let conn = conn_guard()?;
-    
-    // 1. Update all notes within this folder by replacing the path prefix
-    // SQL: UPDATE kms_notes SET path = ?1 || SUBSTR(path, LENGTH(?2) + 1) WHERE path LIKE ?2 || '%'
-    // This correctly handles subfolders too.
-    conn.execute(
-        "UPDATE kms_notes SET path = ?1 || SUBSTR(path, LENGTH(?2) + 1) WHERE path LIKE ?2 || '%'",
-        params![new_path, old_path],
-    ).map_err(|e| e.to_string())?;
+pub fn rename_folder(old_path: &str, new_path: &str) -> KmsResult<()> {
+    transactional(|tx| {
+        // 1. Update all notes within this folder
+        tx.execute(
+            "UPDATE kms_notes SET path = ?1 || SUBSTR(path, LENGTH(?2) + 1) WHERE path LIKE ?2 || '%'",
+            params![new_path, old_path],
+        )?;
 
-    // 2. Update vector mapping entity IDs
-    conn.execute(
-        "UPDATE kms_vector_map SET entity_id = ?1 || SUBSTR(entity_id, LENGTH(?2) + 1) 
-         WHERE entity_type = 'note' AND entity_id LIKE ?2 || '%'",
-        params![new_path, old_path]
-    ).map_err(|e| e.to_string())?;
+        // 2. Update vector mapping entity IDs
+        tx.execute(
+            "UPDATE kms_vector_map SET entity_id = ?1 || SUBSTR(entity_id, LENGTH(?2) + 1) 
+             WHERE entity_type = 'note' AND entity_id LIKE ?2 || '%'",
+            params![new_path, old_path]
+        )?;
 
-    // 3. Update links (both source and target)
-    conn.execute(
-        "UPDATE kms_links SET source_path = ?1 || SUBSTR(source_path, LENGTH(?2) + 1) 
-         WHERE source_path LIKE ?2 || '%'",
-        params![new_path, old_path]
-    ).map_err(|e| e.to_string())?;
+        // 3. Update links (both source and target)
+        tx.execute(
+            "UPDATE kms_links SET source_path = ?1 || SUBSTR(source_path, LENGTH(?2) + 1) 
+             WHERE source_path LIKE ?2 || '%'",
+            params![new_path, old_path]
+        )?;
 
-    conn.execute(
-        "UPDATE kms_links SET target_path = ?1 || SUBSTR(target_path, LENGTH(?2) + 1) 
-         WHERE target_path LIKE ?2 || '%'",
-        params![new_path, old_path]
-    ).map_err(|e| e.to_string())?;
+        tx.execute(
+            "UPDATE kms_links SET target_path = ?1 || SUBSTR(target_path, LENGTH(?2) + 1) 
+             WHERE target_path LIKE ?2 || '%'",
+            params![new_path, old_path]
+        )?;
 
-    Ok(())
+        Ok(())
+    })
 }
 
-pub fn delete_folder_recursive(path: &str) -> Result<(), String> {
-    let conn = conn_guard()?;
-    
-    // 1. Find all notes within this folder
-    let mut stmt = conn.prepare("SELECT path FROM kms_notes WHERE path LIKE ?1 || '%'")
-        .map_err(|e| e.to_string())?;
-    
-    let note_paths: Vec<String> = stmt.query_map(params![path], |row| row.get(0))
-        .map_err(|e| e.to_string())?
-        .filter_map(|r| r.ok())
-        .collect();
+pub fn delete_folder_recursive(path: &str) -> KmsResult<()> {
+    transactional(|tx| {
+        // 1. Find all notes within this folder
+        let mut stmt = tx.prepare("SELECT path FROM kms_notes WHERE path LIKE ?1 || '%'")?;
+        
+        let note_paths: Vec<String> = stmt.query_map(params![path], |row| row.get(0))?
+            .filter_map(|r| r.ok())
+            .collect();
 
-    // 2. Delete each note individually (reusing the existing logic to clean up embeddings/links/etc)
-    for note_path in note_paths {
-        delete_note(&note_path)?;
-    }
-    
-    Ok(())
+        // 2. Delete each note individually
+        // Since we are already in a transaction, we should call a variant of delete_note that takes a Transaction
+        // But for simplicity, we can just execute the SQL here or refactor delete_note.
+        // Let's refactor delete_note to have a transactional internal version.
+        
+        for note_path in note_paths {
+            // Reusing the logic from delete_note but on the current transaction
+            let mut stmt_vec = tx.prepare("SELECT vec_id FROM kms_vector_map WHERE entity_type = 'note' AND entity_id = ?1")?;
+            let vec_ids: Vec<i64> = stmt_vec.query_map(params![note_path], |row| row.get(0))?
+                .filter_map(|r| r.ok())
+                .collect();
+
+            for vid in vec_ids {
+                let _ = tx.execute("DELETE FROM kms_embeddings_text WHERE rowid = ?1", params![vid]);
+                let _ = tx.execute("DELETE FROM kms_embeddings_image WHERE rowid = ?1", params![vid]);
+            }
+            
+            tx.execute("DELETE FROM kms_vector_map WHERE entity_type = 'note' AND entity_id = ?1", params![note_path])?;
+            tx.execute("DELETE FROM kms_links WHERE source_path = ?1 OR target_path = ?1", params![note_path])?;
+            tx.execute("DELETE FROM kms_notes WHERE path = ?1", params![note_path])?;
+        }
+        
+        Ok(())
+    })
 }
 
-pub fn upsert_link(source_path: &str, target_path: &str) -> Result<(), String> {
+pub fn upsert_link(source_path: &str, target_path: &str) -> KmsResult<()> {
     let conn = conn_guard()?;
     conn.execute(
         "INSERT INTO kms_links (source_path, target_path) VALUES (?1, ?2) ON CONFLICT(source_path, target_path) DO NOTHING",
         params![source_path, target_path],
-    ).map_err(|e| e.to_string())?;
+    )?;
     Ok(())
 }
 
-pub fn delete_links_for_source(source_path: &str) -> Result<(), String> {
+pub fn delete_links_for_source(source_path: &str) -> KmsResult<()> {
     let conn = conn_guard()?;
-    conn.execute("DELETE FROM kms_links WHERE source_path = ?1", params![source_path])
-        .map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM kms_links WHERE source_path = ?1", params![source_path])?;
     Ok(())
 }
 
-pub fn get_links_for_note(path: &str) -> Result<(Vec<KmsNoteRow>, Vec<KmsNoteRow>), String> {
+pub fn get_links_for_note(path: &str) -> KmsResult<(Vec<KmsNoteRow>, Vec<KmsNoteRow>)> {
     let conn = conn_guard()?;
     
     // Outgoing
@@ -457,7 +469,7 @@ pub fn get_links_for_note(path: &str) -> Result<(Vec<KmsNoteRow>, Vec<KmsNoteRow
          FROM kms_notes n
          JOIN kms_links l ON n.path = l.target_path
          WHERE l.source_path = ?1"
-    ).map_err(|e| e.to_string())?;
+    )?;
     
     let outgoing = stmt.query_map(params![path], |row| {
         Ok(KmsNoteRow {
@@ -470,9 +482,8 @@ pub fn get_links_for_note(path: &str) -> Result<(Vec<KmsNoteRow>, Vec<KmsNoteRow
             sync_status: row.get(6)?,
             last_error: row.get(7)?,
         })
-    }).map_err(|e| e.to_string())?
-    .collect::<Result<Vec<_>, _>>()
-    .map_err(|e| e.to_string())?;
+    })?
+    .collect::<Result<Vec<_>, _>>()?;
 
     // Incoming (Backlinks)
     let mut stmt = conn.prepare(
@@ -480,7 +491,7 @@ pub fn get_links_for_note(path: &str) -> Result<(Vec<KmsNoteRow>, Vec<KmsNoteRow
          FROM kms_notes n
          JOIN kms_links l ON n.path = l.source_path
          WHERE l.target_path = ?1"
-    ).map_err(|e| e.to_string())?;
+    )?;
     
     let incoming = stmt.query_map(params![path], |row| {
         Ok(KmsNoteRow {
@@ -493,30 +504,26 @@ pub fn get_links_for_note(path: &str) -> Result<(Vec<KmsNoteRow>, Vec<KmsNoteRow
             sync_status: row.get(6)?,
             last_error: row.get(7)?,
         })
-    }).map_err(|e| e.to_string())?
-    .collect::<Result<Vec<_>, _>>()
-    .map_err(|e| e.to_string())?;
+    })?
+    .collect::<Result<Vec<_>, _>>()?;
 
     Ok((outgoing, incoming))
 }
 
-pub fn update_links_on_path_change(old_path: &str, new_path: &str) -> Result<(), String> {
+pub fn update_links_on_path_change(old_path: &str, new_path: &str) -> KmsResult<()> {
     let conn = conn_guard()?;
     // Update target paths (incoming links to the renamed note)
-    conn.execute("UPDATE kms_links SET target_path = ?1 WHERE target_path = ?2", params![new_path, old_path])
-        .map_err(|e| e.to_string())?;
+    conn.execute("UPDATE kms_links SET target_path = ?1 WHERE target_path = ?2", params![new_path, old_path])?;
     // Update source paths (outgoing links from the renamed note)
-    conn.execute("UPDATE kms_links SET source_path = ?1 WHERE source_path = ?2", params![new_path, old_path])
-        .map_err(|e| e.to_string())?;
+    conn.execute("UPDATE kms_links SET source_path = ?1 WHERE source_path = ?2", params![new_path, old_path])?;
     Ok(())
 }
 
 #[allow(dead_code)]
-pub fn get_note_by_path(path: &str) -> Result<Option<KmsNoteRow>, String> {
+pub fn get_note_by_path(path: &str) -> KmsResult<Option<KmsNoteRow>> {
     let conn = conn_guard()?;
     let mut stmt = conn
-        .prepare("SELECT id, path, title, content_preview, last_modified, is_favorite, sync_status, last_error FROM kms_notes WHERE path = ?1")
-        .map_err(|e| e.to_string())?;
+        .prepare("SELECT id, path, title, content_preview, last_modified, is_favorite, sync_status, last_error FROM kms_notes WHERE path = ?1")?;
     stmt.query_row(params![path], |row| {
         Ok(KmsNoteRow {
             id: row.get(0)?,
@@ -530,202 +537,129 @@ pub fn get_note_by_path(path: &str) -> Result<Option<KmsNoteRow>, String> {
         })
     })
     .optional()
-    .map_err(|e| e.to_string())
+    .map_err(KmsError::from)
 }
 
 pub fn upsert_embedding(
     modality: &str,
     entity_type: &str,
     entity_id: &str,
-    embedding: Vec<f32>,
+    embedding: &[f32],
     metadata: Option<String>,
-) -> Result<(), String> {
-    let conn = conn_guard()?;
-    
-    // Convert embedding to bytes (float32 little-endian) for sqlite-vec
-    let mut bytes = Vec::with_capacity(embedding.len() * 4);
-    for f in embedding {
-        bytes.extend_from_slice(&f.to_le_bytes());
-    }
+) -> KmsResult<()> {
+    transactional(|tx| {
+        // 1. Check if we already have a vec_id for this entity/modality combination
+        let mut stmt = tx.prepare("SELECT vec_id FROM kms_vector_map WHERE entity_type = ?1 AND entity_id = ?2 AND modality = ?3")?;
+        let existing_id: Option<i64> = stmt.query_row(params![entity_type, entity_id, modality], |r| r.get(0)).optional()?;
 
-    let table = if modality == "text" { "kms_embeddings_text" } else { "kms_embeddings_image" };
-    
-    // Check for existing mapping to perform update vs insert
-    let existing: Option<(i64, i64)> = conn.query_row(
-        "SELECT id, vec_id FROM kms_vector_map WHERE entity_type = ?1 AND entity_id = ?2 AND modality = ?3",
-        params![entity_type, entity_id, modality],
-        |row| Ok((row.get(0)?, row.get(1)?))
-    ).optional().map_err(|e| e.to_string())?;
+        let vec_id = match existing_id {
+            Some(id) => id,
+            None => {
+                tx.query_row("SELECT COALESCE(MAX(vec_id), 0) + 1 FROM kms_vector_map", [], |r| r.get(0))?
+            }
+        };
 
-    if let Some((map_id, vec_id)) = existing {
-        // Update existing vector in the virtual table (rowid-based)
-        conn.execute(
-            &format!("UPDATE {} SET embedding = ?1 WHERE rowid = ?2", table),
-            params![bytes, vec_id]
-        ).map_err(|e| e.to_string())?;
-        
-        // Update metadata and timestamp in the mapping table
-        conn.execute(
-            "UPDATE kms_vector_map SET metadata = ?1, created_at = CURRENT_TIMESTAMP WHERE id = ?2",
-            params![metadata, map_id]
-        ).map_err(|e| e.to_string())?;
-    } else {
-        // Insert new vector into the virtual table
-        conn.execute(
-            &format!("INSERT INTO {} (embedding) VALUES (?1)", table),
-            params![bytes]
-        ).map_err(|e| e.to_string())?;
-        
-        let new_vec_id = conn.last_insert_rowid();
+        // 2. Convert f32 slice to bytes for sqlite-vec
+        let bytes: &[u8] = unsafe {
+            std::slice::from_raw_parts(
+                embedding.as_ptr() as *const u8,
+                embedding.len() * std::mem::size_of::<f32>(),
+            )
+        };
 
-        // Insert new entry into the mapping table
-        conn.execute(
-            "INSERT INTO kms_vector_map (vec_id, modality, entity_type, entity_id, metadata)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![new_vec_id, modality, entity_type, entity_id, metadata]
-        ).map_err(|e| e.to_string())?;
-    }
-
-    Ok(())
-}
-
-#[allow(dead_code)]
-pub fn delete_embedding(modality: &str, entity_type: &str, entity_id: &str) -> Result<(), String> {
-    let conn = conn_guard()?;
-    
-    // 1. Find vector ID
-    let vec_id: Option<i64> = conn.query_row(
-        "SELECT vec_id FROM kms_vector_map WHERE modality = ?1 AND entity_type = ?2 AND entity_id = ?3",
-        params![modality, entity_type, entity_id],
-        |row| row.get(0)
-    ).optional().map_err(|e| e.to_string())?;
-
-    if let Some(vid) = vec_id {
-        let table = if modality == "text" { "kms_embeddings_text" } else { "kms_embeddings_image" };
-        // 2. Delete from virtual table
-        let _ = conn.execute(&format!("DELETE FROM {} WHERE rowid = ?1", table), params![vid]);
-        // 3. Delete from mapping table
-        let _ = conn.execute(
-            "DELETE FROM kms_vector_map WHERE vec_id = ?1 AND modality = ?2",
-            params![vid, modality]
-        );
-    }
-    
-    Ok(())
-}
-
-pub fn upsert_unified_fts(
-    entity_type: &str,
-    entity_id: &str,
-    title: &str,
-    content: &str,
-) -> Result<(), String> {
-    let conn = conn_guard()?;
-    
-    // FTS5 doesn't have native ON CONFLICT, so we DELETE then INSERT
-    let _ = conn.execute(
-        "DELETE FROM kms_unified_fts WHERE entity_type = ?1 AND entity_id = ?2",
-        params![entity_type, entity_id],
-    );
-    
-    conn.execute(
-        "INSERT INTO kms_unified_fts (entity_type, entity_id, title, content)
-         VALUES (?1, ?2, ?3, ?4)",
-        params![entity_type, entity_id, title, content],
-    ).map_err(|e| e.to_string())?;
-    
-    Ok(())
-}
-
-#[allow(dead_code)]
-pub fn delete_unified_fts(entity_type: &str, entity_id: &str) -> Result<(), String> {
-    let conn = conn_guard()?;
-    conn.execute(
-        "DELETE FROM kms_unified_fts WHERE entity_type = ?1 AND entity_id = ?2",
-        params![entity_type, entity_id],
-    ).map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-/// Deletes all embeddings for all modalities (text, image, etc.) for a specific entity.
-pub fn delete_embeddings_for_entity(entity_type: &str, entity_id: &str) -> Result<(), String> {
-    let conn = conn_guard()?;
-    
-    // 1. Get all modalities for this entity
-    let mut stmt = conn.prepare(
-        "SELECT vec_id, modality FROM kms_vector_map WHERE entity_type = ?1 AND entity_id = ?2"
-    ).map_err(|e| e.to_string())?;
-    
-    let rows = stmt.query_map(params![entity_type, entity_id], |row| {
-        Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
-    }).map_err(|e| e.to_string())?;
-
-    for row_res in rows {
-        if let Ok((vid, modality)) = row_res {
-            let table = if modality == "text" { "kms_embeddings_text" } else { "kms_embeddings_image" };
-            // 2. Delete from virtual table
-            let _ = conn.execute(&format!("DELETE FROM {} WHERE rowid = ?1", table), params![vid]);
+        // 3. Insert into the appropriate vector table
+        if modality == "text" {
+            tx.execute(
+                "INSERT INTO kms_embeddings_text (rowid, embedding) VALUES (?1, ?2) ON CONFLICT(rowid) DO UPDATE SET embedding = excluded.embedding",
+                params![vec_id, bytes],
+            )?;
+        } else {
+            tx.execute(
+                "INSERT INTO kms_embeddings_image (rowid, embedding) VALUES (?1, ?2) ON CONFLICT(rowid) DO UPDATE SET embedding = excluded.embedding",
+                params![vec_id, bytes],
+            )?;
         }
-    }
 
-    // 3. Delete from mapping table
-    let _ = conn.execute(
-        "DELETE FROM kms_vector_map WHERE entity_type = ?1 AND entity_id = ?2",
-        params![entity_type, entity_id]
-    ).map_err(|e| e.to_string())?;
+        // 4. Ensure mapping exists
+        tx.execute(
+            "INSERT INTO kms_vector_map (vec_id, modality, entity_type, entity_id, metadata) 
+             VALUES (?1, ?2, ?3, ?4, ?5) 
+             ON CONFLICT(vec_id) DO UPDATE SET 
+                modality = excluded.modality,
+                entity_type = excluded.entity_type, 
+                entity_id = excluded.entity_id,
+                metadata = excluded.metadata",
+            params![vec_id, modality, entity_type, entity_id, metadata],
+        )?;
 
-    // 4. Also clean up index status
-    let _ = conn.execute(
-        "DELETE FROM kms_index_status WHERE entity_type = ?1 AND entity_id = ?2",
-        params![entity_type, entity_id]
-    );
-    
-    Ok(())
+        Ok(())
+    })
 }
 
-/// Bulk deletes all embeddings associated with a specific entity type (e.g., "clipboard").
-pub fn delete_all_embeddings_for_type(entity_type: &str) -> Result<(), String> {
-    let conn = conn_guard()?;
-    
-    // Delete from virtual tables using subqueries
-    let _ = conn.execute(
-        "DELETE FROM kms_embeddings_text WHERE rowid IN (SELECT vec_id FROM kms_vector_map WHERE entity_type = ?1 AND modality = 'text')",
-        params![entity_type]
-    );
-    let _ = conn.execute(
-        "DELETE FROM kms_embeddings_image WHERE rowid IN (SELECT vec_id FROM kms_vector_map WHERE entity_type = ?1 AND modality = 'image')",
-        params![entity_type]
-    );
-    
-    // Delete from mapping table
-    let _ = conn.execute(
-        "DELETE FROM kms_vector_map WHERE entity_type = ?1",
-        params![entity_type]
-    ).map_err(|e| e.to_string())?;
-
-    // Also clear index status for this type
-    let _ = conn.execute(
-        "DELETE FROM kms_index_status WHERE entity_type = ?1",
-        params![entity_type]
-    ).map_err(|e| e.to_string())?;
-    
-    Ok(())
-}
-
-/// Bulk deletes embeddings for a list of entity IDs.
 #[allow(dead_code)]
-pub fn delete_embeddings_for_ids(entity_type: &str, entity_ids: &[String]) -> Result<(), String> {
-    if entity_ids.is_empty() {
-        return Ok(());
-    }
-    
-    // For safety and simplicity, we reuse the per-entity cleanup
-    for id in entity_ids {
-        let _ = delete_embeddings_for_entity(entity_type, id);
-    }
-    
+pub fn delete_embedding(vec_id: i64, entity_type: &str) -> KmsResult<()> {
+    transactional(|tx| {
+        if entity_type == "note" || entity_type == "snippet" {
+            tx.execute("DELETE FROM kms_embeddings_text WHERE rowid = ?1", params![vec_id])?;
+        } else {
+            tx.execute("DELETE FROM kms_embeddings_image WHERE rowid = ?1", params![vec_id])?;
+        }
+        tx.execute("DELETE FROM kms_vector_map WHERE vec_id = ?1", params![vec_id])?;
+        Ok(())
+    })
+}
+
+pub fn upsert_unified_fts(entity_type: &str, entity_id: &str, title: &str, content: &str) -> KmsResult<()> {
+    let conn = conn_guard()?;
+    // FTS5 doesn't support UPSERT, so we delete and then insert
+    conn.execute("DELETE FROM kms_unified_fts WHERE entity_type = ?1 AND entity_id = ?2", params![entity_type, entity_id])?;
+    conn.execute(
+        "INSERT INTO kms_unified_fts (entity_type, entity_id, title, content) VALUES (?1, ?2, ?3, ?4)",
+        params![entity_type, entity_id, title, content],
+    )?;
     Ok(())
 }
+
+#[allow(dead_code)]
+pub fn delete_unified_fts(entity_type: &str, entity_id: &str) -> KmsResult<()> {
+    let conn = conn_guard()?;
+    conn.execute("DELETE FROM kms_unified_fts WHERE entity_type = ?1 AND entity_id = ?2", params![entity_type, entity_id])?;
+    Ok(())
+}
+
+pub fn delete_embeddings_for_entity(entity_type: &str, entity_id: &str) -> KmsResult<()> {
+    transactional(|tx| {
+        let mut stmt = tx.prepare("SELECT vec_id FROM kms_vector_map WHERE entity_id = ?1 AND entity_type = ?2")?;
+        let vec_ids: Vec<i64> = stmt.query_map(params![entity_id, entity_type], |r| r.get(0))?
+            .filter_map(|r| r.ok())
+            .collect();
+        
+        for vid in vec_ids {
+            if entity_type == "note" || entity_type == "snippet" {
+                tx.execute("DELETE FROM kms_embeddings_text WHERE rowid = ?1", params![vid])?;
+            } else {
+                tx.execute("DELETE FROM kms_embeddings_image WHERE rowid = ?1", params![vid])?;
+            }
+        }
+        tx.execute("DELETE FROM kms_vector_map WHERE entity_id = ?1 AND entity_type = ?2", params![entity_id, entity_type])?;
+        // Also clean up index status
+        tx.execute("DELETE FROM kms_index_status WHERE entity_type = ?1 AND entity_id = ?2", params![entity_type, entity_id])?;
+        Ok(())
+    })
+}
+
+pub fn delete_all_embeddings_for_type(entity_type: &str) -> KmsResult<()> {
+    transactional(|tx| {
+        if entity_type == "note" || entity_type == "snippet" {
+            tx.execute("DELETE FROM kms_embeddings_text WHERE rowid IN (SELECT vec_id FROM kms_vector_map WHERE entity_type = ?1)", params![entity_type])?;
+        } else {
+            tx.execute("DELETE FROM kms_embeddings_image WHERE rowid IN (SELECT vec_id FROM kms_vector_map WHERE entity_type = ?1)", params![entity_type])?;
+        }
+        tx.execute("DELETE FROM kms_vector_map WHERE entity_type = ?1", params![entity_type])?;
+        Ok(())
+    })
+}
+
 
 /// Performs a multi-modal search using k-NN, FTS5, or both (Hybrid Search).
 pub fn search_hybrid(
@@ -734,7 +668,7 @@ pub fn search_hybrid(
     query_vector: Vec<f32>,
     search_mode: &str, // "Hybrid", "Semantic", "Keyword"
     limit: u32,
-) -> Result<Vec<SearchResult>, String> {
+) -> KmsResult<Vec<SearchResult>> {
     let conn = conn_guard()?;
     
     let mut query_bytes = Vec::with_capacity(query_vector.len() * 4);
@@ -767,7 +701,7 @@ pub fn search_hybrid(
              WHERE v.embedding MATCH ?1 AND k = ?2
              ORDER BY distance",
             vector_table
-        )).map_err(|e| e.to_string())?;
+        ))?;
 
         let vec_rows = stmt.query_map(params![query_bytes, limit * 2], |row| {
             Ok((
@@ -776,10 +710,10 @@ pub fn search_hybrid(
                 row.get::<_, f64>(2)? as f32,
                 row.get::<_, Option<String>>(3)?,
             ))
-        }).map_err(|e| e.to_string())?;
+        })?;
 
         for (rank_idx, row) in vec_rows.enumerate() {
-            let (entity_type, entity_id, distance, metadata) = row.map_err(|e| e.to_string())?;
+            let (entity_type, entity_id, distance, metadata) = row?;
             let key = (entity_type.clone(), entity_id.clone());
             hits.insert(key.clone(), Hit {
                 entity_type,
@@ -816,13 +750,13 @@ pub fn search_hybrid(
             };
 
             let mut fts_stmt = conn.prepare(
-                "SELECT f.entity_type, f.entity_id, bm25(kms_unified_fts) as score, m.metadata, m.modality
+                "SELECT f.entity_type, f.entity_id, bm25(kms_unified_fts) as score, m.metadata, m.entity_type as hit_modality
                  FROM kms_unified_fts f
                  LEFT JOIN kms_vector_map m ON f.entity_type = m.entity_type AND f.entity_id = m.entity_id
                  WHERE kms_unified_fts MATCH ?1
                  ORDER BY score
                  LIMIT ?2"
-            ).map_err(|e| e.to_string())?;
+            )?;
             
             let fts_rows = match fts_stmt.query_map(params![fts_query, limit * 2], |row| {
                 Ok((
@@ -915,7 +849,7 @@ pub struct KmsSkillRepository;
 #[async_trait]
 impl SkillRepository for KmsSkillRepository {
     async fn list_skills(&self) -> anyhow::Result<Vec<Skill>> {
-        let conn = conn_guard().map_err(|e| anyhow::anyhow!(e))?;
+        let conn = conn_guard()?;
         let mut stmt = conn.prepare(
             "SELECT name, description, version, path, instructions, author, tags, license, compatibility, extra_metadata, disable_model_invocation, scope, sync_targets FROM kms_skills ORDER BY name ASC"
         )?;
@@ -952,7 +886,7 @@ impl SkillRepository for KmsSkillRepository {
     }
 
     async fn get_skill(&self, name: &str) -> anyhow::Result<Option<Skill>> {
-        let conn = conn_guard().map_err(|e| anyhow::anyhow!(e))?;
+        let conn = conn_guard()?;
         let mut stmt = conn.prepare(
             "SELECT name, description, version, path, instructions, author, tags, license, compatibility, extra_metadata, disable_model_invocation, scope, sync_targets FROM kms_skills WHERE name = ?1"
         )?;
@@ -995,7 +929,7 @@ impl SkillRepository for KmsSkillRepository {
             skill.instructions.replace("'", "''")
         );
         
-        let conn = conn_guard().map_err(|e| anyhow::anyhow!(e))?;
+        let conn = conn_guard()?;
         
         let _ = conn.execute(
             "INSERT INTO kms_logs (level, message, details) VALUES (?, ?, ?)",
@@ -1058,7 +992,7 @@ impl SkillRepository for KmsSkillRepository {
     }
 
     async fn delete_skill(&self, name: &str) -> anyhow::Result<()> {
-        let conn = conn_guard().map_err(|e| anyhow::anyhow!(e))?;
+        let conn = conn_guard()?;
         conn.execute("DELETE FROM kms_skills WHERE name = ?", [name])?;
         
         // Also clean up unified FTS (handled by trigger, but vector map needs manual cleanup if indexed)
@@ -1081,7 +1015,7 @@ impl SkillRepository for KmsSkillRepository {
     }
 
     async fn find_skill_name_by_path(&self, path: &std::path::Path) -> anyhow::Result<Option<String>> {
-        let conn = conn_guard().map_err(|e| anyhow::anyhow!(e))?;
+        let conn = conn_guard()?;
         let path_str = path.to_string_lossy();
         
         let name: Option<String> = conn.query_row(
@@ -1121,7 +1055,7 @@ impl SkillRepository for KmsSkillRepository {
         }
 
         // Cleanup: remove skills from DB that were not found on disk
-        let conn = conn_guard().map_err(|e| anyhow::anyhow!(e))?;
+        let conn = conn_guard()?;
         let mut stmt = conn.prepare("SELECT name FROM kms_skills")?;
         let db_names_iter = stmt.query_map([], |row| row.get::<_, String>(0))?;
         

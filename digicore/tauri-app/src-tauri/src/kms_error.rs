@@ -30,6 +30,9 @@ pub enum KmsError {
     #[error("Security error: {0}")]
     Security(String),
 
+    #[error("Conflict detected: {0}")]
+    Conflict(String),
+
     #[error("Operation failed: {0}")]
     General(String),
 }

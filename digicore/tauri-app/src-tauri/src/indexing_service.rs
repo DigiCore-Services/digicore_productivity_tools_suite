@@ -118,13 +118,13 @@ impl SemanticIndexProvider for NoteIndexProvider {
         api::sync_vault_files_to_db_internal(app, vault_path).await?;
         
         // Count how many we have indexed
-        let notes = kms_repository::list_notes()?;
+        let notes = kms_repository::list_notes().map_err(|e| e.to_string())?;
         Ok(notes.len())
     }
 
     async fn index_item(&self, app: &AppHandle, entity_id: &str) -> Result<(), String> {
         use crate::api;
-        let vault_path = kms_repository::get_vault_path()?;
+        let vault_path = kms_repository::get_vault_path().map_err(|e| e.to_string())?;
         let abs_path = std::path::Path::new(&vault_path).join(entity_id);
         
         if !abs_path.exists() {
@@ -166,13 +166,13 @@ impl SemanticIndexProvider for SnippetIndexProvider {
                             "category": category,
                             "snippetIdx": idx
                         }).to_string();
-                        kms_repository::upsert_embedding("text", "snippet", &snippet.trigger, vector, Some(metadata))?;
-                        kms_repository::upsert_unified_fts("snippet", &snippet.trigger, &format!("{} | {}", category, snippet.trigger), &snippet.content)?;
-                        kms_repository::update_index_status("snippets", &snippet.trigger, "indexed", None)?;
+                        kms_repository::upsert_embedding("text", "snippet", &snippet.trigger, &vector, Some(metadata)).map_err(|e| e.to_string())?;
+                        kms_repository::upsert_unified_fts("snippet", &snippet.trigger, &format!("{} | {}", category, snippet.trigger), &snippet.content).map_err(|e| e.to_string())?;
+                        kms_repository::update_index_status("snippets", &snippet.trigger, "indexed", None).map_err(|e| e.to_string())?;
                         count += 1;
                     }
                     Err(e) => {
-                        kms_repository::update_index_status("snippets", &snippet.trigger, "failed", Some(&e.to_string()))?;
+                        let _ = kms_repository::update_index_status("snippets", &snippet.trigger, "failed", Some(&e.to_string()));
                     }
                 }
             }
@@ -201,13 +201,13 @@ impl SemanticIndexProvider for SnippetIndexProvider {
                             "category": category,
                             "snippetIdx": idx
                         }).to_string();
-                        kms_repository::upsert_embedding("text", "snippet", &snippet.trigger, vector, Some(metadata))?;
-                        kms_repository::upsert_unified_fts("snippet", &snippet.trigger, &format!("{} | {}", category, snippet.trigger), &snippet.content)?;
-                        kms_repository::update_index_status("snippets", &snippet.trigger, "indexed", None)?;
+                        kms_repository::upsert_embedding("text", "snippet", &snippet.trigger, &vector, Some(metadata)).map_err(|e| e.to_string())?;
+                        kms_repository::upsert_unified_fts("snippet", &snippet.trigger, &format!("{} | {}", category, snippet.trigger), &snippet.content).map_err(|e| e.to_string())?;
+                        kms_repository::update_index_status("snippets", &snippet.trigger, "indexed", None).map_err(|e| e.to_string())?;
                         return Ok(());
                     }
                     Err(e) => {
-                        kms_repository::update_index_status("snippets", &snippet.trigger, "failed", Some(&e.to_string()))?;
+                        let _ = kms_repository::update_index_status("snippets", &snippet.trigger, "failed", Some(&e.to_string()));
                         return Err(e.to_string());
                     }
                 }
@@ -233,7 +233,7 @@ impl SemanticIndexProvider for ClipboardIndexProvider {
         
         let mut count = 0;
         // Get last 500 entries for indexing (configurable later)
-        let entries = clipboard_repository::list_entries(None, 500)?;
+        let entries = clipboard_repository::list_entries(None, 500).map_err(|e| e.to_string())?;
 
         for entry in entries {
             let entity_id = entry.id.to_string();
@@ -251,8 +251,8 @@ impl SemanticIndexProvider for ClipboardIndexProvider {
                             "window_title": entry.window_title,
                             "entry_type": "text"
                         }).to_string();
-                        kms_repository::upsert_embedding("text", "clipboard", &entity_id, vector, Some(metadata))?;
-                        kms_repository::upsert_unified_fts("clipboard", &entity_id, &format!("{} | {}", entry.process_name, entry.window_title), &entry.content)?;
+                        kms_repository::upsert_embedding("text", "clipboard", &entity_id, &vector, Some(metadata)).map_err(|e| e.to_string())?;
+                        kms_repository::upsert_unified_fts("clipboard", &entity_id, &format!("{} | {}", entry.process_name, entry.window_title), &entry.content).map_err(|e| e.to_string())?;
                         succeeded = true;
                     }
                     Err(e) => last_err = Some(e.to_string()),
@@ -273,7 +273,7 @@ impl SemanticIndexProvider for ClipboardIndexProvider {
                                 "entry_type": "image",
                                 "image_path": img_path
                             }).to_string();
-                            kms_repository::upsert_embedding("image", "clipboard", &entity_id, vector, Some(metadata))?;
+                            kms_repository::upsert_embedding("image", "clipboard", &entity_id, &vector, Some(metadata)).map_err(|e| e.to_string())?;
                             succeeded = true;
                         }
                         Err(e) => last_err = Some(e.to_string()),
@@ -282,10 +282,10 @@ impl SemanticIndexProvider for ClipboardIndexProvider {
             }
 
             if succeeded {
-                kms_repository::update_index_status("clipboard", &entity_id, "indexed", None)?;
+                let _ = kms_repository::update_index_status("clipboard", &entity_id, "indexed", None);
                 count += 1;
             } else if let Some(err) = last_err {
-                kms_repository::update_index_status("clipboard", &entity_id, "failed", Some(&err))?;
+                let _ = kms_repository::update_index_status("clipboard", &entity_id, "failed", Some(&err));
             }
         }
         Ok(count)
@@ -296,7 +296,7 @@ impl SemanticIndexProvider for ClipboardIndexProvider {
         use crate::embedding_service;
 
         let id: u32 = entity_id.parse().map_err(|_| "Invalid clipboard ID".to_string())?;
-        let entry_opt = clipboard_repository::get_entry_by_id(id)?;
+        let entry_opt = clipboard_repository::get_entry_by_id(id).map_err(|e| e.to_string())?;
         let entry = entry_opt.ok_or_else(|| format!("Clipboard entry not found: {}", id))?;
         
         let mut succeeded = false;
@@ -312,8 +312,8 @@ impl SemanticIndexProvider for ClipboardIndexProvider {
                         "window_title": entry.window_title,
                         "entry_type": entry.entry_type
                     }).to_string();
-                    kms_repository::upsert_embedding("text", "clipboard", &entity_id, vector, Some(metadata))?;
-                    kms_repository::upsert_unified_fts("clipboard", &entity_id, &format!("{} | {}", entry.process_name, entry.window_title), &entry.content)?;
+                    kms_repository::upsert_embedding("text", "clipboard", &entity_id, &vector, Some(metadata)).map_err(|e| e.to_string())?;
+                    kms_repository::upsert_unified_fts("clipboard", &entity_id, &format!("{} | {}", entry.process_name, entry.window_title), &entry.content).map_err(|e| e.to_string())?;
                     succeeded = true;
                 }
                 Err(e) => last_err = Some(e.to_string()),
@@ -333,7 +333,7 @@ impl SemanticIndexProvider for ClipboardIndexProvider {
                             "entry_type": "image",
                             "image_path": img_path
                         }).to_string();
-                        kms_repository::upsert_embedding("image", "clipboard", &entity_id, vector, Some(metadata))?;
+                        kms_repository::upsert_embedding("image", "clipboard", &entity_id, &vector, Some(metadata)).map_err(|e| e.to_string())?;
                         succeeded = true;
                     }
                     Err(e) => last_err = Some(e.to_string()),
@@ -342,11 +342,11 @@ impl SemanticIndexProvider for ClipboardIndexProvider {
         }
 
         if succeeded {
-            kms_repository::update_index_status("clipboard", &entity_id, "indexed", None)?;
+            let _ = kms_repository::update_index_status("clipboard", &entity_id, "indexed", None);
             Ok(())
         } else {
             let err = last_err.unwrap_or_else(|| "No processable content found".to_string());
-            kms_repository::update_index_status("clipboard", &entity_id, "failed", Some(&err))?;
+            let _ = kms_repository::update_index_status("clipboard", &entity_id, "failed", Some(&err));
             Err(err)
         }
     }
@@ -389,13 +389,13 @@ impl SemanticIndexProvider for SkillIndexProvider {
                         "path": skill.path.to_string_lossy()
                     }).to_string();
                     
-                    kms_repository::upsert_embedding("text", "skill", &entity_id, vector, Some(metadata))?;
+                    kms_repository::upsert_embedding("text", "skill", &entity_id, &vector, Some(metadata)).map_err(|e| e.to_string())?;
                     // Already handled by triggers for FTS, but we ensure consistency
-                    kms_repository::update_index_status("skills", &entity_id, "indexed", None)?;
+                    let _ = kms_repository::update_index_status("skills", &entity_id, "indexed", None);
                     count += 1;
                 }
                 Err(e) => {
-                    kms_repository::update_index_status("skills", &entity_id, "failed", Some(&e.to_string()))?;
+                    let _ = kms_repository::update_index_status("skills", &entity_id, "failed", Some(&e.to_string()));
                 }
             }
         }
@@ -425,12 +425,12 @@ impl SemanticIndexProvider for SkillIndexProvider {
                     "path": skill.path.to_string_lossy()
                 }).to_string();
                 
-                kms_repository::upsert_embedding("text", "skill", &entity_id, vector, Some(metadata))?;
-                kms_repository::update_index_status("skills", &entity_id, "indexed", None)?;
+                kms_repository::upsert_embedding("text", "skill", &entity_id, &vector, Some(metadata)).map_err(|e| e.to_string())?;
+                let _ = kms_repository::update_index_status("skills", &entity_id, "indexed", None);
                 Ok(())
             }
             Err(e) => {
-                kms_repository::update_index_status("skills", &entity_id, "failed", Some(&e.to_string()))?;
+                let _ = kms_repository::update_index_status("skills", &entity_id, "failed", Some(&e.to_string()));
                 Err(e.to_string())
             }
         }

@@ -14,6 +14,8 @@ mod kms_diagnostic_service;
 mod embedding_service;
 mod indexing_service;
 mod skill_sync;
+mod kms_sync_service;
+mod kms_git_service;
 
 use crate::api::{save_all_on_exit, Api};
 
@@ -631,6 +633,11 @@ pub fn run() {
     indexing_service.register_provider(Arc::new(indexing_service::ClipboardIndexProvider));
     indexing_service.register_provider(Arc::new(indexing_service::SkillIndexProvider));
 
+    // Ensure KMS Git repository is initialized
+    if let Err(e) = kms_git_service::KmsGitService::ensure_repo() {
+        log::error!("[KMS] Failed to initialize Git repo: {:?}", e);
+    }
+
     tauri::Builder::default()
         .manage(app_state.clone())
         .manage(indexing_service)
@@ -951,6 +958,18 @@ pub fn run() {
                             "#,
                             kind: MigrationKind::Up,
                         },
+                        Migration {
+                            version: 15,
+                            description: "kms_cleanup_legacy_fts",
+                            sql: r#"
+                                -- Remove legacy note-specific FTS table and triggers
+                                DROP TRIGGER IF EXISTS kms_notes_ai;
+                                DROP TRIGGER IF EXISTS kms_notes_au;
+                                DROP TRIGGER IF EXISTS kms_notes_ad;
+                                DROP TABLE IF EXISTS kms_notes_fts;
+                            "#,
+                            kind: MigrationKind::Up,
+                        },
                     ],
                 )
                 .build(),
@@ -1032,8 +1051,11 @@ pub fn run() {
             let corpus_service_for_init = corpus_service.clone();
             let handle_for_init = handle.clone();
             tauri::async_runtime::spawn(async move {
-                // T+1s: Database and Script Libraries
+                // T+1s: Database, Conflict Sync, and Script Libraries
                 tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                log::info!("[Startup] Running KMS Boot Sync");
+                let _ = kms_sync_service::KmsSyncService::run_boot_sync().await;
+                
                 log::info!("[Startup] Initializing repositories and scripts");
                 spawn_variable_input_poller(handle_for_init.clone());
                 load_and_apply_script_libraries();
