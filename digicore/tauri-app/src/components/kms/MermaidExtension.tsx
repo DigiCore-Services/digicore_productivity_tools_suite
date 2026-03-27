@@ -92,12 +92,12 @@ const MermaidCodeBlockView = (props: NodeViewProps) => {
           <MermaidRenderer content={props.node.textContent} />
           {/* Hidden content for Tiptap to keep track of the node */}
           <pre className="hidden">
-            <NodeViewContent as="div" />
+            <NodeViewContent as="div" style={{ whiteSpace: 'pre' }} />
           </pre>
         </>
       ) : (
         <pre className="bg-dc-bg-secondary/50 p-4 rounded-xl border border-dc-border/50 font-mono text-sm leading-relaxed">
-          <NodeViewContent as="div" />
+          <NodeViewContent as="div" style={{ whiteSpace: 'pre' }} />
         </pre>
       )}
     </NodeViewWrapper>

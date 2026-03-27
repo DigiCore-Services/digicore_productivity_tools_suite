@@ -47,7 +47,7 @@ export const MathExtension = Node.create({
 
   inline: true,
 
-  atom: true,
+  content: 'text*',
 
   addAttributes() {
     return {

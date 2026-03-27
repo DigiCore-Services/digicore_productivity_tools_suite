@@ -5,7 +5,7 @@ import { getTaurpc } from "./lib/taurpc";
 import { resolveTheme, applyThemeToDocument } from "./lib/theme";
 import { Toaster } from "./components/ui/toaster";
 import { useToast } from "./components/ui/use-toast";
-import { Book, FolderOpen, Search, Settings, Plus, Star, FileText, Sun, Moon, AlertCircle, RefreshCw, Check, Terminal, Activity, Cpu, Maximize2, Minimize2 } from "lucide-react";
+import { Book, FolderOpen, Search, Settings, Plus, Star, FileText, Sun, Moon, AlertCircle, RefreshCw, Check, Terminal, Activity, Cpu, Maximize2, Minimize2, Network } from "lucide-react";
 import { Button } from "./components/ui/button";
 import KmsEditor from "./components/kms/KmsEditor";
 import KmsLogViewer from "./components/kms/KmsLogViewer";
@@ -18,6 +18,8 @@ const ImageViewerModal = lazy(() =>
 import FileExplorer from "./components/kms/FileExplorer";
 import SkillHub from "./components/kms/SkillHub";
 import SkillEditor from "./components/kms/SkillEditor";
+const KmsGraph = lazy(() => import("./components/kms/KmsGraph"));
+const KmsGraph3D = lazy(() => import("./components/kms/KmsGraph3D"));
 import { KmsNoteDto, KmsFileSystemItemDto, KmsLogDto, SkillDto } from "./bindings";
 import { ClipEntry } from "./types";
 
@@ -30,7 +32,7 @@ export default function KmsApp() {
     const [activeContent, setActiveContent] = useState<string>("");
     const [theme, setTheme] = useState<"light" | "dark">("light");
     const [themeOverride, setThemeOverride] = useState<"light" | "dark" | null>(null);
-    const [view, setView] = useState<"explorer" | "search" | "favorites" | "logs" | "skills">("explorer");
+    const [view, setView] = useState<"explorer" | "search" | "favorites" | "logs" | "skills" | "graph">("explorer");
     const [activeSkill, setActiveSkill] = useState<SkillDto | null>(null);
     const [isSkillEditorOpen, setIsSkillEditorOpen] = useState(false);
     const [isSkillDirty, setIsSkillDirty] = useState(false);
@@ -60,6 +62,8 @@ export default function KmsApp() {
         return saved === "true";
     });
     const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+    const [graphMode, setGraphMode] = useState<"2d" | "3d">("3d");
+    const [graphResetKey, setGraphResetKey] = useState(0);
 
     const currentTheme = themeOverride || theme;
 
@@ -623,6 +627,20 @@ export default function KmsApp() {
                                     <span className="text-sm">Favorites</span>
                                 </Button>
                                 <Button
+                                    variant={view === "graph" ? "secondary" : "ghost"}
+                                    size="sm"
+                                    className={`w-full justify-start gap-2 h-9 px-2 ${view === "graph" ? "bg-dc-bg-hover text-dc-accent font-medium" : "text-dc-text-muted hover:bg-dc-bg-hover"}`}
+                                    onClick={() => {
+                                        if (!checkUnsavedSkillChanges()) return;
+                                        setView("graph");
+                                        setIsSkillEditorOpen(false);
+                                        setActiveNote(null);
+                                    }}
+                                >
+                                    <Network size={16} className={view === "graph" ? "text-dc-accent" : "text-dc-text-muted"} />
+                                    <span className="text-sm">Knowledge Graph</span>
+                                </Button>
+                                <Button
                                     variant={view === "skills" ? "secondary" : "ghost"}
                                     size="sm"
                                     className={`w-full justify-start gap-2 h-9 px-2 ${view === "skills" ? "bg-dc-bg-hover text-dc-accent font-medium" : "text-dc-text-muted hover:bg-dc-bg-hover"}`}
@@ -896,80 +914,169 @@ export default function KmsApp() {
             {/* Main Content Area */}
             < main className="flex-1 flex flex-col bg-dc-bg relative" >
 
-                {view === "skills" ? (
-                    <div className="flex-1 h-full overflow-hidden">
-                        <SkillHub
-                            refreshKey={skillRefreshKey}
-                            onSelectSkill={(s) => { setActiveSkill(s); setIsSkillEditorOpen(true); }}
-                            onCreateNew={() => { setActiveSkill(null); setIsSkillEditorOpen(true); }}
-                        />
-                    </div>
-                ) : activeNote ? (
-                    <div className="flex-1 flex overflow-hidden">
-                        <KmsEditor
-                            path={activeNote.path}
-                            initialContent={activeContent}
-                            onSave={handleSaveNote}
-                            onDelete={handleDeleteNote}
-                            onRename={(newName) => handleRenameNote(newName).then(() => { })}
-                            onSelectNote={(path: string) => {
-                                const note = notes.find(n => n.path === path);
-                                if (note) handleSelectNote(note);
-                            }}
-                            onOpenSkillEditor={() => handleOpenSkillEditor(activeNote.path)}
-                            isZenMode={isZenMode}
-                            onToggleZenMode={toggleZenMode}
-                            onToggleHistory={() => setIsHistoryOpen(!isHistoryOpen)}
-                            isHistoryOpen={isHistoryOpen}
-                            onToggleTheme={toggleTheme}
-                            currentTheme={currentTheme}
-                            vaultPath={vaultPath}
-                        />
-                        <AnimatePresence>
-                            {isHistoryOpen && (
-                                <motion.aside
-                                    initial={{ width: 0, opacity: 0 }}
-                                    animate={{ width: 320, opacity: 1 }}
-                                    exit={{ width: 0, opacity: 0 }}
-                                    transition={{ duration: 0.2, ease: "easeOut" }}
-                                    className="border-l border-dc-border h-full bg-dc-bg-secondary/30 backdrop-blur-sm shadow-2xl z-20"
+                {/* Persistent Skills View */}
+                <div
+                    className="absolute inset-x-0 bottom-0 top-0 transition-opacity duration-300"
+                    style={{
+                        opacity: view === "skills" ? 1 : 0,
+                        pointerEvents: view === "skills" ? "auto" : "none",
+                        zIndex: view === "skills" ? 10 : 0
+                    }}
+                >
+                    <SkillHub
+                        refreshKey={skillRefreshKey}
+                        onSelectSkill={(s) => { setActiveSkill(s); setIsSkillEditorOpen(true); }}
+                        onCreateNew={() => { setActiveSkill(null); setIsSkillEditorOpen(true); }}
+                    />
+                </div>
+
+                {/* Persistent Graph View */}
+                <div
+                    className="absolute inset-x-0 bottom-0 top-0 flex flex-col transition-opacity duration-300"
+                    style={{
+                        opacity: view === "graph" ? 1 : 0,
+                        pointerEvents: view === "graph" ? "auto" : "none",
+                        zIndex: view === "graph" ? 10 : 0
+                    }}
+                >
+                    <Suspense fallback={<div className="flex-1 flex items-center justify-center bg-dc-bg"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-dc-accent" /></div>}>
+                        <div className="absolute top-6 right-20 z-10 flex items-center gap-2">
+                            <div className="flex bg-dc-bg-secondary/40 backdrop-blur-md rounded-xl p-0.5 border border-dc-border">
+                                <button
+                                    onClick={() => setGraphMode("2d")}
+                                    className={`px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider rounded-lg transition-all ${graphMode === "2d" ? "bg-dc-accent text-white shadow-lg" : "text-dc-text-muted hover:text-dc-text"}`}
                                 >
-                                    <KmsHistoryBrowser
-                                        relPath={activeNote.path}
-                                        onRestore={() => {
-                                            handleSelectNote(activeNote);
-                                            toast({
-                                                title: "Version Restored",
-                                                description: "The selected version has been restored and loaded.",
-                                            });
-                                        }}
-                                    />
-                                </motion.aside>
-                            )}
-                        </AnimatePresence>
-                    </div>
-                ) : (
-                    <div className="flex-1 flex flex-col items-center justify-center p-8">
-                        <div className="max-w-md w-full text-center space-y-4">
-                            <div className="mx-auto w-16 h-16 bg-dc-accent/10 rounded-2xl flex items-center justify-center text-dc-accent mb-6">
-                                <Book size={32} />
-                            </div>
-                            <h2 className="text-2xl font-bold tracking-tight text-dc-text">Select a note to get started</h2>
-                            <p className="text-dc-text-muted text-sm leading-relaxed">
-                                Every note you create is a local Markdown file stored securely in your vault.
-                                Use the sidebar to explore your knowledge graph.
-                            </p>
-                            <div className="pt-6 flex justify-center gap-3">
-                                <Button
-                                    size="sm"
-                                    className="bg-dc-accent hover:bg-dc-accent/90 text-white gap-2 px-6"
-                                    onClick={() => handleCreateNote()}
+                                    2D
+                                </button>
+                                <button
+                                    onClick={() => setGraphMode("3d")}
+                                    className={`px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider rounded-lg transition-all ${graphMode === "3d" ? "bg-dc-accent text-white shadow-lg" : "text-dc-text-muted hover:text-dc-text"}`}
                                 >
-                                    <Plus size={16} />
-                                    Create New Note
-                                </Button>
+                                    3D
+                                </button>
                             </div>
+
+                            <Button
+                                variant="secondary"
+                                size="sm"
+                                onClick={() => setGraphResetKey(prev => prev + 1)}
+                                className="h-[34px] rounded-xl bg-dc-bg-secondary/40 backdrop-blur-md border-dc-border text-dc-text-muted hover:text-dc-accent hover:border-dc-accent transition-all gap-2 px-3"
+                                title="Reset Camera View"
+                            >
+                                <Maximize2 size={14} />
+                                <span className="text-[10px] font-bold uppercase tracking-widest hidden sm:inline">Reset</span>
+                            </Button>
                         </div>
+
+                        {graphMode === "2d" ? (
+                            <KmsGraph
+                                onSelectNote={async (path: string) => {
+                                    const note = notes.find(n => n.path === path);
+                                    if (note) {
+                                        handleSelectNote(note);
+                                    } else {
+                                        const title = path.split(/[\\/]/).pop()?.replace('.md', '') || path;
+                                        handleSelectNote({ path, title } as KmsNoteDto);
+                                    }
+                                    setView("explorer");
+                                }}
+                                activeNotePath={activeNote?.path}
+                                isVisible={view === "graph"}
+                                resetKey={graphResetKey}
+                            />
+                        ) : (
+                            <KmsGraph3D
+                                onSelectNote={async (path: string) => {
+                                    const note = notes.find(n => n.path === path);
+                                    if (note) {
+                                        handleSelectNote(note);
+                                    } else {
+                                        const title = path.split(/[\\/]/).pop()?.replace('.md', '') || path;
+                                        handleSelectNote({ path, title } as KmsNoteDto);
+                                    }
+                                    setView("explorer");
+                                }}
+                                activeNotePath={activeNote?.path}
+                                isVisible={view === "graph"}
+                                resetKey={graphResetKey}
+                            />
+                        )}
+                    </Suspense>
+                </div>
+
+                {/* Explorer / Editor View */}
+                {(view === "explorer" || view === "logs") && (
+                    <div className="flex-1 h-full overflow-hidden flex flex-col">
+                        {view === "logs" ? (
+                            <KmsLogViewer />
+                        ) : activeNote ? (
+                            <div className="flex-1 flex overflow-hidden">
+                                <KmsEditor
+                                    path={activeNote.path}
+                                    initialContent={activeContent}
+                                    onSave={handleSaveNote}
+                                    onDelete={handleDeleteNote}
+                                    onRename={(newName) => handleRenameNote(newName).then(() => { })}
+                                    onSelectNote={(path: string) => {
+                                        const note = notes.find(n => n.path === path);
+                                        if (note) handleSelectNote(note);
+                                    }}
+                                    onOpenSkillEditor={() => handleOpenSkillEditor(activeNote.path)}
+                                    isZenMode={isZenMode}
+                                    onToggleZenMode={toggleZenMode}
+                                    onToggleHistory={() => setIsHistoryOpen(!isHistoryOpen)}
+                                    isHistoryOpen={isHistoryOpen}
+                                    onToggleTheme={toggleTheme}
+                                    currentTheme={currentTheme}
+                                    vaultPath={vaultPath}
+                                />
+                                <AnimatePresence>
+                                    {isHistoryOpen && (
+                                        <motion.aside
+                                            initial={{ width: 0, opacity: 0 }}
+                                            animate={{ width: 320, opacity: 1 }}
+                                            exit={{ width: 0, opacity: 0 }}
+                                            transition={{ duration: 0.2, ease: "easeOut" }}
+                                            className="border-l border-dc-border h-full bg-dc-bg-secondary/30 backdrop-blur-sm shadow-2xl z-20"
+                                        >
+                                            <KmsHistoryBrowser
+                                                relPath={activeNote.path}
+                                                onRestore={() => {
+                                                    handleSelectNote(activeNote);
+                                                    toast({
+                                                        title: "Version Restored",
+                                                        description: "The selected version has been restored and loaded.",
+                                                    });
+                                                }}
+                                            />
+                                        </motion.aside>
+                                    )}
+                                </AnimatePresence>
+                            </div>
+                        ) : (
+                            <div className="flex-1 flex flex-col items-center justify-center p-8">
+                                <div className="max-w-md w-full text-center space-y-4">
+                                    <div className="mx-auto w-16 h-16 bg-dc-accent/10 rounded-2xl flex items-center justify-center text-dc-accent mb-6">
+                                        <Book size={32} />
+                                    </div>
+                                    <h2 className="text-2xl font-bold tracking-tight text-dc-text">Select a note to get started</h2>
+                                    <p className="text-dc-text-muted text-sm leading-relaxed">
+                                        Every note you create is a local Markdown file stored securely in your vault.
+                                        Use the sidebar to explore your knowledge graph.
+                                    </p>
+                                    <div className="pt-6 flex justify-center gap-3">
+                                        <Button
+                                            size="sm"
+                                            className="bg-dc-accent hover:bg-dc-accent/90 text-white gap-2 px-6"
+                                            onClick={() => handleCreateNote()}
+                                        >
+                                            <Plus size={16} />
+                                            Create New Note
+                                        </Button>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
                     </div>
                 )}
 

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import { Markdown } from "tiptap-markdown";
@@ -11,12 +11,18 @@ import { MathExtension } from "./MathExtension";
 import { AdmonitionExtension } from "./AdmonitionExtension";
 import { FrontmatterExtension } from "./FrontmatterExtension";
 import { Button } from "../ui/button";
-import { Eye, Code, Save, Trash2, Sparkles, ChevronRight, ChevronLeft, FileText, ExternalLink, Link2, Sun, Moon, Maximize2, Minimize2, History } from "lucide-react";
+import {
+    Eye, Code, Save, Trash2, Sparkles, ChevronRight, ChevronLeft,
+    FileText, ExternalLink, Link2, Sun, Moon, Maximize2, Minimize2,
+    History, List, Globe
+} from "lucide-react";
+import KmsLocalGraph3D from "./KmsLocalGraph3D";
 import { WikiLinkExtension } from "./WikiLinkExtension";
 import { getTaurpc } from "../../lib/taurpc";
-import { KmsNoteDto, SearchResultDto, KmsLinksDto } from "../../bindings";
+import { KmsNoteDto, SearchResultDto, KmsLinksDto, SnippetLogicTestResultDto } from "../../bindings";
 import { Tooltip } from "../ui/tooltip";
 import { cn } from "../../lib/utils";
+import KmsSmartTemplateModal from "./KmsSmartTemplateModal";
 
 interface KmsEditorProps {
     path: string;
@@ -47,7 +53,42 @@ export default function KmsEditor({ path, initialContent, onSave, onDelete, onRe
     const [loadingSimilar, setLoadingSimilar] = useState(false);
     const [loadingLinks, setLoadingLinks] = useState(false);
     const [showSidebar, setShowSidebar] = useState(false);
-    const [sidebarTab, setSidebarTab] = useState<"similar" | "backlinks">("backlinks");
+    const [sidebarTab, setSidebarTab] = useState<"similar" | "backlinks" | "toc" | "spatial">("backlinks");
+    const [smartTemplateVisible, setSmartTemplateVisible] = useState(false);
+    const [smartTemplateData, setSmartTemplateData] = useState<SnippetLogicTestResultDto | null>(null);
+    const [evaluatingTemplate, setEvaluatingTemplate] = useState(false);
+    const [activeHeading, setActiveHeading] = useState<number>(-1);
+    const [sidebarWidth, setSidebarWidth] = useState(380);
+    const [isResizing, setIsResizing] = useState(false);
+
+    const startResizing = useCallback((e: React.MouseEvent) => {
+        e.preventDefault();
+        setIsResizing(true);
+    }, []);
+
+    const stopResizing = useCallback(() => {
+        setIsResizing(false);
+    }, []);
+
+    const resize = useCallback((e: MouseEvent) => {
+        if (isResizing) {
+            const newWidth = window.innerWidth - e.clientX;
+            if (newWidth > 260 && newWidth < 900) {
+                setSidebarWidth(newWidth);
+            }
+        }
+    }, [isResizing]);
+
+    useEffect(() => {
+        if (isResizing) {
+            window.addEventListener("mousemove", resize);
+            window.addEventListener("mouseup", stopResizing);
+        }
+        return () => {
+            window.removeEventListener("mousemove", resize);
+            window.removeEventListener("mouseup", stopResizing);
+        };
+    }, [isResizing, resize, stopResizing]);
 
     const filename = path.split(/[\\/]/).pop() || "";
 
@@ -111,9 +152,14 @@ export default function KmsEditor({ path, initialContent, onSave, onDelete, onRe
             processed = wrapWikiLinks(processed);
             processed = wrapImages(processed, vaultPath);
 
-            editor.commands.setContent(processed);
-            setContent(initialContent);
-            setIsDirty(false);
+            // Defer setContent to avoid flushSync warning during React lifecycle
+            setTimeout(() => {
+                if (editor) {
+                    editor.commands.setContent(processed);
+                    setContent(initialContent);
+                    setIsDirty(false);
+                }
+            }, 0);
         }
     }, [path, initialContent, editor]);
 
@@ -155,6 +201,92 @@ export default function KmsEditor({ path, initialContent, onSave, onDelete, onRe
         return () => clearTimeout(timer);
     }, [content, path]);
 
+    const headings = React.useMemo(() => {
+        const lines = content.split('\n');
+        const h: { level: number; text: string; index: number }[] = [];
+        let headingCount = 0;
+        for (const line of lines) {
+            const match = line.match(/^(#{1,6})\s+(.*)$/);
+            if (match) {
+                h.push({
+                    level: match[1].length,
+                    text: match[2].trim().replace(/\[\[.*?\]\]/g, (m) => m.replace(/\[\[|\]\]/g, '')),
+                    index: headingCount++
+                });
+            }
+        }
+        return h;
+    }, [content]);
+
+    const scrollToHeading = (index: number) => {
+        if (mode === "wysiwyg") {
+            const allHeadings = document.querySelectorAll(
+                '.ProseMirror h1, .ProseMirror h2, .ProseMirror h3, .ProseMirror h4, .ProseMirror h5, .ProseMirror h6'
+            );
+            if (allHeadings[index]) {
+                allHeadings[index].scrollIntoView({ behavior: 'smooth', block: 'start' });
+                setActiveHeading(index);
+            }
+        } else {
+            const lines = document.querySelectorAll('.cm-line');
+            let count = 0;
+            for (let i = 0; i < lines.length; i++) {
+                const text = lines[i].textContent || "";
+                const cleanText = text.replace(/[\u200B-\u200D\uFEFF]/g, ""); // strip zero-width chars if any
+                if (/^#{1,6}\s+/.test(cleanText)) {
+                    if (count === index) {
+                        lines[i].scrollIntoView({ behavior: 'smooth', block: 'start' });
+                        setActiveHeading(index);
+                        break;
+                    }
+                    count++;
+                }
+            }
+        }
+    };
+
+    // Scroll Spy Logic
+    useEffect(() => {
+        const editorArea = document.querySelector('.editor-scroll-area');
+        if (!editorArea) return;
+
+        const handleScroll = () => {
+            if (sidebarTab !== "toc" || !showSidebar) return;
+
+            const headingElements = mode === "wysiwyg"
+                ? document.querySelectorAll('.ProseMirror h1, .ProseMirror h2, .ProseMirror h3, .ProseMirror h4, .ProseMirror h5, .ProseMirror h6')
+                : document.querySelectorAll('.cm-line');
+
+            let current = -1;
+            let count = 0;
+
+            if (mode === "wysiwyg") {
+                headingElements.forEach((h, i) => {
+                    const rect = h.getBoundingClientRect();
+                    // If heading is near the top of the viewport area
+                    if (rect.top < 200) {
+                        current = i;
+                    }
+                });
+            } else {
+                for (let i = 0; i < headingElements.length; i++) {
+                    const text = headingElements[i].textContent || "";
+                    if (/^#{1,6}\s+/.test(text.replace(/[\u200B-\u200D\uFEFF]/g, ""))) {
+                        const rect = headingElements[i].getBoundingClientRect();
+                        if (rect.top < 200) {
+                            current = count;
+                        }
+                        count++;
+                    }
+                }
+            }
+            setActiveHeading(current);
+        };
+
+        editorArea.addEventListener('scroll', handleScroll);
+        return () => editorArea.removeEventListener('scroll', handleScroll);
+    }, [mode, sidebarTab, showSidebar, content]);
+
     const handleSave = async () => {
         if (!isDirty || saving) return;
         setSaving(true);
@@ -163,6 +295,62 @@ export default function KmsEditor({ path, initialContent, onSave, onDelete, onRe
             setIsDirty(false);
         } finally {
             setSaving(false);
+        }
+    };
+
+    const handleEvaluateSmartTemplates = async (userValues: Record<string, string> | null = null) => {
+        if (!editor && mode === "wysiwyg") return;
+        if (evaluatingTemplate) return;
+
+        let selectedText = "";
+        let selectionRange = { from: 0, to: 0 };
+
+        if (mode === "wysiwyg" && editor) {
+            const { from, to } = editor.state.selection;
+            if (from === to) {
+                // No selection, use entire content
+                selectedText = content;
+                selectionRange = { from: 0, to: content.length };
+            } else {
+                selectedText = editor.state.doc.textBetween(from, to, " ");
+                selectionRange = { from, to };
+            }
+        } else {
+            // In source mode, just use entire content for now
+            selectedText = content;
+            selectionRange = { from: 0, to: content.length };
+        }
+
+        if (!selectedText.trim()) return;
+
+        setEvaluatingTemplate(true);
+        try {
+            const res = await getTaurpc().kms_evaluate_placeholders(selectedText, userValues);
+
+            if (res.requires_input && !userValues) {
+                setSmartTemplateData(res);
+                setSmartTemplateVisible(true);
+            } else {
+                setSmartTemplateVisible(false);
+                setSmartTemplateData(null);
+
+                // Replace content
+                if (mode === "wysiwyg" && editor) {
+                    const { from, to } = selectionRange;
+                    if (from === 0 && to === content.length) {
+                        editor.commands.setContent(res.result);
+                    } else {
+                        editor.commands.insertContentAt({ from, to }, res.result);
+                    }
+                } else {
+                    setContent(res.result);
+                    setIsDirty(true);
+                }
+            }
+        } catch (error) {
+            console.error("Failed to evaluate smart template:", error);
+        } finally {
+            setEvaluatingTemplate(false);
         }
     };
 
@@ -218,6 +406,23 @@ export default function KmsEditor({ path, initialContent, onSave, onDelete, onRe
                             <Code size={14} />
                             Source
                         </Button>
+                    </div>
+
+                    <div className="flex items-center gap-1">
+                        <Tooltip content="Evaluate Smart Templates ({js:...}, {date}, etc)">
+                            <Button
+                                variant="ghost"
+                                size="sm"
+                                className={cn(
+                                    "h-8 w-8 p-0 text-dc-accent hover:bg-dc-accent/10 transition-all",
+                                    evaluatingTemplate && "animate-pulse"
+                                )}
+                                onClick={() => handleEvaluateSmartTemplates()}
+                                disabled={evaluatingTemplate}
+                            >
+                                <Sparkles size={16} />
+                            </Button>
+                        </Tooltip>
                     </div>
 
                     <div className="h-6 w-[1px] border-l border-dc-border mx-1" />
@@ -345,13 +550,31 @@ export default function KmsEditor({ path, initialContent, onSave, onDelete, onRe
                                 </Button>
                             </Tooltip>
                         )}
+                        {!isZenMode && (
+                            <Tooltip content="Open Contextual Sub-Graph">
+                                <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className={cn(
+                                        "h-8 w-8 p-0 transition-all border border-transparent",
+                                        sidebarTab === "spatial" && showSidebar ? "bg-dc-accent/20 text-dc-accent border-dc-accent/40" : "text-dc-text-muted hover:bg-dc-bg-hover hover:text-dc-accent"
+                                    )}
+                                    onClick={() => {
+                                        setSidebarTab("spatial");
+                                        setShowSidebar(true);
+                                    }}
+                                >
+                                    <Globe size={16} />
+                                </Button>
+                            </Tooltip>
+                        )}
 
                     </div>
                 </div>
             </header>
 
             {/* Editor Area */}
-            <div className="flex-1 overflow-y-auto scrollbar-thin scrollbar-thumb-dc-border scrollbar-track-transparent bg-dc-bg">
+            <div className="flex-1 overflow-y-auto scrollbar-thin scrollbar-thumb-dc-border scrollbar-track-transparent bg-dc-bg editor-scroll-area">
                 {mode === "wysiwyg" ? (
                     <div className="mx-auto max-w-4xl px-4 py-8 min-h-full">
                         <EditorContent editor={editor} />
@@ -361,7 +584,7 @@ export default function KmsEditor({ path, initialContent, onSave, onDelete, onRe
                         <CodeMirror
                             value={content}
                             height="100%"
-                            theme="dark" // TODO: We should match DigiCore theme
+                            theme={currentTheme === "dark" ? "dark" : "light"}
                             extensions={[markdown()]}
                             onChange={(value) => {
                                 setContent(value);
@@ -380,28 +603,66 @@ export default function KmsEditor({ path, initialContent, onSave, onDelete, onRe
 
             {/* Sidebar overlay */}
             {showSidebar && (
-                <div className="absolute top-[61px] right-0 bottom-[33px] w-80 bg-dc-bg-secondary/95 backdrop-blur-xl border-l border-dc-border z-40 flex flex-col shadow-2xl animate-in slide-in-from-right duration-300">
+                <div
+                    style={{ width: `${sidebarWidth}px` }}
+                    className={cn(
+                        "absolute top-[61px] right-0 bottom-[33px] bg-dc-bg-secondary/95 backdrop-blur-xl border-l border-dc-border z-40 flex flex-col shadow-2xl animate-in slide-in-from-right duration-300",
+                        isResizing && "transition-none select-none"
+                    )}
+                >
+                    {/* Resize Handle */}
+                    <div
+                        className="absolute left-[-2px] top-0 bottom-0 w-1 cursor-col-resize hover:bg-dc-accent/50 z-50 transition-colors group/handle"
+                        onMouseDown={startResizing}
+                    >
+                        <div className="absolute inset-y-0 left-[-4px] right-[-4px]" /> {/* Invisible hitbox */}
+                    </div>
+
                     <div className="p-0 border-b border-dc-border flex items-center justify-between bg-dc-accent/5">
-                        <div className="flex flex-1">
+                        <div className="flex flex-1 overflow-hidden">
                             <button
                                 className={cn(
-                                    "flex-1 py-3 px-4 text-[10px] font-bold uppercase tracking-wider transition-all flex items-center justify-center gap-2",
+                                    "flex-1 py-3 px-1 text-[9px] font-bold uppercase tracking-tight transition-all flex items-center justify-center gap-1 min-w-0",
                                     sidebarTab === "backlinks" ? "bg-dc-accent/10 text-dc-accent border-b-2 border-dc-accent" : "text-dc-text-muted hover:text-dc-text"
                                 )}
                                 onClick={() => setSidebarTab("backlinks")}
+                                title="Backlinks"
                             >
-                                <Link2 size={14} />
-                                Backlinks ({links?.incoming.length || 0})
+                                <Link2 size={12} className="flex-shrink-0" />
+                                <span className="truncate">Links ({links?.incoming.length || 0})</span>
                             </button>
                             <button
                                 className={cn(
-                                    "flex-1 py-3 px-4 text-[10px] font-bold uppercase tracking-wider transition-all flex items-center justify-center gap-2",
+                                    "flex-1 py-3 px-1 text-[9px] font-bold uppercase tracking-tight transition-all flex items-center justify-center gap-1 min-w-0",
                                     sidebarTab === "similar" ? "bg-dc-accent/10 text-dc-accent border-b-2 border-dc-accent" : "text-dc-text-muted hover:text-dc-text"
                                 )}
                                 onClick={() => setSidebarTab("similar")}
+                                title="Similar Notes"
                             >
-                                <Sparkles size={14} />
-                                Similar
+                                <Sparkles size={12} className="flex-shrink-0" />
+                                <span className="truncate">Similar</span>
+                            </button>
+                            <button
+                                className={cn(
+                                    "flex-1 py-3 px-1 text-[9px] font-bold uppercase tracking-tight transition-all flex items-center justify-center gap-1 min-w-0",
+                                    sidebarTab === "toc" ? "bg-dc-accent/10 text-dc-accent border-b-2 border-dc-accent" : "text-dc-text-muted hover:text-dc-text"
+                                )}
+                                onClick={() => setSidebarTab("toc")}
+                                title="Table of Contents"
+                            >
+                                <List size={12} className="flex-shrink-0" />
+                                <span className="truncate">TOC</span>
+                            </button>
+                            <button
+                                className={cn(
+                                    "flex-1 py-3 px-1 text-[9px] font-bold uppercase tracking-tight transition-all flex items-center justify-center gap-1 min-w-0",
+                                    sidebarTab === "spatial" ? "bg-dc-accent/10 text-dc-accent border-b-2 border-dc-accent" : "text-dc-text-muted hover:text-dc-text"
+                                )}
+                                onClick={() => setSidebarTab("spatial")}
+                                title="Local Resonance"
+                            >
+                                <Globe size={12} className="flex-shrink-0" />
+                                <span className="truncate">Spatial</span>
                             </button>
                         </div>
                         <Button
@@ -414,63 +675,124 @@ export default function KmsEditor({ path, initialContent, onSave, onDelete, onRe
                         </Button>
                     </div>
 
-                    <div className="flex-1 overflow-y-auto p-3 custom-scrollbar">
-                        {sidebarTab === "similar" ? (
-                            <div className="space-y-3">
-                                {loadingSimilar && similarNotes.length === 0 ? (
-                                    <div className="flex flex-col items-center justify-center py-10 gap-3 opacity-50">
-                                        <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-dc-accent" />
-                                        <span className="text-[10px]">Analyzing context...</span>
-                                    </div>
-                                ) : similarNotes.length === 0 ? (
-                                    <div className="text-center py-10 px-4">
-                                        <p className="text-[10px] text-dc-text-muted italic">Keep writing to discover related notes and snippets.</p>
-                                    </div>
-                                ) : (
-                                    similarNotes.map((result, idx) => (
-                                        <ResultItem key={`${result.entity_id}-${idx}`} result={result} onSelect={onSelectNote} />
-                                    ))
-                                )}
-                            </div>
-                        ) : (
-                            <div className="space-y-3">
-                                {loadingLinks ? (
-                                    <div className="flex flex-col items-center justify-center py-10 gap-3 opacity-50">
-                                        <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-dc-accent" />
-                                        <span className="text-[10px]">Mapping connections...</span>
-                                    </div>
-                                ) : !links || links.incoming.length === 0 ? (
-                                    <div className="text-center py-10 px-4">
-                                        <p className="text-[10px] text-dc-text-muted italic">No backlinks found for this note yet.</p>
-                                    </div>
-                                ) : (
-                                    links.incoming.map((note) => (
-                                        <div
-                                            key={note.path}
-                                            className="group p-3 rounded-xl border border-dc-border bg-dc-bg/50 hover:border-dc-accent/50 hover:bg-dc-accent/5 transition-all cursor-pointer shadow-sm"
-                                            onClick={() => onSelectNote?.(note.path)}
-                                        >
-                                            <div className="flex items-center gap-2 mb-2">
-                                                <div className="p-1 bg-dc-accent/10 rounded text-dc-accent">
-                                                    <Link2 size={10} />
-                                                </div>
-                                                <span className="text-[10px] font-semibold text-dc-accent uppercase tracking-tighter">
-                                                    REFERENCE
-                                                </span>
-                                            </div>
-                                            <h4 className="text-xs font-medium text-dc-text group-hover:text-dc-accent transition-colors truncate">
-                                                {note.title}
-                                            </h4>
-                                            {note.preview && (
-                                                <p className="text-[10px] text-dc-text-muted line-clamp-2 mt-1 opacity-70">
-                                                    {note.preview}
-                                                </p>
-                                            )}
+                    <div className="flex-1 relative overflow-hidden">
+                        {/* Persistent Tab Containers */}
+                        <div className={cn("absolute inset-0 overflow-y-auto p-3 space-y-3 custom-scrollbar", sidebarTab !== "similar" && "hidden")}>
+                            {loadingSimilar && similarNotes.length === 0 ? (
+                                <div className="flex flex-col items-center justify-center py-10 gap-3 opacity-50">
+                                    <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-dc-accent" />
+                                    <span className="text-[10px]">Analyzing context...</span>
+                                </div>
+                            ) : similarNotes.length === 0 ? (
+                                <div className="text-center py-10 px-4">
+                                    <p className="text-[10px] text-dc-text-muted italic">Keep writing to discover related notes and snippets.</p>
+                                </div>
+                            ) : (
+                                similarNotes.map((result, idx) => (
+                                    <ResultItem key={`${result.entity_id}-${idx}`} result={result} onSelect={onSelectNote} />
+                                ))
+                            )}
+                        </div>
+
+                        <div className={cn("absolute inset-0 overflow-y-auto p-3 space-y-1 custom-scrollbar", sidebarTab !== "toc" && "hidden")}>
+                            {headings.length === 0 ? (
+                                <div className="text-center py-10 px-4">
+                                    <p className="text-[10px] text-dc-text-muted italic">No headings found in this note.</p>
+                                </div>
+                            ) : (
+                                headings.map((h, i) => (
+                                    <div
+                                        key={i}
+                                        className={cn(
+                                            "relative py-1.5 px-3 rounded-lg cursor-pointer transition-all flex items-start gap-3 group",
+                                            activeHeading === i ? "bg-dc-accent/10 text-dc-accent font-medium shadow-sm" : "hover:bg-dc-bg-hover text-dc-text-muted hover:text-dc-text"
+                                        )}
+                                        style={{ marginLeft: `${(h.level - 1) * 12}px` }}
+                                        onClick={() => scrollToHeading(i)}
+                                    >
+                                        {/* Indentation Line */}
+                                        {h.level > 1 && (
+                                            <div className="absolute left-[-10px] top-0 bottom-0 w-[1px] bg-dc-border group-hover:bg-dc-accent/30 transition-colors" />
+                                        )}
+
+                                        <div className={cn(
+                                            "mt-1.5 transition-all duration-300",
+                                            activeHeading === i ? "opacity-100 scale-125" : "opacity-20 group-hover:opacity-60"
+                                        )}>
+                                            <div className={cn(
+                                                "w-1.5 h-1.5 rounded-full",
+                                                activeHeading === i ? "bg-dc-accent shadow-[0_0_8px_rgba(var(--dc-accent-rgb),0.6)]" : "bg-dc-text-muted"
+                                            )} />
                                         </div>
-                                    ))
-                                )}
+
+                                        <span className={cn(
+                                            "text-xs leading-relaxed",
+                                            h.level === 1 ? "uppercase tracking-tight font-bold" : ""
+                                        )}>
+                                            {h.text}
+                                        </span>
+                                    </div>
+                                ))
+                            )}
+                        </div>
+
+                        <div className={cn("absolute inset-0 overflow-y-auto p-3 h-full flex flex-col gap-4 overflow-hidden custom-scrollbar", sidebarTab !== "spatial" && "hidden")}>
+                            <div className="h-[500px] min-h-[500px] w-full rounded-2xl overflow-hidden border border-white/5 bg-black/20 shadow-inner relative">
+                                <KmsLocalGraph3D
+                                    path={path}
+                                    onSelectNote={(p) => {
+                                        if (onSelectNote) onSelectNote(p);
+                                    }}
+                                />
                             </div>
-                        )}
+                            <div className="p-4 rounded-2xl bg-dc-accent/5 border border-dc-accent/10 mb-4">
+                                <div className="flex items-center gap-2 mb-2">
+                                    <div className="w-1.5 h-1.5 rounded-full bg-dc-accent animate-pulse" />
+                                    <span className="text-[10px] font-bold uppercase tracking-widest text-dc-accent">Resonance Dynamics</span>
+                                </div>
+                                <p className="text-[10px] text-dc-text-muted leading-relaxed italic opacity-80">
+                                    Sub-graph depth 2 centered on focus. Click background to toggle spin.
+                                </p>
+                            </div>
+                        </div>
+
+                        <div className={cn("absolute inset-0 overflow-y-auto p-3 space-y-3 custom-scrollbar", sidebarTab !== "backlinks" && "hidden")}>
+                            {loadingLinks ? (
+                                <div className="flex flex-col items-center justify-center py-10 gap-3 opacity-50">
+                                    <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-dc-accent" />
+                                    <span className="text-[10px]">Mapping connections...</span>
+                                </div>
+                            ) : !links || links.incoming.length === 0 ? (
+                                <div className="text-center py-10 px-4">
+                                    <p className="text-[10px] text-dc-text-muted italic">No backlinks found for this note yet.</p>
+                                </div>
+                            ) : (
+                                links.incoming.map((note) => (
+                                    <div
+                                        key={note.path}
+                                        className="group p-3 rounded-xl border border-dc-border bg-dc-bg/50 hover:border-dc-accent/50 hover:bg-dc-accent/5 transition-all cursor-pointer shadow-sm"
+                                        onClick={() => onSelectNote?.(note.path)}
+                                    >
+                                        <div className="flex items-center gap-2 mb-2">
+                                            <div className="p-1 bg-dc-accent/10 rounded text-dc-accent">
+                                                <Link2 size={10} />
+                                            </div>
+                                            <span className="text-[10px] font-semibold text-dc-accent uppercase tracking-tighter">
+                                                REFERENCE
+                                            </span>
+                                        </div>
+                                        <h4 className="text-xs font-medium text-dc-text group-hover:text-dc-accent transition-colors truncate">
+                                            {note.title}
+                                        </h4>
+                                        {note.preview && (
+                                            <p className="text-[10px] text-dc-text-muted line-clamp-2 mt-1 opacity-70">
+                                                {note.preview}
+                                            </p>
+                                        )}
+                                    </div>
+                                ))
+                            )}
+                        </div>
                     </div>
                 </div>
             )}
@@ -504,6 +826,13 @@ export default function KmsEditor({ path, initialContent, onSave, onDelete, onRe
                     </div>
                 </footer>
             )}
+
+            <KmsSmartTemplateModal
+                visible={smartTemplateVisible}
+                data={smartTemplateData}
+                onOk={(values: Record<string, string>) => handleEvaluateSmartTemplates(values)}
+                onCancel={() => setSmartTemplateVisible(false)}
+            />
         </div>
     );
 }
@@ -511,12 +840,7 @@ export default function KmsEditor({ path, initialContent, onSave, onDelete, onRe
 // --- Helper Functions for Wiki-link Handling ---
 
 function wrapWikiLinks(md: string): string {
-    if (!md) return md;
-    // Look for [[link]] but NOT inside existing HTML tags or code blocks
-    // Simple version first: replace all [[...]] that are not already in a data-target
-    return md.replace(/\[\[([^\]]+)\]\]/g, (match, target) => {
-        // Basic check to see if we are already inside a span we created
-        // (Though wrap is usually called on fresh markdown)
+    return wrapExceptCodeBlocks(md, /\[\[([^\]]+)\]\]/g, (match, target) => {
         return `<span data-type="wiki-link" data-target="${target}">[[${target}]]</span>`;
     });
 }
@@ -530,8 +854,8 @@ function unwrapWikiLinks(md: string): string {
 
 function wrapImages(md: string, vaultPath: string | null | undefined): string {
     if (!md) return md;
-    // Look for ![alt](src)
-    return md.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (match, alt, src) => {
+    // Look for ![alt](src) but NOT inside code blocks
+    return wrapExceptCodeBlocks(md, /!\[([^\]]*)\]\(([^)]+)\)/g, (match, alt, src) => {
         if (src.startsWith('http') || src.startsWith('data:')) {
             return match;
         }
@@ -599,11 +923,10 @@ function unwrapFrontmatter(md: string): string {
 }
 
 function wrapMath(md: string): string {
-    if (!md) return md;
     // Replace block math $$ ... $$
-    let processed = md.replace(/\$\$([\s\S]+?)\$\$/g, '<div data-type="math" data-display="true">$1</div>');
-    // Replace inline math $ ... $ (avoiding $ in other contexts is tricky but this is a common approach)
-    processed = processed.replace(/\$([^$]+?)\$/g, '<span data-type="math" data-display="false">$1</span>');
+    let processed = wrapExceptCodeBlocks(md, /\$\$([\s\S]+?)\$\$/g, '<div data-type="math" data-display="true">$1</div>');
+    // Replace inline math $ ... $
+    processed = wrapExceptCodeBlocks(processed, /\$([^$]+?)\$/g, '<span data-type="math" data-display="false">$1</span>');
     return processed;
 }
 
@@ -617,9 +940,18 @@ function unwrapMath(md: string): string {
 }
 
 function wrapAdmonitions(md: string): string {
-    if (!md) return md;
     // Support ::: type ... ::: blocks
-    return md.replace(/:::(\w+)\n?([\s\S]+?)\n?:::/g, '<div data-type="admonition" data-admonition-type="$1">$2</div>');
+    return wrapExceptCodeBlocks(md, /:::(\w+)\n?([\s\S]+?)\n?:::/g, '<div data-type="admonition" data-admonition-type="$1">$2</div>');
+}
+
+function wrapExceptCodeBlocks(text: string, regex: RegExp, replacement: string | ((substring: string, ...args: any[]) => string)): string {
+    if (!text) return text;
+    // Split by code blocks (triple backticks OR tildes)
+    const parts = text.split(/(```[\s\S]*?```|~~~[\s\S]*?~~~)/g);
+    return parts.map(part => {
+        if (part.startsWith('```') || part.startsWith('~~~')) return part;
+        return part.replace(regex, replacement as any);
+    }).join('');
 }
 
 function unwrapAdmonitions(md: string): string {
