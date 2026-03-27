@@ -30,6 +30,14 @@ pub struct KmsNoteRow {
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct KmsNoteMinimal {
+    pub id: i32,
+    pub path: String,
+    pub title: String,
+    pub last_modified: Option<String>,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct KmsIndexStatusRow {
     pub entity_type: String,
     pub entity_id: String,
@@ -45,6 +53,15 @@ pub struct KmsLog {
     pub message: String,
     pub details: Option<String>,
     pub timestamp: String,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct KmsDiagSummary {
+    pub note_count: u32,
+    pub snippet_count: u32,
+    pub clip_count: u32,
+    pub vector_count: u32,
+    pub error_log_count: u32,
 }
 
 static DB_CONN: OnceLock<Mutex<Connection>> = OnceLock::new();
@@ -268,6 +285,29 @@ pub fn get_category_counts(category: &str) -> KmsResult<(u32, u32, u32)> {
     let failed: u32 = conn.query_row("SELECT COUNT(*) FROM kms_index_status WHERE entity_type = ?1 AND status = 'failed'", params![category], |r| r.get(0))?;
     
     Ok((indexed, failed, total))
+}
+
+pub fn get_diag_summary() -> KmsResult<KmsDiagSummary> {
+    let conn = conn_guard()?;
+    
+    let note_count: u32 = conn.query_row("SELECT COUNT(*) FROM kms_notes", [], |r| r.get(0)).unwrap_or(0);
+    let snippet_count: u32 = conn.query_row("SELECT COUNT(*) FROM snippets", [], |r| r.get(0)).unwrap_or(0);
+    let clip_count: u32 = conn.query_row("SELECT COUNT(*) FROM clipboard_history", [], |r| r.get(0)).unwrap_or(0);
+    let error_log_count: u32 = conn.query_row("SELECT COUNT(*) FROM kms_logs WHERE level = 'error' OR level = 'warn'", [], |r| r.get(0)).unwrap_or(0);
+    
+    let vector_count: u32 = conn.query_row(
+        "SELECT (SELECT COUNT(*) FROM kms_embeddings_text) + (SELECT COUNT(*) FROM kms_embeddings_image)",
+        [],
+        |r| r.get(0)
+    ).unwrap_or(0);
+
+    Ok(KmsDiagSummary {
+        note_count,
+        snippet_count,
+        clip_count,
+        vector_count,
+        error_log_count,
+    })
 }
 
 pub fn insert_log(level: &str, message: &str, details: Option<&str>) -> KmsResult<()> {
@@ -1079,4 +1119,125 @@ impl SkillRepository for KmsSkillRepository {
     fn vault_path(&self) -> PathBuf {
         get_vault_path().unwrap_or_default()
     }
+}
+pub fn get_all_links() -> KmsResult<Vec<(String, String)>> {
+    let conn = conn_guard()?;
+    let mut stmt = conn.prepare("SELECT source_path, target_path FROM kms_links")?;
+    let rows = stmt.query_map([], |row| {
+        Ok((row.get(0)?, row.get(1)?))
+    })?;
+    
+    let mut links = Vec::new();
+    for link in rows {
+        links.push(link?);
+    }
+    Ok(links)
+}
+
+pub fn get_all_notes_minimal() -> KmsResult<Vec<KmsNoteMinimal>> {
+    let conn = conn_guard()?;
+    let mut stmt = conn.prepare("SELECT id, path, title, last_modified FROM kms_notes")?;
+    let rows = stmt.query_map([], |row| {
+        Ok(KmsNoteMinimal {
+            id: row.get(0)?,
+            path: row.get(1)?,
+            title: row.get(2)?,
+            last_modified: row.get(3)?,
+        })
+    })?;
+    
+    let mut notes = Vec::new();
+    for note in rows {
+        notes.push(note?);
+    }
+    Ok(notes)
+}
+
+pub fn get_all_note_embeddings() -> KmsResult<Vec<(String, Vec<f32>)>> {
+    let conn = conn_guard()?;
+    let mut stmt = conn.prepare(
+        "SELECT m.entity_id, v.embedding 
+         FROM kms_embeddings_text v
+         JOIN kms_vector_map m ON v.rowid = m.vec_id
+         WHERE m.entity_type = 'note' AND m.modality = 'text'"
+    )?;
+    
+    let rows = stmt.query_map([], |row| {
+        let path: String = row.get(0)?;
+        let blob: Vec<u8> = row.get(1)?;
+        // Convert blob (bytes) to Vec<f32>
+        let f32_count = blob.len() / 4;
+        let mut embedding = Vec::with_capacity(f32_count);
+        for i in 0..f32_count {
+            let mut bytes = [0u8; 4];
+            bytes.copy_from_slice(&blob[i*4..(i+1)*4]);
+            embedding.push(f32::from_le_bytes(bytes));
+        }
+        Ok((path, embedding))
+    })?;
+    
+    let mut results = Vec::new();
+    for r in rows {
+        results.push(r?);
+    }
+    Ok(results)
+}
+
+pub fn calculate_kmeans_clusters(data: &[Vec<f32>], k: usize, max_iterations: usize) -> Vec<usize> {
+    if data.is_empty() { return Vec::new(); }
+    if k <= 1 || data.len() <= k {
+        // Return 0 for everything if k=1, or unique IDs if len <= k
+        return (0..data.len()).map(|i| if k > 0 { i % k } else { 0 }).collect();
+    }
+
+    let dim = data[0].len();
+    // Simple Forgy initialization (taking first K points as initial centroids)
+    let mut centroids: Vec<Vec<f32>> = data.iter().take(k).cloned().collect();
+    let mut assignments = vec![0; data.len()];
+
+    for _ in 0..max_iterations {
+        let mut changed = false;
+
+        // Assignment step: find nearest centroid for each point
+        for (i, point) in data.iter().enumerate() {
+            let mut min_dist = f32::MAX;
+            let mut best_cluster = 0;
+            for (c_idx, centroid) in centroids.iter().enumerate() {
+                // Euclidean distance squared (sufficient for comparison)
+                let dist = point.iter().zip(centroid.iter())
+                    .map(|(a, b)| (a - b).powi(2))
+                    .sum::<f32>();
+                if dist < min_dist {
+                    min_dist = dist;
+                    best_cluster = c_idx;
+                }
+            }
+            if assignments[i] != best_cluster {
+                assignments[i] = best_cluster;
+                changed = true;
+            }
+        }
+
+        if !changed { break; }
+
+        // Update step: calculate mean of points in each cluster
+        let mut new_centroids = vec![vec![0.0; dim]; k];
+        let mut counts = vec![0; k];
+        for (i, cluster_idx) in assignments.iter().enumerate() {
+            counts[*cluster_idx] += 1;
+            for d in 0..dim {
+                new_centroids[*cluster_idx][d] += data[i][d];
+            }
+        }
+
+        for c_idx in 0..k {
+            if counts[c_idx] > 0 {
+                for d in 0..dim {
+                    centroids[c_idx][d] = new_centroids[c_idx][d] / counts[c_idx] as f32;
+                }
+            }
+        }
+    }
+
+    assignments
 }

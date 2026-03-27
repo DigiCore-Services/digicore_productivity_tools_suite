@@ -45,7 +45,7 @@ use digicore_text_expander::ports::{storage_keys, StoragePort};
 use digicore_text_expander::services::extraction_service::create_extraction_service;
 use digicore_core::domain::{ExtractionSource, ExtractionMimeType};
 use chrono;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use tauri::{AppHandle, Emitter, Manager};
@@ -1484,6 +1484,16 @@ pub trait Api {
     async fn kms_add_skill_resource(skill_name: String, source_path: String, target_subdir: Option<String>) -> Result<SkillResourceDto, String>;
     async fn kms_remove_skill_resource(skill_name: String, rel_path: String) -> Result<(), String>;
     async fn kms_check_skill_conflicts(skill_name: String, sync_targets: Vec<String>) -> Result<Vec<SyncConflictDto>, String>;
+    
+    // --- Diagnostics ---
+    async fn kms_get_diagnostics() -> Result<KmsDiagnosticsDto, String>;
+    async fn kms_prune_history() -> Result<String, String>;
+    async fn kms_evaluate_placeholders(
+        content: String,
+        user_values: Option<HashMap<String, String>>,
+    ) -> Result<SnippetLogicTestResultDto, String>;
+    async fn kms_get_graph() -> Result<KmsGraphDto, String>;
+    async fn kms_get_local_graph(path: String, depth: u32) -> Result<KmsGraphDto, String>;
 }
 
 #[taurpc::ipc_type]
@@ -1532,6 +1542,8 @@ pub struct KmsNoteDto {
     pub last_modified: Option<String>,
     pub is_favorite: bool,
     pub sync_status: String,
+    pub node_type: String,     // "note" | "skill" | "image" | "asset"
+    pub folder_path: String,   // For grouping
 }
 
 #[taurpc::ipc_type]
@@ -1557,6 +1569,44 @@ pub struct KmsFileSystemItemDto {
 pub struct KmsLinksDto {
     pub outgoing: Vec<KmsNoteDto>,
     pub incoming: Vec<KmsNoteDto>,
+}
+
+#[taurpc::ipc_type]
+pub struct KmsNodeDto {
+    pub id: i32,
+    pub path: String,
+    pub title: String,
+    pub node_type: String,     // "note" | "skill" | "image" | "asset"
+    pub last_modified: String, // ISO 8601 or display date
+    pub folder_path: String,   // For clustering
+    pub cluster_id: Option<i32>,
+}
+
+#[taurpc::ipc_type]
+pub struct KmsEdgeDto {
+    pub source: String,
+    pub target: String,
+}
+
+#[taurpc::ipc_type]
+pub struct KmsClusterLabelDto {
+    pub cluster_id: i32,
+    pub label: String,
+}
+
+#[taurpc::ipc_type]
+pub struct KmsAiBeamDto {
+    pub source_path: String,
+    pub target_path: String,
+    pub summary: String,
+}
+
+#[taurpc::ipc_type]
+pub struct KmsGraphDto {
+    pub nodes: Vec<KmsNodeDto>,
+    pub edges: Vec<KmsEdgeDto>,
+    pub cluster_labels: Vec<KmsClusterLabelDto>,
+    pub ai_beams: Vec<KmsAiBeamDto>,
 }
 
 #[taurpc::ipc_type]
@@ -1586,6 +1636,15 @@ pub struct IndexingStatusDto {
     pub failed_count: u32,
     pub total_count: u32,
     pub last_error: Option<String>,
+}
+
+#[taurpc::ipc_type]
+pub struct KmsDiagnosticsDto {
+    pub note_count: u32,
+    pub snippet_count: u32,
+    pub clip_count: u32,
+    pub vector_count: u32,
+    pub error_log_count: u32,
 }
 
 #[taurpc::ipc_type]
@@ -1874,6 +1933,10 @@ fn open_file_in_default_app(path: &str) -> Result<(), String> {
     }
     #[allow(unreachable_code)]
     Err("Open image not supported on this platform.".to_string())
+}
+
+fn dot_product(v1: &[f32], v2: &[f32]) -> f32 {
+    v1.iter().zip(v2.iter()).map(|(a, b)| a * b).sum()
 }
 
 #[taurpc::resolvers]
@@ -4743,6 +4806,226 @@ end
         })
     }
 
+    async fn kms_evaluate_placeholders(
+        self,
+        content: String,
+        user_values: Option<HashMap<String, String>>,
+    ) -> Result<SnippetLogicTestResultDto, String> {
+        self.test_snippet_logic(content, user_values).await
+    }
+
+    async fn kms_get_graph(self) -> Result<KmsGraphDto, String> {
+        let notes = kms_repository::get_all_notes_minimal().map_err(|e| e.to_string())?;
+        let links = kms_repository::get_all_links().map_err(|e| e.to_string())?;
+        
+        let mut cluster_map = HashMap::new();
+        let mut global_ai_beams = Vec::new();
+
+        if let Ok(embedding_data) = kms_repository::get_all_note_embeddings() {
+            let embedding_count = embedding_data.len();
+            if !embedding_data.is_empty() {
+                let paths_for_embeddings: Vec<String> = embedding_data.iter().map(|(p, _)| p.clone()).collect();
+                let vectors: Vec<Vec<f32>> = embedding_data.iter().map(|(_, v)| v.clone()).collect();
+                
+                let k = (vectors.len() as f32).sqrt() as usize;
+                let k = k.max(2).min(10); // Cap k for reasonable visual grouping
+                
+                let clusters = kms_repository::calculate_kmeans_clusters(&vectors, k, 15);
+                for (path, cluster_id) in paths_for_embeddings.iter().zip(clusters.into_iter()) {
+                    cluster_map.insert(path.clone(), cluster_id as i32);
+                }
+                
+                // --- 🧠 AI Insight Beams Logic ---
+                let mut ai_beams = Vec::new();
+                
+                // We want to find pairs (A, B) where cluster(A) != cluster(B) but similarity > 0.90
+                let max_nodes = vectors.len().min(400); 
+                for i in 0..max_nodes {
+                    for j in (i + 1)..max_nodes {
+                        let path_a = &paths_for_embeddings[i];
+                        let path_b = &paths_for_embeddings[j];
+                        
+                        let cid_a = cluster_map.get(path_a).cloned().unwrap_or(-1);
+                        let cid_b = cluster_map.get(path_b).cloned().unwrap_or(-1);
+                        
+                        if cid_a != cid_b && cid_a != -1 && cid_b != -1 {
+                            let sim = dot_product(&vectors[i], &vectors[j]);
+                            if sim > 0.90 { // High bar for "Insight Beams"
+                                ai_beams.push(KmsAiBeamDto {
+                                    source_path: self.resolve_absolute_path(path_a).to_string_lossy().to_string(),
+                                    target_path: self.resolve_absolute_path(path_b).to_string_lossy().to_string(),
+                                    summary: format!("Deep Semantic Connection ({:.0}% match)", sim * 100.0),
+                                });
+                            }
+                        }
+                        
+                        if ai_beams.len() > 20 { break; } 
+                    }
+                    if ai_beams.len() > 20 { break; }
+                }
+                global_ai_beams = ai_beams;
+            }
+            log::info!("[KMS][Graph] Semantic Clustering: Found {} embeddings. Generated {} cluster assignments.", 
+                embedding_count, cluster_map.len());
+        }
+
+        let nodes: Vec<KmsNodeDto> = notes.into_iter().map(|n| {
+            let abs_path = self.resolve_absolute_path(&n.path).to_string_lossy().to_string();
+            
+            // Determine type and folder
+            let p = Path::new(&n.path);
+            let node_type = if n.path.contains("/skills/") {
+                "skill"
+            } else if n.path.to_lowercase().ends_with(".png") || n.path.to_lowercase().ends_with(".jpg") {
+                "image"
+            } else {
+                "note"
+            };
+            
+            let folder_path = p.parent()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|| "".to_string());
+
+            let cluster_id = cluster_map.get(&n.path).cloned();
+
+            KmsNodeDto {
+                id: n.id,
+                path: abs_path,
+                title: n.title,
+                node_type: node_type.to_string(),
+                last_modified: n.last_modified.unwrap_or_default(),
+                folder_path,
+                cluster_id,
+            }
+        }).collect();
+
+        // 🏷️ Generate Cluster Labels
+        let mut cluster_labels = Vec::new();
+        let mut clusters_to_nodes: HashMap<i32, Vec<&KmsNodeDto>> = HashMap::new();
+        for node in &nodes {
+            if let Some(cid) = node.cluster_id {
+                clusters_to_nodes.entry(cid).or_default().push(node);
+            }
+        }
+
+        for (cid, cluster_nodes) in clusters_to_nodes {
+            // Extract top keywords from titles
+            let mut word_counts: HashMap<String, usize> = HashMap::new();
+            let stop_words = ["the", "and", "a", "of", "to", "in", "is", "it", "for", "with", "on", "notes", "file", "new", "note"];
+            
+            for node in &cluster_nodes {
+                let clean_title = node.title.to_lowercase()
+                    .replace(|c: char| !c.is_alphanumeric(), " ");
+                for word in clean_title.split_whitespace() {
+                    if word.len() > 3 && !stop_words.contains(&word) {
+                        *word_counts.entry(word.to_string()).or_default() += 1;
+                    }
+                }
+            }
+            
+            let mut sorted_words: Vec<_> = word_counts.into_iter().collect();
+            sorted_words.sort_by(|a, b| b.1.cmp(&a.1));
+            
+            let label = sorted_words.into_iter()
+                .take(2)
+                .map(|(w, _)| {
+                    let mut c = w.chars();
+                    match c.next() {
+                        None => String::new(),
+                        Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(" & ");
+            
+            if !label.is_empty() {
+                cluster_labels.push(KmsClusterLabelDto { cluster_id: cid, label });
+            }
+        }
+        
+        let edges = links.into_iter().map(|(s, t)| {
+            KmsEdgeDto {
+                source: self.resolve_absolute_path(&s).to_string_lossy().to_string(),
+                target: self.resolve_absolute_path(&t).to_string_lossy().to_string(),
+            }
+        }).collect();
+        
+        Ok(KmsGraphDto { nodes, edges, cluster_labels, ai_beams: global_ai_beams })
+    }
+
+    async fn kms_get_local_graph(self, path: String, depth: u32) -> Result<KmsGraphDto, String> {
+        let all_notes = kms_repository::get_all_notes_minimal().map_err(|e| e.to_string())?;
+        let all_links = kms_repository::get_all_links().map_err(|e| e.to_string())?;
+        
+        // 1. Pre-normalize all paths for O(1) matching
+        let target_abs = self.resolve_absolute_path(&path).to_string_lossy().to_string().replace("\\", "/").to_lowercase();
+        
+        let mut adj = HashMap::new();
+        for (s_raw, t_raw) in &all_links {
+            let s = self.resolve_absolute_path(s_raw).to_string_lossy().to_string().replace("\\", "/").to_lowercase();
+            let t = self.resolve_absolute_path(t_raw).to_string_lossy().to_string().replace("\\", "/").to_lowercase();
+            
+            adj.entry(s.clone()).or_insert_with(Vec::new).push((t.clone(), s_raw.clone(), t_raw.clone()));
+            adj.entry(t.clone()).or_insert_with(Vec::new).push((s, t_raw.clone(), s_raw.clone()));
+        }
+
+        // 2. BFS on the adjacency list
+        let mut visited = HashSet::new();
+        let mut local_links_raw = Vec::new();
+        let mut queue = VecDeque::new();
+        
+        queue.push_back((target_abs.clone(), 0));
+        visited.insert(target_abs.clone());
+        
+        while let Some((curr, d)) = queue.pop_front() {
+            if d >= depth { continue; }
+            if let Some(neighbors) = adj.get(&curr) {
+                for (neighbor_abs, s_orig, t_orig) in neighbors {
+                    local_links_raw.push((s_orig.clone(), t_orig.clone()));
+                    if !visited.contains(neighbor_abs) {
+                        visited.insert(neighbor_abs.clone());
+                        queue.push_back((neighbor_abs.clone(), d + 1));
+                    }
+                }
+            }
+        }
+        
+        // 3. Construct KmsGraphDto (Absolute paths as IDs)
+        let nodes: Vec<KmsNodeDto> = all_notes.into_iter()
+            .filter(|n| visited.contains(&self.resolve_absolute_path(&n.path).to_string_lossy().to_string().replace("\\", "/").to_lowercase()))
+            .map(|n| {
+                let abs_path = self.resolve_absolute_path(&n.path).to_string_lossy().to_string();
+                let p = Path::new(&n.path);
+                let node_type = if n.path.contains("/skills/") { "skill" } 
+                               else if n.path.to_lowercase().ends_with(".png") || n.path.to_lowercase().ends_with(".jpg") { "image" }
+                               else { "note" };
+                
+                KmsNodeDto {
+                    id: n.id,
+                    path: abs_path,
+                    title: n.title,
+                    last_modified: n.last_modified.unwrap_or_default(),
+                    node_type: node_type.to_string(),
+                    folder_path: p.parent().map(|p| p.to_string_lossy().to_string()).unwrap_or_default(),
+                    cluster_id: None, 
+                }
+            }).collect();
+
+        let edges: Vec<KmsEdgeDto> = local_links_raw.into_iter()
+            .map(|(s, t)| KmsEdgeDto {
+                source: self.resolve_absolute_path(&s).to_string_lossy().to_string(),
+                target: self.resolve_absolute_path(&t).to_string_lossy().to_string(),
+            })
+            .collect();
+
+        Ok(KmsGraphDto {
+            nodes,
+            edges,
+            cluster_labels: Vec::new(),
+            ai_beams: Vec::new(),
+        })
+    }
+
     async fn get_weather_location_suggestions(
         self,
         city_query: String,
@@ -4837,6 +5120,20 @@ end
 
         let map_to_dto = |r: kms_repository::KmsNoteRow| {
             let abs_path = self.resolve_absolute_path(&r.path).to_string_lossy().to_string();
+            
+            let p = Path::new(&r.path);
+            let node_type = if r.path.contains("/skills/") {
+                "skill"
+            } else if r.path.to_lowercase().ends_with(".png") || r.path.to_lowercase().ends_with(".jpg") {
+                "image"
+            } else {
+                "note"
+            };
+            
+            let folder_path = p.parent()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|| "".to_string());
+
             KmsNoteDto {
                 id: r.id,
                 path: abs_path,
@@ -4845,6 +5142,8 @@ end
                 last_modified: r.last_modified,
                 is_favorite: r.is_favorite,
                 sync_status: r.sync_status,
+                node_type: node_type.to_string(),
+                folder_path,
             }
         };
 
@@ -4877,6 +5176,20 @@ end
             .map(|r| {
                 // Return absolute path to UI for editor convenience, but DB uses relative
                 let abs_path = self.resolve_absolute_path(&r.path).to_string_lossy().to_string();
+                
+                let p = Path::new(&r.path);
+                let node_type = if r.path.contains("/skills/") {
+                    "skill"
+                } else if r.path.to_lowercase().ends_with(".png") || r.path.to_lowercase().ends_with(".jpg") {
+                    "image"
+                } else {
+                    "note"
+                };
+                
+                let folder_path = p.parent()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "".to_string());
+
                 KmsNoteDto {
                     id: r.id,
                     path: abs_path,
@@ -4885,6 +5198,8 @@ end
                     last_modified: r.last_modified,
                     is_favorite: r.is_favorite,
                     sync_status: r.sync_status,
+                    node_type: node_type.to_string(),
+                    folder_path,
                 }
             })
             .collect())
@@ -5002,6 +5317,20 @@ end
             .into_iter()
             .map(|r| {
                 let abs_path = self.resolve_absolute_path(&r.path).to_string_lossy().to_string();
+                
+                let p = Path::new(&r.path);
+                let node_type = if r.path.contains("/skills/") {
+                    "skill"
+                } else if r.path.to_lowercase().ends_with(".png") || r.path.to_lowercase().ends_with(".jpg") {
+                    "image"
+                } else {
+                    "note"
+                };
+                
+                let folder_path = p.parent()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "".to_string());
+
                 (
                     r.path.replace('\\', "/"),
                     KmsNoteDto {
@@ -5012,6 +5341,8 @@ end
                         last_modified: r.last_modified,
                         is_favorite: r.is_favorite,
                         sync_status: r.sync_status,
+                        node_type: node_type.to_string(),
+                        folder_path,
                     },
                 )
             })
@@ -5565,6 +5896,21 @@ end
         }
         
         Ok(conflicts)
+    }
+
+    async fn kms_get_diagnostics(self) -> Result<KmsDiagnosticsDto, String> {
+        let stats = kms_repository::get_diag_summary().map_err(|e| e.to_string())?;
+        Ok(KmsDiagnosticsDto {
+            note_count: stats.note_count,
+            snippet_count: stats.snippet_count,
+            clip_count: stats.clip_count,
+            vector_count: stats.vector_count,
+            error_log_count: stats.error_log_count,
+        })
+    }
+
+    async fn kms_prune_history(self) -> Result<String, String> {
+        KmsGitService::prune_history().map_err(|e| e.to_string())
     }
 }
 

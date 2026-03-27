@@ -113,6 +113,34 @@ impl KmsGitService {
         
         Ok(())
     }
+
+    /// Prunes the Git history. Currently just triggers a GC.
+    pub fn prune_history() -> KmsResult<String> {
+        let vault_path = kms_repository::get_vault_path()?;
+        
+        // Use standard git command if available, or just notify.
+        // git2-rs doesn't have a high-level 'gc' command easily accessible.
+        // We'll use a Command spawn for simplicity as this is a background maintenance task.
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&vault_path)
+            .arg("gc")
+            .arg("--prune=now")
+            .arg("--aggressive")
+            .output();
+
+        match output {
+            Ok(out) if out.status.success() => {
+                Ok("Git history pruned successfully.".to_string())
+            }
+            Ok(out) => {
+                Err(KmsError::General(format!("Git GC failed: {}", String::from_utf8_lossy(&out.stderr))))
+            }
+            Err(e) => {
+                Err(KmsError::General(format!("Failed to execute git gc: {}", e)))
+            }
+        }
+    }
 }
 
 #[derive(serde::Serialize, specta::Type)]
