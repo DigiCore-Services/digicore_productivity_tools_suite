@@ -5,6 +5,9 @@
 **/node_modules/
 **/tauri-app/node_modules/
 
+# Local scratch (not versioned)
+digicore/tmp/
+
 # Caches and internal data
 **/.fastembed_cache/
 **/.vite/
