@@ -1,5 +1,5 @@
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use crate::kms_error::{KmsError, KmsResult};
 use chrono;
@@ -9,6 +9,9 @@ use digicore_text_expander::adapters::storage::JsonFileStorageAdapter;
 use digicore_text_expander::ports::{storage_keys, StoragePort, skill::SkillRepository};
 use digicore_core::domain::entities::skill::{Skill, SkillMetadata, SkillScope};
 use async_trait::async_trait;
+
+/// Dimensions of `kms_note_embeddings.vec0` (see migrations; must match query vectors for text hybrid search).
+pub const KMS_TEXT_EMBEDDING_VEC0_DIMENSIONS: usize = 384;
 
 pub fn get_vault_path() -> KmsResult<PathBuf> {
     let storage = JsonFileStorageAdapter::load();
@@ -27,14 +30,32 @@ pub struct KmsNoteRow {
     pub is_favorite: bool,
     pub sync_status: String,
     pub last_error: Option<String>,
+    /// Text embedding model id last written for this note (`NULL` = legacy / unknown).
+    pub embedding_model_id: Option<String>,
+    /// Fingerprint of model + chunk policy + vector dim when the note was last embedded (`NULL` = unknown / pre-migration).
+    pub embedding_policy_sig: Option<String>,
+    /// JSON array of tag strings from frontmatter (`[]` when missing).
+    pub tags_json: String,
 }
 
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-pub struct KmsNoteMinimal {
-    pub id: i32,
-    pub path: String,
-    pub title: String,
-    pub last_modified: Option<String>,
+pub type KmsNoteMinimal = digicore_kms_ports::GraphNoteMinimal;
+
+pub(crate) fn note_row_from_row(row: &rusqlite::Row) -> rusqlite::Result<KmsNoteRow> {
+    Ok(KmsNoteRow {
+        id: row.get(0)?,
+        path: row.get(1)?,
+        title: row.get(2)?,
+        content_preview: row.get::<_, Option<String>>(3)?.and_then(|s| crypto::decrypt_local(&s)),
+        last_modified: row.get(4)?,
+        is_favorite: row.get::<_, i32>(5)? != 0,
+        sync_status: row.get(6)?,
+        last_error: row.get(7)?,
+        embedding_model_id: row.get(8)?,
+        embedding_policy_sig: row.get(9)?,
+        tags_json: row
+            .get::<_, Option<String>>(10)?
+            .unwrap_or_else(|| "[]".to_string()),
+    })
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -128,11 +149,223 @@ pub fn init(db_path: PathBuf) -> KmsResult<()> {
     let _ = conn.execute("ALTER TABLE kms_skills ADD COLUMN disable_model_invocation INTEGER DEFAULT 0", []);
     let _ = conn.execute("ALTER TABLE kms_skills ADD COLUMN scope TEXT DEFAULT 'Global'", []);
     let _ = conn.execute("ALTER TABLE kms_skills ADD COLUMN sync_targets TEXT DEFAULT '[]'", []);
-    
-    if DB_CONN.set(Mutex::new(conn)).is_err() {
-        // Already initialized by another thread, that's fine.
+
+    // kms_notes: sync_status / last_error (migration v8); repair if an older DB skipped that migration.
+    let _ = conn.execute(
+        "ALTER TABLE kms_notes ADD COLUMN sync_status TEXT DEFAULT 'indexed'",
+        [],
+    );
+    let _ = conn.execute("ALTER TABLE kms_notes ADD COLUMN last_error TEXT", []);
+    let _ = conn.execute(
+        "ALTER TABLE kms_notes ADD COLUMN wiki_pagerank REAL",
+        [],
+    );
+    // embedding_model_id / embedding_policy_sig: see tauri sql migration v17 (digicore.db).
+    let _ = conn.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS kms_graph_meta (
+            key TEXT PRIMARY KEY NOT NULL,
+            value TEXT NOT NULL
+        );
+        "#,
+    );
+
+    match DB_CONN.set(Mutex::new(conn)) {
+        Ok(()) => {
+            ensure_kms_notes_links_schema()?;
+        }
+        Err(_) => {
+            // Another thread initialized first; schema already ensured there.
+        }
     }
     Ok(())
+}
+
+/// Ensures `kms_notes` and `kms_links` exist (idempotent).
+/// Called from [`init`] so KMS works even when the Tauri SQL migrations did not create these
+/// tables (empty DB, migration skip, or rusqlite opened before plugin migrations ran).
+pub fn ensure_kms_notes_links_schema() -> KmsResult<()> {
+    let conn = conn_guard()?;
+    conn.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS kms_notes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            path TEXT NOT NULL UNIQUE,
+            title TEXT NOT NULL,
+            content_preview TEXT,
+            last_modified TEXT,
+            is_favorite INTEGER DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS kms_links (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_path TEXT NOT NULL,
+            target_path TEXT NOT NULL,
+            link_type TEXT DEFAULT 'internal',
+            context TEXT,
+            UNIQUE(source_path, target_path)
+        );
+        "#,
+    )
+    .map_err(|e| KmsError::General(e.to_string()))?;
+    let _ = conn.execute(
+        "ALTER TABLE kms_notes ADD COLUMN sync_status TEXT DEFAULT 'indexed'",
+        [],
+    );
+    let _ = conn.execute("ALTER TABLE kms_notes ADD COLUMN last_error TEXT", []);
+    let _ = conn.execute(
+        "ALTER TABLE kms_notes ADD COLUMN wiki_pagerank REAL",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE kms_notes ADD COLUMN embedding_model_id TEXT",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE kms_notes ADD COLUMN embedding_policy_sig TEXT",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE kms_notes ADD COLUMN tags_json TEXT DEFAULT '[]'",
+        [],
+    );
+    let _ = conn.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS kms_graph_meta (
+            key TEXT PRIMARY KEY NOT NULL,
+            value TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS kms_ui_state (
+            key TEXT PRIMARY KEY NOT NULL,
+            value TEXT NOT NULL
+        );
+        "#,
+    );
+    Ok(())
+}
+
+/// JSON array of vault-relative note paths, most recent first ([`KMS_UI_RECENT_PATHS_CAP`] entries max).
+pub const KMS_UI_STATE_KEY_RECENT: &str = "recent_note_paths";
+/// JSON array of vault-relative paths for manual favorites ordering.
+pub const KMS_UI_STATE_KEY_FAVORITE_ORDER: &str = "favorite_path_order";
+pub const KMS_UI_RECENT_PATHS_CAP: usize = 25;
+pub const KMS_UI_FAVORITE_ORDER_CAP: usize = 500;
+
+pub fn get_kms_ui_string_list(key: &str) -> KmsResult<Vec<String>> {
+    let conn = conn_guard()?;
+    let raw: Option<String> = conn
+        .query_row(
+            "SELECT value FROM kms_ui_state WHERE key = ?1",
+            params![key],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| KmsError::General(e.to_string()))?;
+    let Some(raw) = raw else {
+        return Ok(Vec::new());
+    };
+    let parsed: Vec<String> = serde_json::from_str(&raw).unwrap_or_default();
+    Ok(parsed
+        .into_iter()
+        .filter(|s| !s.is_empty())
+        .map(|s| s.replace('\\', "/"))
+        .collect())
+}
+
+pub fn set_kms_ui_string_list(key: &str, paths: &[String]) -> KmsResult<()> {
+    let conn = conn_guard()?;
+    let trimmed: Vec<String> = paths
+        .iter()
+        .map(|s| s.replace('\\', "/"))
+        .filter(|s| !s.is_empty())
+        .collect();
+    let json = serde_json::to_string(&trimmed).map_err(|e| KmsError::General(e.to_string()))?;
+    conn.execute(
+        "INSERT INTO kms_ui_state (key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        params![key, json],
+    )
+    .map_err(|e| KmsError::General(e.to_string()))?;
+    Ok(())
+}
+
+fn rewrite_one_ui_path(p: &str, old_rel: &str, new_rel: &str) -> String {
+    let p = p.replace('\\', "/");
+    let old_rel = old_rel.replace('\\', "/");
+    let new_rel = new_rel.replace('\\', "/");
+    if p == old_rel {
+        return new_rel;
+    }
+    let prefix = format!("{}/", old_rel);
+    if p.starts_with(&prefix) {
+        format!("{}/{}", new_rel, &p[prefix.len()..])
+    } else {
+        p
+    }
+}
+
+/// When a note or folder is renamed/moved, keep sidebar lists in sync (vault-relative paths).
+pub fn rewrite_kms_ui_stored_paths(old_rel: &str, new_rel: &str) -> KmsResult<()> {
+    for key in [KMS_UI_STATE_KEY_RECENT, KMS_UI_STATE_KEY_FAVORITE_ORDER] {
+        let paths = get_kms_ui_string_list(key)?;
+        let mut changed = false;
+        let next: Vec<String> = paths
+            .into_iter()
+            .map(|p| {
+                let n = rewrite_one_ui_path(&p, old_rel, new_rel);
+                if n != p {
+                    changed = true;
+                }
+                n
+            })
+            .collect();
+        if changed {
+            set_kms_ui_string_list(key, &next)?;
+        }
+    }
+    Ok(())
+}
+
+/// Remove a deleted note path, or a folder and all paths under it, from sidebar lists.
+pub fn prune_kms_ui_path_entries(pivot_rel: &str, include_children: bool) -> KmsResult<()> {
+    let norm = pivot_rel.replace('\\', "/");
+    for key in [KMS_UI_STATE_KEY_RECENT, KMS_UI_STATE_KEY_FAVORITE_ORDER] {
+        let paths = get_kms_ui_string_list(key)?;
+        let before_len = paths.len();
+        let prefix = format!("{}/", norm);
+        let filtered: Vec<String> = paths
+            .into_iter()
+            .filter(|p| {
+                let pn = p.replace('\\', "/");
+                if include_children {
+                    !(pn == norm || pn.starts_with(&prefix))
+                } else {
+                    pn != norm
+                }
+            })
+            .collect();
+        if filtered.len() != before_len {
+            set_kms_ui_string_list(key, &filtered)?;
+        }
+    }
+    Ok(())
+}
+
+/// Stable fingerprint for "how this note's text vector was produced" (normalized model id, chunk policy, output dim).
+pub fn note_embedding_policy_sig(
+    model_id_norm: &str,
+    chunk_enabled: bool,
+    chunk_max_chars: u32,
+    chunk_overlap_chars: u32,
+    vec_dim: usize,
+) -> String {
+    format!(
+        "v1|{}|{}|{}|{}|{}",
+        model_id_norm,
+        u8::from(chunk_enabled),
+        chunk_max_chars,
+        chunk_overlap_chars,
+        vec_dim
+    )
 }
 
 pub fn init_database() -> KmsResult<()> {
@@ -158,47 +391,163 @@ where
     Ok(result)
 }
 
-pub fn upsert_note(path: &str, title: &str, preview: &str, sync_status: &str, error: Option<&str>) -> KmsResult<()> {
+pub fn upsert_note(
+    path: &str,
+    title: &str,
+    preview: &str,
+    sync_status: &str,
+    error: Option<&str>,
+    tags: &[String],
+) -> KmsResult<()> {
     let conn = conn_guard()?;
     let now = chrono::Local::now().to_rfc3339();
+    let tags_json = serde_json::to_string(tags).unwrap_or_else(|_| "[]".to_string());
     conn.execute(
-        "INSERT INTO kms_notes (path, title, content_preview, last_modified, sync_status, last_error)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+        "INSERT INTO kms_notes (path, title, content_preview, last_modified, sync_status, last_error, tags_json)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
          ON CONFLICT(path) DO UPDATE SET
             title = excluded.title,
             content_preview = excluded.content_preview,
             last_modified = excluded.last_modified,
             sync_status = excluded.sync_status,
-            last_error = excluded.last_error",
+            last_error = excluded.last_error,
+            tags_json = excluded.tags_json",
         params![
-            path, 
-            title, 
-            crypto::encrypt_local(preview).unwrap_or_else(|_| preview.to_string()), 
-            now, 
-            sync_status, 
-            error
+            path,
+            title,
+            crypto::encrypt_local(preview).unwrap_or_else(|_| preview.to_string()),
+            now,
+            sync_status,
+            error,
+            tags_json,
         ],
     )?;
     Ok(())
 }
 
+pub fn set_note_embedding_identity(path: &str, model_id: &str, policy_sig: &str) -> KmsResult<()> {
+    let conn = conn_guard()?;
+    conn.execute(
+        "UPDATE kms_notes SET embedding_model_id = ?1, embedding_policy_sig = ?2 WHERE path = ?3",
+        params![model_id, policy_sig, path],
+    )?;
+    Ok(())
+}
+
+pub fn count_indexed_notes() -> KmsResult<u32> {
+    let conn = conn_guard()?;
+    let n: u32 = conn.query_row(
+        "SELECT COUNT(*) FROM kms_notes WHERE sync_status = 'indexed'",
+        [],
+        |r| r.get(0),
+    )?;
+    Ok(n)
+}
+
+/// All `kms_notes` rows plus breakdown by `sync_status` (indexed / pending / failed).
+/// Rows with any other status string count toward `total` only; see `other_note_count` in API layer.
+/// Walks the vault like sync does: counts every file (`is_file`) and markdown-eligible files (`.md` / `.markdown`).
+/// Non-markdown files (images, PDFs, etc.) appear in `all_files` only, not in `kms_notes`.
+pub fn count_vault_files_on_disk(vault_root: &Path) -> KmsResult<(u32, u32)> {
+    if !vault_root.exists() {
+        return Ok((0, 0));
+    }
+    fn scan_dir(dir: &Path, all_files: &mut u32, markdown_files: &mut u32) -> KmsResult<()> {
+        for entry in std::fs::read_dir(dir).map_err(KmsError::from)?.flatten() {
+            let p = entry.path();
+            if p.is_dir() {
+                scan_dir(&p, all_files, markdown_files)?;
+            } else if p.is_file() {
+                *all_files = all_files.saturating_add(1);
+                if p.extension()
+                    .and_then(|s| s.to_str())
+                    .map(|s| s.eq_ignore_ascii_case("md") || s.eq_ignore_ascii_case("markdown"))
+                    .unwrap_or(false)
+                {
+                    *markdown_files = markdown_files.saturating_add(1);
+                }
+            }
+        }
+        Ok(())
+    }
+    let mut all: u32 = 0;
+    let mut md: u32 = 0;
+    scan_dir(vault_root, &mut all, &mut md)?;
+    Ok((all, md))
+}
+
+pub fn count_kms_notes_sync_breakdown() -> KmsResult<(u32, u32, u32, u32)> {
+    let conn = conn_guard()?;
+    let (total, indexed, pending, failed): (i64, i64, i64, i64) = conn.query_row(
+        "SELECT COUNT(*),
+                COALESCE(SUM(CASE WHEN sync_status = 'indexed' THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN sync_status = 'pending' THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN sync_status = 'failed' THEN 1 ELSE 0 END), 0)
+         FROM kms_notes",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+    )?;
+    Ok((
+        total as u32,
+        indexed as u32,
+        pending as u32,
+        failed as u32,
+    ))
+}
+
+pub fn count_notes_needing_embedding_migration(
+    target_model_id: &str,
+    target_policy_sig: &str,
+) -> KmsResult<u32> {
+    let conn = conn_guard()?;
+    let n: u32 = conn.query_row(
+        "SELECT COUNT(*) FROM kms_notes WHERE sync_status = 'indexed' AND (embedding_model_id IS NULL OR embedding_model_id != ?1 OR embedding_policy_sig IS NULL OR embedding_policy_sig != ?2)",
+        params![target_model_id, target_policy_sig],
+        |r| r.get(0),
+    )?;
+    Ok(n)
+}
+
+pub fn list_note_paths_for_embedding_migration(
+    target_model_id: &str,
+    target_policy_sig: &str,
+    limit: u32,
+) -> KmsResult<Vec<String>> {
+    let conn = conn_guard()?;
+    let lim = limit.max(1) as i64;
+    let mut stmt = conn.prepare(
+        "SELECT path FROM kms_notes WHERE sync_status = 'indexed' AND (embedding_model_id IS NULL OR embedding_model_id != ?1 OR embedding_policy_sig IS NULL OR embedding_policy_sig != ?2) ORDER BY path LIMIT ?3",
+    )?;
+    let rows = stmt.query_map(params![target_model_id, target_policy_sig, lim], |row| row.get::<_, String>(0))?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r?);
+    }
+    Ok(out)
+}
+
+/// Indexed note paths paged by stable `ORDER BY path` (manual full-vault re-embed must advance `offset` each batch).
+pub fn list_indexed_note_paths(limit: u32, offset: u32) -> KmsResult<Vec<String>> {
+    let conn = conn_guard()?;
+    let lim = limit.max(1) as i64;
+    let off = offset as i64;
+    let mut stmt = conn.prepare(
+        "SELECT path FROM kms_notes WHERE sync_status = 'indexed' ORDER BY path LIMIT ?1 OFFSET ?2",
+    )?;
+    let rows = stmt.query_map(params![lim, off], |row| row.get::<_, String>(0))?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r?);
+    }
+    Ok(out)
+}
+
 pub fn list_notes() -> KmsResult<Vec<KmsNoteRow>> {
     let conn = conn_guard()?;
-    let mut stmt = conn
-        .prepare("SELECT id, path, title, content_preview, last_modified, is_favorite, sync_status, last_error FROM kms_notes ORDER BY last_modified DESC")?;
-    let rows = stmt
-        .query_map([], |row| {
-            Ok(KmsNoteRow {
-                id: row.get(0)?,
-                path: row.get(1)?,
-                title: row.get(2)?,
-                content_preview: row.get::<_, Option<String>>(3)?.and_then(|s| crypto::decrypt_local(&s)),
-                last_modified: row.get(4)?,
-                is_favorite: row.get::<_, i32>(5)? != 0,
-                sync_status: row.get(6)?,
-                last_error: row.get(7)?,
-            })
-        })?;
+    let mut stmt = conn.prepare(
+        "SELECT id, path, title, content_preview, last_modified, is_favorite, sync_status, last_error, embedding_model_id, embedding_policy_sig, COALESCE(tags_json, '[]') FROM kms_notes ORDER BY last_modified DESC",
+    )?;
+    let rows = stmt.query_map([], note_row_from_row)?;
 
     let mut notes = Vec::new();
     for note in rows {
@@ -400,6 +749,18 @@ pub fn repair_database() -> KmsResult<()> {
     Ok(())
 }
 
+/// Sets `is_favorite` for an indexed note row (vault-relative `path` as stored in `kms_notes`).
+/// Returns the number of rows updated (0 if no matching path).
+pub fn set_note_favorite(path: &str, favorite: bool) -> KmsResult<usize> {
+    let conn = conn_guard()?;
+    let flag: i32 = if favorite { 1 } else { 0 };
+    let n = conn.execute(
+        "UPDATE kms_notes SET is_favorite = ?1 WHERE path = ?2",
+        params![flag, path],
+    )?;
+    Ok(n)
+}
+
 pub fn rename_note(old_path: &str, new_path: &str, new_title: &str) -> KmsResult<()> {
     transactional(|tx| {
         // 1. Update the note metadata
@@ -505,46 +866,24 @@ pub fn get_links_for_note(path: &str) -> KmsResult<(Vec<KmsNoteRow>, Vec<KmsNote
     
     // Outgoing
     let mut stmt = conn.prepare(
-        "SELECT n.id, n.path, n.title, n.content_preview, n.last_modified, n.is_favorite, n.sync_status, n.last_error 
+        "SELECT n.id, n.path, n.title, n.content_preview, n.last_modified, n.is_favorite, n.sync_status, n.last_error, n.embedding_model_id, n.embedding_policy_sig, COALESCE(n.tags_json, '[]')
          FROM kms_notes n
          JOIN kms_links l ON n.path = l.target_path
          WHERE l.source_path = ?1"
     )?;
     
-    let outgoing = stmt.query_map(params![path], |row| {
-        Ok(KmsNoteRow {
-            id: row.get(0)?,
-            path: row.get(1)?,
-            title: row.get(2)?,
-            content_preview: row.get::<_, Option<String>>(3)?.and_then(|s| crypto::decrypt_local(&s)),
-            last_modified: row.get(4)?,
-            is_favorite: row.get::<_, i32>(5)? != 0,
-            sync_status: row.get(6)?,
-            last_error: row.get(7)?,
-        })
-    })?
+    let outgoing = stmt.query_map(params![path], note_row_from_row)?
     .collect::<Result<Vec<_>, _>>()?;
 
     // Incoming (Backlinks)
     let mut stmt = conn.prepare(
-        "SELECT n.id, n.path, n.title, n.content_preview, n.last_modified, n.is_favorite, n.sync_status, n.last_error 
+        "SELECT n.id, n.path, n.title, n.content_preview, n.last_modified, n.is_favorite, n.sync_status, n.last_error, n.embedding_model_id, n.embedding_policy_sig, COALESCE(n.tags_json, '[]')
          FROM kms_notes n
          JOIN kms_links l ON n.path = l.source_path
          WHERE l.target_path = ?1"
     )?;
     
-    let incoming = stmt.query_map(params![path], |row| {
-        Ok(KmsNoteRow {
-            id: row.get(0)?,
-            path: row.get(1)?,
-            title: row.get(2)?,
-            content_preview: row.get::<_, Option<String>>(3)?.and_then(|s| crypto::decrypt_local(&s)),
-            last_modified: row.get(4)?,
-            is_favorite: row.get::<_, i32>(5)? != 0,
-            sync_status: row.get(6)?,
-            last_error: row.get(7)?,
-        })
-    })?
+    let incoming = stmt.query_map(params![path], note_row_from_row)?
     .collect::<Result<Vec<_>, _>>()?;
 
     Ok((outgoing, incoming))
@@ -562,20 +901,10 @@ pub fn update_links_on_path_change(old_path: &str, new_path: &str) -> KmsResult<
 #[allow(dead_code)]
 pub fn get_note_by_path(path: &str) -> KmsResult<Option<KmsNoteRow>> {
     let conn = conn_guard()?;
-    let mut stmt = conn
-        .prepare("SELECT id, path, title, content_preview, last_modified, is_favorite, sync_status, last_error FROM kms_notes WHERE path = ?1")?;
-    stmt.query_row(params![path], |row| {
-        Ok(KmsNoteRow {
-            id: row.get(0)?,
-            path: row.get(1)?,
-            title: row.get(2)?,
-            content_preview: row.get::<_, Option<String>>(3)?.and_then(|s| crypto::decrypt_local(&s)),
-            last_modified: row.get(4)?,
-            is_favorite: row.get::<_, i32>(5)? != 0,
-            sync_status: row.get(6)?,
-            last_error: row.get(7)?,
-        })
-    })
+    let mut stmt = conn.prepare(
+        "SELECT id, path, title, content_preview, last_modified, is_favorite, sync_status, last_error, embedding_model_id, embedding_policy_sig, COALESCE(tags_json, '[]') FROM kms_notes WHERE path = ?1",
+    )?;
+    stmt.query_row(params![path], note_row_from_row)
     .optional()
     .map_err(KmsError::from)
 }
@@ -607,30 +936,44 @@ pub fn upsert_embedding(
             )
         };
 
-        // 3. Insert into the appropriate vector table
+        // 3. Insert into the appropriate vector table (sqlite-vec VTAB: UPSERT / ON CONFLICT is not supported)
         if modality == "text" {
+            if existing_id.is_some() {
+                tx.execute(
+                    "DELETE FROM kms_embeddings_text WHERE rowid = ?1",
+                    params![vec_id],
+                )?;
+            }
             tx.execute(
-                "INSERT INTO kms_embeddings_text (rowid, embedding) VALUES (?1, ?2) ON CONFLICT(rowid) DO UPDATE SET embedding = excluded.embedding",
+                "INSERT INTO kms_embeddings_text (rowid, embedding) VALUES (?1, ?2)",
                 params![vec_id, bytes],
             )?;
         } else {
+            if existing_id.is_some() {
+                tx.execute(
+                    "DELETE FROM kms_embeddings_image WHERE rowid = ?1",
+                    params![vec_id],
+                )?;
+            }
             tx.execute(
-                "INSERT INTO kms_embeddings_image (rowid, embedding) VALUES (?1, ?2) ON CONFLICT(rowid) DO UPDATE SET embedding = excluded.embedding",
+                "INSERT INTO kms_embeddings_image (rowid, embedding) VALUES (?1, ?2)",
                 params![vec_id, bytes],
             )?;
         }
 
-        // 4. Ensure mapping exists
-        tx.execute(
-            "INSERT INTO kms_vector_map (vec_id, modality, entity_type, entity_id, metadata) 
-             VALUES (?1, ?2, ?3, ?4, ?5) 
-             ON CONFLICT(vec_id) DO UPDATE SET 
-                modality = excluded.modality,
-                entity_type = excluded.entity_type, 
-                entity_id = excluded.entity_id,
-                metadata = excluded.metadata",
-            params![vec_id, modality, entity_type, entity_id, metadata],
-        )?;
+        // 4. Mapping row: table has no UNIQUE on vec_id (PK is id), so ON CONFLICT(vec_id) is invalid.
+        if existing_id.is_some() {
+            tx.execute(
+                "UPDATE kms_vector_map SET metadata = ?1 WHERE vec_id = ?2",
+                params![metadata, vec_id],
+            )?;
+        } else {
+            tx.execute(
+                "INSERT INTO kms_vector_map (vec_id, modality, entity_type, entity_id, metadata)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![vec_id, modality, entity_type, entity_id, metadata],
+            )?;
+        }
 
         Ok(())
     })
@@ -682,6 +1025,12 @@ pub fn delete_embeddings_for_entity(entity_type: &str, entity_id: &str) -> KmsRe
             }
         }
         tx.execute("DELETE FROM kms_vector_map WHERE entity_id = ?1 AND entity_type = ?2", params![entity_id, entity_type])?;
+        if entity_type == "note" {
+            let _ = tx.execute(
+                "UPDATE kms_notes SET embedding_model_id = NULL, embedding_policy_sig = NULL WHERE path = ?1",
+                params![entity_id],
+            );
+        }
         // Also clean up index status
         tx.execute("DELETE FROM kms_index_status WHERE entity_type = ?1 AND entity_id = ?2", params![entity_type, entity_id])?;
         Ok(())
@@ -702,13 +1051,26 @@ pub fn delete_all_embeddings_for_type(entity_type: &str) -> KmsResult<()> {
 
 
 /// Performs a multi-modal search using k-NN, FTS5, or both (Hybrid Search).
+///
+/// When `min_vector_similarity` > 0, drops hits that have a vector rank and estimated similarity
+/// `1 - dist` (with `dist` clamped to 0..1) below the threshold.
 pub fn search_hybrid(
     query: &str,
     modality: &str,
     query_vector: Vec<f32>,
     search_mode: &str, // "Hybrid", "Semantic", "Keyword"
     limit: u32,
+    min_vector_similarity: f32,
 ) -> KmsResult<Vec<SearchResult>> {
+    if modality == "text" && query_vector.len() != KMS_TEXT_EMBEDDING_VEC0_DIMENSIONS {
+        return Err(KmsError::Validation(format!(
+            "Text query embedding has {} dimensions; KMS text index expects {}. Re-embed the vault or use a model that outputs {}-dimensional vectors for this schema.",
+            query_vector.len(),
+            KMS_TEXT_EMBEDDING_VEC0_DIMENSIONS,
+            KMS_TEXT_EMBEDDING_VEC0_DIMENSIONS
+        )));
+    }
+
     let conn = conn_guard()?;
     
     let mut query_bytes = Vec::with_capacity(query_vector.len() * 4);
@@ -836,6 +1198,16 @@ pub fn search_hybrid(
                 }
             }
         }
+    }
+
+    if min_vector_similarity > 0.0 {
+        hits.retain(|_, h| {
+            if h.vec_rank.is_none() {
+                return true;
+            }
+            let sim = 1.0 - h.dist.clamp(0.0, 1.0);
+            sim >= min_vector_similarity
+        });
     }
 
     // 3. Reciprocal Rank Fusion (RRF) or Single Mode Scoring
@@ -1134,15 +1506,51 @@ pub fn get_all_links() -> KmsResult<Vec<(String, String)>> {
     Ok(links)
 }
 
+/// All wiki-link rows incident to any of the given vault-relative note paths (deduped).
+/// Used for incremental local-graph BFS instead of loading the full link table.
+pub fn get_links_for_notes(paths: &[String]) -> KmsResult<Vec<(String, String)>> {
+    if paths.is_empty() {
+        return Ok(Vec::new());
+    }
+    let conn = conn_guard()?;
+    let mut seen_rel = std::collections::HashSet::<&str>::new();
+    let mut deduped: Vec<&String> = Vec::new();
+    for p in paths {
+        if seen_rel.insert(p.as_str()) {
+            deduped.push(p);
+        }
+    }
+    let mut out: Vec<(String, String)> = Vec::new();
+    let mut seen_pairs = std::collections::HashSet::<(String, String)>::new();
+    for rel in deduped {
+        let mut stmt = conn.prepare(
+            "SELECT source_path, target_path FROM kms_links WHERE source_path = ?1 OR target_path = ?1",
+        )?;
+        let rows = stmt.query_map(params![rel], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        for r in rows {
+            let pair = r?;
+            if seen_pairs.insert(pair.clone()) {
+                out.push(pair);
+            }
+        }
+    }
+    Ok(out)
+}
+
 pub fn get_all_notes_minimal() -> KmsResult<Vec<KmsNoteMinimal>> {
     let conn = conn_guard()?;
-    let mut stmt = conn.prepare("SELECT id, path, title, last_modified FROM kms_notes")?;
+    let mut stmt =
+        conn.prepare("SELECT id, path, title, last_modified, wiki_pagerank FROM kms_notes")?;
     let rows = stmt.query_map([], |row| {
+        let pr: Option<f64> = row.get(4)?;
         Ok(KmsNoteMinimal {
             id: row.get(0)?,
             path: row.get(1)?,
             title: row.get(2)?,
             last_modified: row.get(3)?,
+            wiki_pagerank: pr.map(|x| x as f32),
         })
     })?;
     
@@ -1153,6 +1561,125 @@ pub fn get_all_notes_minimal() -> KmsResult<Vec<KmsNoteMinimal>> {
     Ok(notes)
 }
 
+const SQLITE_IN_CHUNK: usize = 400;
+
+/// Minimal note rows for vault-relative paths (batch `IN` clauses). Order not preserved.
+pub fn get_notes_minimal_by_paths(paths: &[String]) -> KmsResult<Vec<KmsNoteMinimal>> {
+    if paths.is_empty() {
+        return Ok(Vec::new());
+    }
+    let conn = conn_guard()?;
+    let mut seen = std::collections::HashSet::<String>::new();
+    let mut unique: Vec<&String> = Vec::new();
+    for p in paths {
+        if seen.insert(p.clone()) {
+            unique.push(p);
+        }
+    }
+    let mut out: Vec<KmsNoteMinimal> = Vec::new();
+    for chunk in unique.chunks(SQLITE_IN_CHUNK) {
+        let placeholders = chunk
+            .iter()
+            .map(|_| "?")
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "SELECT id, path, title, last_modified, wiki_pagerank FROM kms_notes WHERE path IN ({placeholders})"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let params: Vec<&dyn rusqlite::ToSql> = chunk
+            .iter()
+            .map(|s| *s as &dyn rusqlite::ToSql)
+            .collect();
+        let rows = stmt.query_map(params.as_slice(), |row| {
+            let pr: Option<f64> = row.get(4)?;
+            Ok(KmsNoteMinimal {
+                id: row.get(0)?,
+                path: row.get(1)?,
+                title: row.get(2)?,
+                last_modified: row.get(3)?,
+                wiki_pagerank: pr.map(|x| x as f32),
+            })
+        })?;
+        for r in rows {
+            out.push(r?);
+        }
+    }
+    Ok(out)
+}
+
+/// Clears materialized wiki PageRank for all notes (repair / future admin RPC).
+#[allow(dead_code)]
+pub fn clear_wiki_pagerank_scores() -> KmsResult<u32> {
+    let conn = conn_guard()?;
+    let n = conn.execute("UPDATE kms_notes SET wiki_pagerank = NULL", [])?;
+    Ok(n as u32)
+}
+
+/// Meta key: SHA-256 hex fingerprint of the wiki edge set used for materialized PageRank.
+pub const KMS_GRAPH_META_WIKI_PR_FP: &str = "wiki_pr_edge_fp_v1";
+
+pub fn kms_graph_meta_get(key: &str) -> KmsResult<Option<String>> {
+    let conn = conn_guard()?;
+    let v: Option<String> = conn
+        .query_row(
+            "SELECT value FROM kms_graph_meta WHERE key = ?1",
+            params![key],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(v)
+}
+
+pub fn kms_graph_meta_upsert(key: &str, value: &str) -> KmsResult<()> {
+    let conn = conn_guard()?;
+    conn.execute(
+        "INSERT INTO kms_graph_meta (key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        params![key, value],
+    )?;
+    Ok(())
+}
+
+pub fn kms_graph_meta_delete(key: &str) -> KmsResult<()> {
+    let conn = conn_guard()?;
+    conn.execute("DELETE FROM kms_graph_meta WHERE key = ?1", params![key])?;
+    Ok(())
+}
+
+/// Marks materialized wiki PageRank as stale (wiki link graph changed).
+pub fn clear_wiki_pagerank_fingerprint() -> KmsResult<()> {
+    kms_graph_meta_delete(KMS_GRAPH_META_WIKI_PR_FP)
+}
+
+/// Persists full-vault wiki PageRank scores (vault-relative paths).
+pub fn bulk_set_wiki_pagerank(rel_paths_and_scores: &[(String, f32)]) -> KmsResult<()> {
+    if rel_paths_and_scores.is_empty() {
+        return Ok(());
+    }
+    let mut conn = conn_guard()?;
+    let tx = conn.transaction()?;
+    {
+        let mut stmt = tx.prepare("UPDATE kms_notes SET wiki_pagerank = ?1 WHERE path = ?2")?;
+        for (path, score) in rel_paths_and_scores {
+            stmt.execute(params![*score as f64, path])?;
+        }
+    }
+    tx.commit()?;
+    Ok(())
+}
+
+fn f32_vec_from_embedding_blob(blob: &[u8]) -> Vec<f32> {
+    let f32_count = blob.len() / 4;
+    let mut embedding = Vec::with_capacity(f32_count);
+    for i in 0..f32_count {
+        let mut bytes = [0u8; 4];
+        bytes.copy_from_slice(&blob[i * 4..(i + 1) * 4]);
+        embedding.push(f32::from_le_bytes(bytes));
+    }
+    embedding
+}
+
 pub fn get_all_note_embeddings() -> KmsResult<Vec<(String, Vec<f32>)>> {
     let conn = conn_guard()?;
     let mut stmt = conn.prepare(
@@ -1161,21 +1688,13 @@ pub fn get_all_note_embeddings() -> KmsResult<Vec<(String, Vec<f32>)>> {
          JOIN kms_vector_map m ON v.rowid = m.vec_id
          WHERE m.entity_type = 'note' AND m.modality = 'text'"
     )?;
-    
+
     let rows = stmt.query_map([], |row| {
         let path: String = row.get(0)?;
         let blob: Vec<u8> = row.get(1)?;
-        // Convert blob (bytes) to Vec<f32>
-        let f32_count = blob.len() / 4;
-        let mut embedding = Vec::with_capacity(f32_count);
-        for i in 0..f32_count {
-            let mut bytes = [0u8; 4];
-            bytes.copy_from_slice(&blob[i*4..(i+1)*4]);
-            embedding.push(f32::from_le_bytes(bytes));
-        }
-        Ok((path, embedding))
+        Ok((path, f32_vec_from_embedding_blob(&blob)))
     })?;
-    
+
     let mut results = Vec::new();
     for r in rows {
         results.push(r?);
@@ -1183,61 +1702,31 @@ pub fn get_all_note_embeddings() -> KmsResult<Vec<(String, Vec<f32>)>> {
     Ok(results)
 }
 
-pub fn calculate_kmeans_clusters(data: &[Vec<f32>], k: usize, max_iterations: usize) -> Vec<usize> {
-    if data.is_empty() { return Vec::new(); }
-    if k <= 1 || data.len() <= k {
-        // Return 0 for everything if k=1, or unique IDs if len <= k
-        return (0..data.len()).map(|i| if k > 0 { i % k } else { 0 }).collect();
+/// Embeddings for the given vault-relative note paths only (for local graph / scoped loads).
+pub fn get_note_embeddings_for_paths(paths: &[String]) -> KmsResult<Vec<(String, Vec<f32>)>> {
+    if paths.is_empty() {
+        return Ok(Vec::new());
     }
-
-    let dim = data[0].len();
-    // Simple Forgy initialization (taking first K points as initial centroids)
-    let mut centroids: Vec<Vec<f32>> = data.iter().take(k).cloned().collect();
-    let mut assignments = vec![0; data.len()];
-
-    for _ in 0..max_iterations {
-        let mut changed = false;
-
-        // Assignment step: find nearest centroid for each point
-        for (i, point) in data.iter().enumerate() {
-            let mut min_dist = f32::MAX;
-            let mut best_cluster = 0;
-            for (c_idx, centroid) in centroids.iter().enumerate() {
-                // Euclidean distance squared (sufficient for comparison)
-                let dist = point.iter().zip(centroid.iter())
-                    .map(|(a, b)| (a - b).powi(2))
-                    .sum::<f32>();
-                if dist < min_dist {
-                    min_dist = dist;
-                    best_cluster = c_idx;
-                }
-            }
-            if assignments[i] != best_cluster {
-                assignments[i] = best_cluster;
-                changed = true;
-            }
-        }
-
-        if !changed { break; }
-
-        // Update step: calculate mean of points in each cluster
-        let mut new_centroids = vec![vec![0.0; dim]; k];
-        let mut counts = vec![0; k];
-        for (i, cluster_idx) in assignments.iter().enumerate() {
-            counts[*cluster_idx] += 1;
-            for d in 0..dim {
-                new_centroids[*cluster_idx][d] += data[i][d];
-            }
-        }
-
-        for c_idx in 0..k {
-            if counts[c_idx] > 0 {
-                for d in 0..dim {
-                    centroids[c_idx][d] = new_centroids[c_idx][d] / counts[c_idx] as f32;
-                }
-            }
+    const CHUNK: usize = 400;
+    let conn = conn_guard()?;
+    let mut results = Vec::new();
+    for chunk in paths.chunks(CHUNK) {
+        let ph = (0..chunk.len()).map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!(
+            "SELECT m.entity_id, v.embedding 
+             FROM kms_embeddings_text v
+             JOIN kms_vector_map m ON v.rowid = m.vec_id
+             WHERE m.entity_type = 'note' AND m.modality = 'text' AND m.entity_id IN ({ph})"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(chunk.iter()), |row| {
+            let path: String = row.get(0)?;
+            let blob: Vec<u8> = row.get(1)?;
+            Ok((path, f32_vec_from_embedding_blob(&blob)))
+        })?;
+        for r in rows {
+            results.push(r?);
         }
     }
-
-    assignments
+    Ok(results)
 }

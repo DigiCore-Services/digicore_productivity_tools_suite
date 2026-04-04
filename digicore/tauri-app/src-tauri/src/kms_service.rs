@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 use crate::kms_error::{KmsError, KmsResult};
+use crate::kms_link_adjacency_cache;
 use crate::kms_repository;
 use crate::kms_diagnostic_service::KmsDiagnosticService;
 use crate::kms_git_service::KmsGitService;
@@ -65,6 +66,7 @@ impl KmsService {
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| "Untitled".to_string());
         kms_repository::rename_note(&old_rel_path, &new_rel_path, &title)?;
+        let _ = kms_repository::rewrite_kms_ui_stored_paths(&old_rel_path, &new_rel_path);
 
         // 3. Backlink Refactoring
         let old_title = old_abs_path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
@@ -74,6 +76,8 @@ impl KmsService {
         
         // 4. Update Link Graph paths
         kms_repository::update_links_on_path_change(&old_rel_path, &new_rel_path)?;
+
+        kms_link_adjacency_cache::invalidate_kms_link_adjacency_cache();
 
         KmsDiagnosticService::info(
             &format!("Renamed note: {} -> {}", old_rel_path, new_rel_path),
@@ -102,7 +106,12 @@ impl KmsService {
                 }).to_string();
 
                 if new_content != content {
-                    let _ = std::fs::write(&abs_path, new_content);
+                    if let Err(err) = std::fs::write(&abs_path, new_content) {
+                        KmsDiagnosticService::warn(
+                            "Failed to persist backlink refactor update",
+                            Some(format!("path={} err={}", note.path, err)),
+                        );
+                    }
                 }
             }
         }
@@ -143,6 +152,9 @@ impl KmsService {
         std::fs::rename(&old_abs_path, &new_abs_path).map_err(KmsError::Io)?;
         
         kms_repository::rename_folder(&old_rel_path, &new_rel_path)?;
+        let _ = kms_repository::rewrite_kms_ui_stored_paths(&old_rel_path, &new_rel_path);
+
+        kms_link_adjacency_cache::invalidate_kms_link_adjacency_cache();
         
         KmsDiagnosticService::info(
             &format!("Renamed folder: {} -> {}", old_rel_path, new_rel_path),
@@ -187,6 +199,7 @@ impl KmsService {
         if item_abs_path.is_dir() {
             std::fs::rename(&item_abs_path, &new_abs_path).map_err(KmsError::Io)?;
             kms_repository::rename_folder(&old_rel_path, &new_rel_path)?;
+            let _ = kms_repository::rewrite_kms_ui_stored_paths(&old_rel_path, &new_rel_path);
         } else {
             std::fs::rename(&item_abs_path, &new_abs_path).map_err(KmsError::Io)?;
             let title = new_abs_path.file_stem()
@@ -194,7 +207,10 @@ impl KmsService {
                 .unwrap_or_else(|| "Untitled".to_string());
             kms_repository::rename_note(&old_rel_path, &new_rel_path, &title)?;
             kms_repository::update_links_on_path_change(&old_rel_path, &new_rel_path)?;
+            let _ = kms_repository::rewrite_kms_ui_stored_paths(&old_rel_path, &new_rel_path);
         }
+
+        kms_link_adjacency_cache::invalidate_kms_link_adjacency_cache();
 
         KmsDiagnosticService::info(
             &format!("Moved item: {} -> {}", old_rel_path, new_rel_path),
@@ -226,7 +242,7 @@ impl KmsService {
 
         let rel_path = Self::get_relative_path(&path_buf)?;
         
-        // This part usually involves calling sync_note_index_internal which is in api.rs
+        // This part usually involves calling `kms_sync_orchestration::sync_note_index_internal`.
         // We should eventually move that to a service too.
         
         // 4. Git Auto-commit
@@ -248,6 +264,9 @@ impl KmsService {
         }
         
         kms_repository::delete_note(&rel_path)?;
+        let _ = kms_repository::prune_kms_ui_path_entries(&rel_path, false);
+
+        kms_link_adjacency_cache::invalidate_kms_link_adjacency_cache();
         
         KmsDiagnosticService::info(&format!("Deleted note: {}", rel_path), None);
         Ok(())

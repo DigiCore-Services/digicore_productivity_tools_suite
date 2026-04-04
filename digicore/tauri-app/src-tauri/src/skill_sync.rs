@@ -166,24 +166,8 @@ pub async fn sync_skill_to_targets(skill: &Skill, overwrite: bool) -> anyhow::Re
             std::fs::create_dir_all(&target_skill_dir)?;
         }
         
-        copy_dir_recursive(&skill.path, &target_skill_dir)?;
+        crate::fs_util::copy_dir_recursive(&skill.path, &target_skill_dir)?;
     }
     
-    Ok(())
-}
-
-fn copy_dir_recursive(src: &Path, dst: &Path) -> anyhow::Result<()> {
-    if !dst.exists() {
-        std::fs::create_dir_all(dst)?;
-    }
-    for entry in std::fs::read_dir(src)? {
-        let entry = entry?;
-        let file_type = entry.file_type()?;
-        if file_type.is_dir() {
-            copy_dir_recursive(&entry.path(), &dst.join(entry.file_name()))?;
-        } else {
-            std::fs::copy(entry.path(), dst.join(entry.file_name()))?;
-        }
-    }
     Ok(())
 }

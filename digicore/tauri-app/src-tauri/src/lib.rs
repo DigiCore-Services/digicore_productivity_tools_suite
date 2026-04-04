@@ -3,21 +3,45 @@
 //! Invokes digicore-text-expander library. Tauri commands provide load/save/get_app_state
 //! for the web frontend.
 
+#![recursion_limit = "256"]
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod app_diagnostics;
+mod app_settings_storage;
+mod settings_bundle_model;
+mod scripting_signer_registry;
+mod app_shell;
+mod fs_util;
+mod kms_ipc_boundary;
+mod taurpc_ipc_types;
 mod api;
+mod appearance_enforcement;
+mod clipboard_text_persistence;
+mod clipboard_sqlite_sync;
 mod clipboard_repository;
 mod kms_repository;
+mod kms_link_adjacency_cache;
+mod kms_graph_service;
+mod kms_graph_build_ring;
+mod kms_graph_effective_params;
+mod kms_note_tags;
+mod kms_graph_ports;
 mod kms_error;
 mod kms_service;
 mod kms_diagnostic_service;
+mod kms_embed_diagnostic_log;
 mod embedding_service;
+mod embedding_pipeline;
+mod kms_embedding_migrate;
 mod indexing_service;
 mod skill_sync;
 mod kms_sync_service;
+mod kms_sync_orchestration;
+mod kms_watcher;
 mod kms_git_service;
 
-use crate::api::{save_all_on_exit, Api};
+use crate::api::Api;
+use crate::app_settings_storage::{persist_settings_for_state, save_all_on_exit};
 
 use digicore_core::domain::Snippet;
 use digicore_core::adapters::platform::clipboard_windows::WindowsRichClipboardAdapter;
@@ -151,6 +175,68 @@ pub struct AppStateDto {
     pub extraction_scoring_jitter_penalty_weight: f32,
     pub extraction_scoring_size_penalty_weight: f32,
     pub extraction_scoring_low_confidence_threshold: f32,
+
+    pub kms_graph_k_means_max_k: u32,
+    pub kms_graph_k_means_iterations: u32,
+    pub kms_graph_ai_beam_max_nodes: u32,
+    pub kms_graph_ai_beam_similarity_threshold: f32,
+    pub kms_graph_ai_beam_max_edges: u32,
+    pub kms_graph_enable_ai_beams: bool,
+    pub kms_graph_enable_semantic_clustering: bool,
+    pub kms_graph_enable_leiden_communities: bool,
+    pub kms_graph_semantic_max_notes: u32,
+    pub kms_graph_warn_note_threshold: u32,
+    pub kms_graph_beam_max_pair_checks: u32,
+    pub kms_graph_enable_semantic_knn_edges: bool,
+    pub kms_graph_semantic_knn_per_note: u32,
+    pub kms_graph_semantic_knn_min_similarity: f32,
+    pub kms_graph_semantic_knn_max_edges: u32,
+    pub kms_graph_semantic_knn_max_pair_checks: u32,
+    pub kms_graph_auto_paging_enabled: bool,
+    pub kms_graph_auto_paging_note_threshold: u32,
+    pub kms_graph_vault_overrides_json: String,
+
+    pub kms_graph_bloom_enabled: bool,
+    pub kms_graph_bloom_strength: f32,
+    pub kms_graph_bloom_radius: f32,
+    pub kms_graph_bloom_threshold: f32,
+    pub kms_graph_hex_cell_radius: f32,
+    pub kms_graph_hex_layer_opacity: f32,
+    pub kms_graph_hex_stroke_width: f32,
+    pub kms_graph_hex_stroke_opacity: f32,
+
+    pub kms_graph_pagerank_iterations: u32,
+    pub kms_graph_pagerank_local_iterations: u32,
+    pub kms_graph_pagerank_damping: f32,
+    pub kms_graph_pagerank_scope: String,
+    pub kms_graph_background_wiki_pagerank_enabled: bool,
+
+    pub kms_graph_temporal_window_enabled: bool,
+    pub kms_graph_temporal_default_days: u32,
+    pub kms_graph_temporal_include_notes_without_mtime: bool,
+    pub kms_graph_temporal_edge_recency_enabled: bool,
+    pub kms_graph_temporal_edge_recency_strength: f32,
+    pub kms_graph_temporal_edge_recency_half_life_days: f32,
+    pub kms_search_min_similarity: f32,
+    /// When true, semantic search rows include query-embedding timing and effective model id.
+    pub kms_search_include_embedding_diagnostics: bool,
+    pub kms_search_default_mode: String,
+    pub kms_search_default_limit: u32,
+
+    /// Stored KMS text embedding model id (empty = use default fastembed id).
+    pub kms_embedding_model_id: String,
+    /// Background note re-embed batch size (D6 migration).
+    pub kms_embedding_batch_notes_per_tick: u32,
+    pub kms_embedding_chunk_enabled: bool,
+    pub kms_embedding_chunk_max_chars: u32,
+    pub kms_embedding_chunk_overlap_chars: u32,
+
+    pub kms_graph_sprite_label_max_dpr_scale: f32,
+    pub kms_graph_sprite_label_min_res_scale: f32,
+    pub kms_graph_webworker_layout_threshold: u32,
+    pub kms_graph_webworker_layout_max_ticks: u32,
+    pub kms_graph_webworker_layout_alpha_min: f32,
+
     pub snippet_editor_case_sensitive: bool,
 }
 
@@ -279,6 +365,65 @@ fn app_state_to_dto(state: &AppState) -> AppStateDto {
         extraction_scoring_jitter_penalty_weight: state.extraction_scoring_jitter_penalty_weight,
         extraction_scoring_size_penalty_weight: state.extraction_scoring_size_penalty_weight,
         extraction_scoring_low_confidence_threshold: state.extraction_scoring_low_confidence_threshold,
+
+        kms_graph_k_means_max_k: state.kms_graph_k_means_max_k,
+        kms_graph_k_means_iterations: state.kms_graph_k_means_iterations,
+        kms_graph_ai_beam_max_nodes: state.kms_graph_ai_beam_max_nodes,
+        kms_graph_ai_beam_similarity_threshold: state.kms_graph_ai_beam_similarity_threshold,
+        kms_graph_ai_beam_max_edges: state.kms_graph_ai_beam_max_edges,
+        kms_graph_enable_ai_beams: state.kms_graph_enable_ai_beams,
+        kms_graph_enable_semantic_clustering: state.kms_graph_enable_semantic_clustering,
+        kms_graph_enable_leiden_communities: state.kms_graph_enable_leiden_communities,
+        kms_graph_semantic_max_notes: state.kms_graph_semantic_max_notes,
+        kms_graph_warn_note_threshold: state.kms_graph_warn_note_threshold,
+        kms_graph_beam_max_pair_checks: state.kms_graph_beam_max_pair_checks,
+        kms_graph_enable_semantic_knn_edges: state.kms_graph_enable_semantic_knn_edges,
+        kms_graph_semantic_knn_per_note: state.kms_graph_semantic_knn_per_note,
+        kms_graph_semantic_knn_min_similarity: state.kms_graph_semantic_knn_min_similarity,
+        kms_graph_semantic_knn_max_edges: state.kms_graph_semantic_knn_max_edges,
+        kms_graph_semantic_knn_max_pair_checks: state.kms_graph_semantic_knn_max_pair_checks,
+        kms_graph_auto_paging_enabled: state.kms_graph_auto_paging_enabled,
+        kms_graph_auto_paging_note_threshold: state.kms_graph_auto_paging_note_threshold,
+        kms_graph_vault_overrides_json: state.kms_graph_vault_overrides_json.clone(),
+
+        kms_graph_bloom_enabled: state.kms_graph_bloom_enabled,
+        kms_graph_bloom_strength: state.kms_graph_bloom_strength,
+        kms_graph_bloom_radius: state.kms_graph_bloom_radius,
+        kms_graph_bloom_threshold: state.kms_graph_bloom_threshold,
+        kms_graph_hex_cell_radius: state.kms_graph_hex_cell_radius,
+        kms_graph_hex_layer_opacity: state.kms_graph_hex_layer_opacity,
+        kms_graph_hex_stroke_width: state.kms_graph_hex_stroke_width,
+        kms_graph_hex_stroke_opacity: state.kms_graph_hex_stroke_opacity,
+
+        kms_graph_pagerank_iterations: state.kms_graph_pagerank_iterations,
+        kms_graph_pagerank_local_iterations: state.kms_graph_pagerank_local_iterations,
+        kms_graph_pagerank_damping: state.kms_graph_pagerank_damping,
+        kms_graph_pagerank_scope: state.kms_graph_pagerank_scope.clone(),
+        kms_graph_background_wiki_pagerank_enabled: state.kms_graph_background_wiki_pagerank_enabled,
+
+        kms_graph_temporal_window_enabled: state.kms_graph_temporal_window_enabled,
+        kms_graph_temporal_default_days: state.kms_graph_temporal_default_days,
+        kms_graph_temporal_include_notes_without_mtime: state.kms_graph_temporal_include_notes_without_mtime,
+        kms_graph_temporal_edge_recency_enabled: state.kms_graph_temporal_edge_recency_enabled,
+        kms_graph_temporal_edge_recency_strength: state.kms_graph_temporal_edge_recency_strength,
+        kms_graph_temporal_edge_recency_half_life_days: state.kms_graph_temporal_edge_recency_half_life_days,
+        kms_search_min_similarity: state.kms_search_min_similarity,
+        kms_search_include_embedding_diagnostics: state.kms_search_include_embedding_diagnostics,
+        kms_search_default_mode: state.kms_search_default_mode.clone(),
+        kms_search_default_limit: state.kms_search_default_limit,
+
+        kms_embedding_model_id: state.kms_embedding_model_id.clone(),
+        kms_embedding_batch_notes_per_tick: state.kms_embedding_batch_notes_per_tick,
+        kms_embedding_chunk_enabled: state.kms_embedding_chunk_enabled,
+        kms_embedding_chunk_max_chars: state.kms_embedding_chunk_max_chars,
+        kms_embedding_chunk_overlap_chars: state.kms_embedding_chunk_overlap_chars,
+
+        kms_graph_sprite_label_max_dpr_scale: state.kms_graph_sprite_label_max_dpr_scale,
+        kms_graph_sprite_label_min_res_scale: state.kms_graph_sprite_label_min_res_scale,
+        kms_graph_webworker_layout_threshold: state.kms_graph_webworker_layout_threshold,
+        kms_graph_webworker_layout_max_ticks: state.kms_graph_webworker_layout_max_ticks,
+        kms_graph_webworker_layout_alpha_min: state.kms_graph_webworker_layout_alpha_min,
+
         snippet_editor_case_sensitive: state.snippet_editor_case_sensitive,
     }
 }
@@ -535,7 +680,270 @@ fn init_app_state_from_storage() -> AppState {
     if let Some(v) = storage.get(storage_keys::EXTRACTION_TABLES_COLUMN_JITTER_TOLERANCE).and_then(|s| s.parse().ok()) { state.extraction_tables_column_jitter_tolerance = v; }
     if let Some(v) = storage.get(storage_keys::EXTRACTION_TABLES_MERGE_Y_GAP_MAX).and_then(|s| s.parse().ok()) { state.extraction_tables_merge_y_gap_max = v; }
     if let Some(v) = storage.get(storage_keys::EXTRACTION_TABLES_MERGE_Y_GAP_MIN).and_then(|s| s.parse().ok()) { state.extraction_tables_merge_y_gap_min = v; }
-    
+
+    if let Some(v) = storage
+        .get(storage_keys::KMS_GRAPH_K_MEANS_MAX_K)
+        .and_then(|s| s.parse::<u32>().ok())
+    {
+        state.kms_graph_k_means_max_k = v.max(2);
+    }
+    if let Some(v) = storage
+        .get(storage_keys::KMS_GRAPH_K_MEANS_ITERATIONS)
+        .and_then(|s| s.parse::<u32>().ok())
+    {
+        state.kms_graph_k_means_iterations = v.max(1);
+    }
+    if let Some(v) = storage
+        .get(storage_keys::KMS_GRAPH_AI_BEAM_MAX_NODES)
+        .and_then(|s| s.parse::<u32>().ok())
+    {
+        state.kms_graph_ai_beam_max_nodes = v.max(2);
+    }
+    if let Some(v) = storage
+        .get(storage_keys::KMS_GRAPH_AI_BEAM_SIMILARITY_THRESHOLD)
+        .and_then(|s| s.parse::<f32>().ok())
+    {
+        state.kms_graph_ai_beam_similarity_threshold = v.clamp(0.0, 1.0);
+    }
+    if let Some(v) = storage.get(storage_keys::KMS_GRAPH_AI_BEAM_MAX_EDGES).and_then(|s| s.parse().ok()) { state.kms_graph_ai_beam_max_edges = v; }
+    if let Some(v) = storage.get(storage_keys::KMS_GRAPH_ENABLE_AI_BEAMS) { state.kms_graph_enable_ai_beams = v == "true"; }
+    if let Some(v) = storage.get(storage_keys::KMS_GRAPH_ENABLE_SEMANTIC_CLUSTERING) { state.kms_graph_enable_semantic_clustering = v == "true"; }
+    if let Some(v) = storage.get(storage_keys::KMS_GRAPH_ENABLE_LEIDEN_COMMUNITIES) { state.kms_graph_enable_leiden_communities = v == "true"; }
+    if let Some(v) = storage
+        .get(storage_keys::KMS_GRAPH_SEMANTIC_MAX_NOTES)
+        .and_then(|s| s.parse::<u32>().ok())
+    {
+        state.kms_graph_semantic_max_notes = v;
+    }
+    if let Some(v) = storage
+        .get(storage_keys::KMS_GRAPH_WARN_NOTE_THRESHOLD)
+        .and_then(|s| s.parse::<u32>().ok())
+    {
+        state.kms_graph_warn_note_threshold = v;
+    }
+    if let Some(v) = storage
+        .get(storage_keys::KMS_GRAPH_BEAM_MAX_PAIR_CHECKS)
+        .and_then(|s| s.parse::<u32>().ok())
+    {
+        state.kms_graph_beam_max_pair_checks = v;
+    }
+    if let Some(v) = storage.get(storage_keys::KMS_GRAPH_ENABLE_SEMANTIC_KNN_EDGES) {
+        state.kms_graph_enable_semantic_knn_edges = v == "true";
+    }
+    if let Some(v) = storage
+        .get(storage_keys::KMS_GRAPH_SEMANTIC_KNN_PER_NOTE)
+        .and_then(|s| s.parse::<u32>().ok())
+    {
+        state.kms_graph_semantic_knn_per_note = v.clamp(1, 30);
+    }
+    if let Some(v) = storage
+        .get(storage_keys::KMS_GRAPH_SEMANTIC_KNN_MIN_SIMILARITY)
+        .and_then(|s| s.parse::<f32>().ok())
+    {
+        state.kms_graph_semantic_knn_min_similarity = v.clamp(0.5, 0.999);
+    }
+    if let Some(v) = storage
+        .get(storage_keys::KMS_GRAPH_SEMANTIC_KNN_MAX_EDGES)
+        .and_then(|s| s.parse::<u32>().ok())
+    {
+        state.kms_graph_semantic_knn_max_edges = v.min(500_000);
+    }
+    if let Some(v) = storage
+        .get(storage_keys::KMS_GRAPH_SEMANTIC_KNN_MAX_PAIR_CHECKS)
+        .and_then(|s| s.parse::<u32>().ok())
+    {
+        state.kms_graph_semantic_knn_max_pair_checks = v;
+    }
+    if let Some(v) = storage.get(storage_keys::KMS_GRAPH_AUTO_PAGING_ENABLED) {
+        state.kms_graph_auto_paging_enabled = v == "true";
+    }
+    if let Some(v) = storage
+        .get(storage_keys::KMS_GRAPH_AUTO_PAGING_NOTE_THRESHOLD)
+        .and_then(|s| s.parse::<u32>().ok())
+    {
+        state.kms_graph_auto_paging_note_threshold = v;
+    }
+    if let Some(s) = storage.get(storage_keys::KMS_GRAPH_VAULT_OVERRIDES_JSON) {
+        if !s.trim().is_empty() {
+            state.kms_graph_vault_overrides_json = s;
+        }
+    }
+    if let Some(v) = storage.get(storage_keys::KMS_GRAPH_BLOOM_ENABLED) {
+        state.kms_graph_bloom_enabled = v == "true";
+    }
+    if let Some(v) = storage
+        .get(storage_keys::KMS_GRAPH_BLOOM_STRENGTH)
+        .and_then(|s| s.parse::<f32>().ok())
+    {
+        state.kms_graph_bloom_strength = v.clamp(0.0, 2.5);
+    }
+    if let Some(v) = storage
+        .get(storage_keys::KMS_GRAPH_BLOOM_RADIUS)
+        .and_then(|s| s.parse::<f32>().ok())
+    {
+        state.kms_graph_bloom_radius = v.clamp(0.0, 1.5);
+    }
+    if let Some(v) = storage
+        .get(storage_keys::KMS_GRAPH_BLOOM_THRESHOLD)
+        .and_then(|s| s.parse::<f32>().ok())
+    {
+        state.kms_graph_bloom_threshold = v.clamp(0.0, 1.0);
+    }
+    if let Some(v) = storage
+        .get(storage_keys::KMS_GRAPH_HEX_CELL_RADIUS)
+        .and_then(|s| s.parse::<f32>().ok())
+    {
+        state.kms_graph_hex_cell_radius = v.clamp(0.5, 8.0);
+    }
+    if let Some(v) = storage
+        .get(storage_keys::KMS_GRAPH_HEX_LAYER_OPACITY)
+        .and_then(|s| s.parse::<f32>().ok())
+    {
+        state.kms_graph_hex_layer_opacity = v.clamp(0.0, 1.0);
+    }
+    if let Some(v) = storage
+        .get(storage_keys::KMS_GRAPH_HEX_STROKE_WIDTH)
+        .and_then(|s| s.parse::<f32>().ok())
+    {
+        state.kms_graph_hex_stroke_width = v.clamp(0.02, 0.5);
+    }
+    if let Some(v) = storage
+        .get(storage_keys::KMS_GRAPH_HEX_STROKE_OPACITY)
+        .and_then(|s| s.parse::<f32>().ok())
+    {
+        state.kms_graph_hex_stroke_opacity = v.clamp(0.0, 1.0);
+    }
+
+    if let Some(v) = storage
+        .get(storage_keys::KMS_GRAPH_PAGERANK_ITERATIONS)
+        .and_then(|s| s.parse::<u32>().ok())
+    {
+        state.kms_graph_pagerank_iterations = v.max(4);
+    }
+    if let Some(v) = storage
+        .get(storage_keys::KMS_GRAPH_PAGERANK_LOCAL_ITERATIONS)
+        .and_then(|s| s.parse::<u32>().ok())
+    {
+        state.kms_graph_pagerank_local_iterations = v.max(4);
+    }
+    if let Some(v) = storage
+        .get(storage_keys::KMS_GRAPH_PAGERANK_DAMPING)
+        .and_then(|s| s.parse::<f32>().ok())
+    {
+        state.kms_graph_pagerank_damping = v.clamp(0.5, 0.99);
+    }
+    if let Some(s) = storage.get(storage_keys::KMS_GRAPH_PAGERANK_SCOPE) {
+        let t = s.trim();
+        if !t.is_empty() {
+            state.kms_graph_pagerank_scope = t.to_string();
+        }
+    }
+    if let Some(v) = storage.get(storage_keys::KMS_GRAPH_BACKGROUND_WIKI_PAGERANK_ENABLED) {
+        state.kms_graph_background_wiki_pagerank_enabled = v == "true";
+    }
+    if let Some(v) = storage.get(storage_keys::KMS_GRAPH_TEMPORAL_WINDOW_ENABLED) {
+        state.kms_graph_temporal_window_enabled = v == "true";
+    }
+    if let Some(v) = storage
+        .get(storage_keys::KMS_GRAPH_TEMPORAL_DEFAULT_DAYS)
+        .and_then(|s| s.parse::<u32>().ok())
+    {
+        state.kms_graph_temporal_default_days = v;
+    }
+    if let Some(v) = storage.get(storage_keys::KMS_GRAPH_TEMPORAL_INCLUDE_NOTES_WITHOUT_MTIME) {
+        state.kms_graph_temporal_include_notes_without_mtime = v == "true";
+    }
+    if let Some(v) = storage.get(storage_keys::KMS_GRAPH_TEMPORAL_EDGE_RECENCY_ENABLED) {
+        state.kms_graph_temporal_edge_recency_enabled = v == "true";
+    }
+    if let Some(v) = storage
+        .get(storage_keys::KMS_GRAPH_TEMPORAL_EDGE_RECENCY_STRENGTH)
+        .and_then(|s| s.parse::<f32>().ok())
+    {
+        state.kms_graph_temporal_edge_recency_strength = v.clamp(0.0, 1.0);
+    }
+    if let Some(v) = storage
+        .get(storage_keys::KMS_GRAPH_TEMPORAL_EDGE_RECENCY_HALF_LIFE_DAYS)
+        .and_then(|s| s.parse::<f32>().ok())
+    {
+        state.kms_graph_temporal_edge_recency_half_life_days = v.max(0.1);
+    }
+    if let Some(v) = storage
+        .get(storage_keys::KMS_SEARCH_MIN_SIMILARITY)
+        .and_then(|s| s.parse::<f32>().ok())
+    {
+        state.kms_search_min_similarity = v.clamp(0.0, 1.0);
+    }
+    if let Some(v) = storage.get(storage_keys::KMS_SEARCH_INCLUDE_EMBEDDING_DIAGNOSTICS) {
+        state.kms_search_include_embedding_diagnostics = v == "true";
+    }
+    if let Some(s) = storage.get(storage_keys::KMS_SEARCH_DEFAULT_MODE) {
+        let t = s.trim();
+        if t == "Hybrid" || t == "Semantic" || t == "Keyword" {
+            state.kms_search_default_mode = t.to_string();
+        }
+    }
+    if let Some(v) = storage
+        .get(storage_keys::KMS_SEARCH_DEFAULT_LIMIT)
+        .and_then(|s| s.parse::<u32>().ok())
+    {
+        state.kms_search_default_limit = v.clamp(1, 200);
+    }
+    if let Some(s) = storage.get(storage_keys::KMS_EMBEDDING_MODEL_ID) {
+        state.kms_embedding_model_id = s;
+    }
+    if let Some(v) = storage
+        .get(storage_keys::KMS_EMBEDDING_BATCH_NOTES_PER_TICK)
+        .and_then(|s| s.parse::<u32>().ok())
+    {
+        state.kms_embedding_batch_notes_per_tick = v.clamp(1, 500);
+    }
+    if let Some(v) = storage.get(storage_keys::KMS_EMBEDDING_CHUNK_ENABLED) {
+        state.kms_embedding_chunk_enabled = v == "true";
+    }
+    if let Some(v) = storage
+        .get(storage_keys::KMS_EMBEDDING_CHUNK_MAX_CHARS)
+        .and_then(|s| s.parse::<u32>().ok())
+    {
+        state.kms_embedding_chunk_max_chars = v.clamp(256, 8192);
+    }
+    if let Some(v) = storage
+        .get(storage_keys::KMS_EMBEDDING_CHUNK_OVERLAP_CHARS)
+        .and_then(|s| s.parse::<u32>().ok())
+    {
+        state.kms_embedding_chunk_overlap_chars = v.min(4096);
+    }
+    if let Some(v) = storage
+        .get(storage_keys::KMS_GRAPH_SPRITE_LABEL_MAX_DPR_SCALE)
+        .and_then(|s| s.parse::<f32>().ok())
+    {
+        state.kms_graph_sprite_label_max_dpr_scale = v.clamp(1.0, 8.0);
+    }
+    if let Some(v) = storage
+        .get(storage_keys::KMS_GRAPH_SPRITE_LABEL_MIN_RES_SCALE)
+        .and_then(|s| s.parse::<f32>().ok())
+    {
+        state.kms_graph_sprite_label_min_res_scale = v.clamp(1.0, 4.0);
+    }
+    if let Some(v) = storage
+        .get(storage_keys::KMS_GRAPH_WEBWORKER_LAYOUT_THRESHOLD)
+        .and_then(|s| s.parse::<u32>().ok())
+    {
+        state.kms_graph_webworker_layout_threshold = v.min(500_000);
+    }
+    if let Some(v) = storage
+        .get(storage_keys::KMS_GRAPH_WEBWORKER_LAYOUT_MAX_TICKS)
+        .and_then(|s| s.parse::<u32>().ok())
+    {
+        state.kms_graph_webworker_layout_max_ticks = v.clamp(20, 10_000);
+    }
+    if let Some(v) = storage
+        .get(storage_keys::KMS_GRAPH_WEBWORKER_LAYOUT_ALPHA_MIN)
+        .and_then(|s| s.parse::<f32>().ok())
+    {
+        state.kms_graph_webworker_layout_alpha_min = v.clamp(0.0005, 0.5);
+    }
+
     state
 }
 
@@ -970,6 +1378,38 @@ pub fn run() {
                             "#,
                             kind: MigrationKind::Up,
                         },
+                        Migration {
+                            version: 16,
+                            description: "kms_notes_wiki_pagerank_materialized",
+                            sql: r#"
+                                ALTER TABLE kms_notes ADD COLUMN wiki_pagerank REAL;
+                                CREATE TABLE IF NOT EXISTS kms_graph_meta (
+                                    key TEXT PRIMARY KEY NOT NULL,
+                                    value TEXT NOT NULL
+                                );
+                            "#,
+                            kind: MigrationKind::Up,
+                        },
+                        Migration {
+                            version: 17,
+                            description: "kms_notes_embedding_identity_columns",
+                            sql: r#"
+                                ALTER TABLE kms_notes ADD COLUMN embedding_model_id TEXT;
+                                ALTER TABLE kms_notes ADD COLUMN embedding_policy_sig TEXT;
+                            "#,
+                            kind: MigrationKind::Up,
+                        },
+                        Migration {
+                            version: 18,
+                            description: "kms_ui_state_sidebar_lists",
+                            sql: r#"
+                                CREATE TABLE IF NOT EXISTS kms_ui_state (
+                                    key TEXT PRIMARY KEY NOT NULL,
+                                    value TEXT NOT NULL
+                                );
+                            "#,
+                            kind: MigrationKind::Up,
+                        },
                     ],
                 )
                 .build(),
@@ -1071,11 +1511,11 @@ pub fn run() {
                         move |entry| {
                             if entry.content == "[Image]" {
                                 log::debug!("[Clipboard][Observer] Image marker detected");
-                                crate::api::sync_current_clipboard_image_to_sqlite(entry.process_name.clone(), entry.window_title.clone(), Some(&handle_observer));
+                                crate::clipboard_sqlite_sync::sync_current_clipboard_image_to_sqlite(entry.process_name.clone(), entry.window_title.clone(), Some(&handle_observer));
                                 return;
                             }
                             log::debug!("[Clipboard][Observer] Text entry: '{}'", entry.content);
-                            match crate::api::persist_clipboard_entry_with_settings(
+                            match crate::clipboard_text_persistence::persist_clipboard_entry_with_settings(
                                 &entry.content,
                                 &entry.process_name,
                                 &entry.window_title,
@@ -1151,7 +1591,7 @@ pub fn run() {
                 let handle_sync = handle_for_init.clone();
                 tauri::async_runtime::spawn(async move {
                     log::info!("[Startup] Initializing runtime clipboard sync (background)");
-                    crate::api::sync_runtime_clipboard_entries_to_sqlite(&handle_sync);
+                    crate::clipboard_sqlite_sync::sync_runtime_clipboard_entries_to_sqlite(&handle_sync);
                     log::info!("[Startup] Background sync completed");
                 });
 
@@ -1171,14 +1611,18 @@ pub fn run() {
                         tauri::async_runtime::spawn(async move {
                             log::info!("[KMS][Startup] Starting vault reconciliation...");
                             let _ = handle_kms.emit("kms-sync-status", "Indexing...");
-                            let _ = crate::api::sync_vault_files_to_db_internal(&handle_kms, &kms_path_clone).await;
+                            let _ = crate::kms_sync_orchestration::sync_vault_files_to_db_internal(
+                                &handle_kms,
+                                &kms_path_clone,
+                            )
+                            .await;
                             let _ = handle_kms.emit("kms-sync-status", "Idle");
                             let _ = handle_kms.emit("kms-sync-complete", ());
                             log::info!("[KMS][Startup] Vault reconciliation completed");
                         });
                         
                         // Start watcher
-                        crate::api::start_kms_watcher(handle_for_init.clone(), vault_path_buf);
+                        crate::kms_watcher::start_kms_watcher(handle_for_init.clone(), vault_path_buf);
                         log::info!("[KMS][Startup] Filesystem watcher initialized");
                     }
                 }
@@ -1202,7 +1646,7 @@ pub fn run() {
                 std::thread::spawn(|| {
                     loop {
                         let _ = std::panic::catch_unwind(|| {
-                            crate::api::enforce_appearance_transparency_rules();
+                            crate::appearance_enforcement::enforce_appearance_transparency_rules();
                         });
                         std::thread::sleep(std::time::Duration::from_secs(3));
                     }
@@ -1366,7 +1810,7 @@ pub fn run() {
                         false
                     };
                     set_expansion_paused(paused);
-                    if let Err(e) = crate::api::persist_settings_for_state(&tray_state_for_menu) {
+                    if let Err(e) = persist_settings_for_state(&tray_state_for_menu) {
                         log::warn!("[Tray] persist pause toggle failed: {}", e);
                     }
                     install_tray_menu(app_handle, paused);
@@ -1528,6 +1972,64 @@ pub struct ConfigUpdateDto {
     pub extraction_tables_column_jitter_tolerance: Option<f32>,
     pub extraction_tables_merge_y_gap_max: Option<f32>,
     pub extraction_tables_merge_y_gap_min: Option<f32>,
+
+    pub kms_graph_k_means_max_k: Option<u32>,
+    pub kms_graph_k_means_iterations: Option<u32>,
+    pub kms_graph_ai_beam_max_nodes: Option<u32>,
+    pub kms_graph_ai_beam_similarity_threshold: Option<f32>,
+    pub kms_graph_ai_beam_max_edges: Option<u32>,
+    pub kms_graph_enable_ai_beams: Option<bool>,
+    pub kms_graph_enable_semantic_clustering: Option<bool>,
+    pub kms_graph_enable_leiden_communities: Option<bool>,
+    pub kms_graph_semantic_max_notes: Option<u32>,
+    pub kms_graph_warn_note_threshold: Option<u32>,
+    pub kms_graph_beam_max_pair_checks: Option<u32>,
+    pub kms_graph_enable_semantic_knn_edges: Option<bool>,
+    pub kms_graph_semantic_knn_per_note: Option<u32>,
+    pub kms_graph_semantic_knn_min_similarity: Option<f32>,
+    pub kms_graph_semantic_knn_max_edges: Option<u32>,
+    pub kms_graph_semantic_knn_max_pair_checks: Option<u32>,
+    pub kms_graph_auto_paging_enabled: Option<bool>,
+    pub kms_graph_auto_paging_note_threshold: Option<u32>,
+    pub kms_graph_vault_overrides_json: Option<String>,
+
+    pub kms_graph_bloom_enabled: Option<bool>,
+    pub kms_graph_bloom_strength: Option<f32>,
+    pub kms_graph_bloom_radius: Option<f32>,
+    pub kms_graph_bloom_threshold: Option<f32>,
+    pub kms_graph_hex_cell_radius: Option<f32>,
+    pub kms_graph_hex_layer_opacity: Option<f32>,
+    pub kms_graph_hex_stroke_width: Option<f32>,
+    pub kms_graph_hex_stroke_opacity: Option<f32>,
+
+    pub kms_graph_pagerank_iterations: Option<u32>,
+    pub kms_graph_pagerank_local_iterations: Option<u32>,
+    pub kms_graph_pagerank_damping: Option<f32>,
+    pub kms_graph_pagerank_scope: Option<String>,
+    pub kms_graph_background_wiki_pagerank_enabled: Option<bool>,
+
+    pub kms_graph_temporal_window_enabled: Option<bool>,
+    pub kms_graph_temporal_default_days: Option<u32>,
+    pub kms_graph_temporal_include_notes_without_mtime: Option<bool>,
+    pub kms_graph_temporal_edge_recency_enabled: Option<bool>,
+    pub kms_graph_temporal_edge_recency_strength: Option<f32>,
+    pub kms_graph_temporal_edge_recency_half_life_days: Option<f32>,
+    pub kms_search_min_similarity: Option<f32>,
+    pub kms_search_include_embedding_diagnostics: Option<bool>,
+    pub kms_search_default_mode: Option<String>,
+    pub kms_search_default_limit: Option<u32>,
+
+    pub kms_embedding_model_id: Option<String>,
+    pub kms_embedding_batch_notes_per_tick: Option<u32>,
+    pub kms_embedding_chunk_enabled: Option<bool>,
+    pub kms_embedding_chunk_max_chars: Option<u32>,
+    pub kms_embedding_chunk_overlap_chars: Option<u32>,
+
+    pub kms_graph_sprite_label_max_dpr_scale: Option<f32>,
+    pub kms_graph_sprite_label_min_res_scale: Option<f32>,
+    pub kms_graph_webworker_layout_threshold: Option<u32>,
+    pub kms_graph_webworker_layout_max_ticks: Option<u32>,
+    pub kms_graph_webworker_layout_alpha_min: Option<f32>,
 }
 
 #[taurpc::ipc_type]

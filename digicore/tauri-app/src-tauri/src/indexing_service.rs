@@ -1,7 +1,8 @@
 use std::sync::Arc;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 use async_trait::async_trait;
 use dashmap::DashMap;
+use serde::Serialize;
 use crate::kms_repository;
 
 /// Trait for a component that can provide items for the semantic index.
@@ -26,7 +27,53 @@ pub struct KmsIndexingService {
     providers: DashMap<String, Arc<dyn SemanticIndexProvider>>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct IndexAllProvidersReport {
+    pub indexed_total: usize,
+    pub provider_failures: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct KmsReindexCompleteEvent {
+    pub request_id: String,
+    pub indexed_total: usize,
+    pub provider_failures: Vec<String>,
+    pub succeeded: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct KmsReindexProviderProgressEvent {
+    pub request_id: String,
+    pub provider_id: String,
+    pub phase: String, // start | progress | end
+    pub started_at_ms: u64,
+    pub emitted_at_ms: u64,
+    pub elapsed_ms: u64,
+    pub eta_remaining_ms: Option<u64>,
+    pub provider_index: usize,
+    pub provider_total: usize,
+    pub provider_indexed_count: usize,
+    pub indexed_total_so_far: usize,
+    pub succeeded: Option<bool>,
+    pub error: Option<String>,
+}
+
 impl KmsIndexingService {
+    fn now_unix_ms() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0)
+    }
+
+    fn eta_remaining_ms(elapsed_ms: u64, completed_providers: usize, provider_total: usize) -> Option<u64> {
+        if completed_providers == 0 || completed_providers >= provider_total {
+            return None;
+        }
+        let avg_per_provider = elapsed_ms / completed_providers as u64;
+        Some(avg_per_provider.saturating_mul((provider_total - completed_providers) as u64))
+    }
+
     pub fn new() -> Self {
         Self {
             providers: DashMap::new(),
@@ -39,25 +86,199 @@ impl KmsIndexingService {
     }
 
     /// Triggers indexing for all registered providers.
+    #[allow(dead_code)]
     pub async fn index_all_providers(&self, app: &AppHandle) -> Result<usize, String> {
+        let report = self.index_all_providers_detailed(app, None).await;
+        if report.provider_failures.is_empty() {
+            Ok(report.indexed_total)
+        } else {
+            Err(format!(
+                "Indexed {} items with {} provider failure(s): {}",
+                report.indexed_total,
+                report.provider_failures.len(),
+                report.provider_failures.join("; ")
+            ))
+        }
+    }
+
+    /// Triggers indexing for all registered providers and returns a detailed report.
+    pub async fn index_all_providers_detailed(
+        &self,
+        app: &AppHandle,
+        request_id: Option<&str>,
+    ) -> IndexAllProvidersReport {
+        let started_at_ms = Self::now_unix_ms();
         let mut total = 0;
+        let mut failed: Vec<String> = Vec::new();
         
         // Collect providers first to avoid holding DashMap lock across awaits
         let providers: Vec<_> = self.providers.iter().map(|entry| entry.value().clone()).collect();
+        let provider_total = providers.len();
         
-        for provider in providers {
-            log::info!("[KMS][Indexing] Starting index_all for provider: {}", provider.provider_id());
+        for (idx, provider) in providers.into_iter().enumerate() {
+            let provider_id = provider.provider_id().to_string();
+            let provider_index = idx + 1;
+            log::info!("[KMS][Indexing] Starting index_all for provider: {}", provider_id);
+            if let Some(rid) = request_id {
+                let emitted_at_ms = Self::now_unix_ms();
+                let elapsed_ms = emitted_at_ms.saturating_sub(started_at_ms);
+                let _ = app.emit(
+                    "kms-reindex-provider-progress",
+                    KmsReindexProviderProgressEvent {
+                        request_id: rid.to_string(),
+                        provider_id: provider_id.clone(),
+                        phase: "start".to_string(),
+                        started_at_ms,
+                        emitted_at_ms,
+                        elapsed_ms,
+                        eta_remaining_ms: Self::eta_remaining_ms(elapsed_ms, provider_index.saturating_sub(1), provider_total),
+                        provider_index,
+                        provider_total,
+                        provider_indexed_count: 0,
+                        indexed_total_so_far: total,
+                        succeeded: None,
+                        error: None,
+                    },
+                );
+            }
             match provider.index_all(app).await {
                 Ok(count) => {
                     total += count;
-                    log::info!("[KMS][Indexing] Provider {} completed: {} items indexed", provider.provider_id(), count);
+                    log::info!("[KMS][Indexing] Provider {} completed: {} items indexed", provider_id, count);
+                    if let Some(rid) = request_id {
+                        let emitted_at_ms = Self::now_unix_ms();
+                        let elapsed_ms = emitted_at_ms.saturating_sub(started_at_ms);
+                        let progress = KmsReindexProviderProgressEvent {
+                            request_id: rid.to_string(),
+                            provider_id: provider_id.clone(),
+                            phase: "progress".to_string(),
+                            started_at_ms,
+                            emitted_at_ms,
+                            elapsed_ms,
+                            eta_remaining_ms: Self::eta_remaining_ms(elapsed_ms, provider_index, provider_total),
+                            provider_index,
+                            provider_total,
+                            provider_indexed_count: count,
+                            indexed_total_so_far: total,
+                            succeeded: Some(true),
+                            error: None,
+                        };
+                        let _ = app.emit("kms-reindex-provider-progress", &progress);
+                        let _ = app.emit(
+                            "kms-reindex-provider-progress",
+                            KmsReindexProviderProgressEvent {
+                                phase: "end".to_string(),
+                                ..progress
+                            },
+                        );
+                    }
                 }
                 Err(e) => {
-                    log::error!("[KMS][Indexing] Provider {} failed: {}", provider.provider_id(), e);
+                    log::error!("[KMS][Indexing] Provider {} failed: {}", provider_id, e);
+                    failed.push(format!("{} ({})", provider_id, e));
+                    if let Some(rid) = request_id {
+                        let emitted_at_ms = Self::now_unix_ms();
+                        let elapsed_ms = emitted_at_ms.saturating_sub(started_at_ms);
+                        let progress = KmsReindexProviderProgressEvent {
+                            request_id: rid.to_string(),
+                            provider_id: provider_id.clone(),
+                            phase: "progress".to_string(),
+                            started_at_ms,
+                            emitted_at_ms,
+                            elapsed_ms,
+                            eta_remaining_ms: Self::eta_remaining_ms(elapsed_ms, provider_index, provider_total),
+                            provider_index,
+                            provider_total,
+                            provider_indexed_count: 0,
+                            indexed_total_so_far: total,
+                            succeeded: Some(false),
+                            error: Some(e.clone()),
+                        };
+                        let _ = app.emit("kms-reindex-provider-progress", &progress);
+                        let _ = app.emit(
+                            "kms-reindex-provider-progress",
+                            KmsReindexProviderProgressEvent {
+                                phase: "end".to_string(),
+                                ..progress
+                            },
+                        );
+                    }
                 }
             }
         }
-        Ok(total)
+        IndexAllProvidersReport {
+            indexed_total: total,
+            provider_failures: failed,
+        }
+    }
+
+    /// Spawns background indexing across all registered providers and logs completion
+    /// with a request correlation ID.
+    pub fn spawn_index_all_providers(
+        self: Arc<Self>,
+        app: AppHandle,
+        request_id: String,
+    ) {
+        let _ = app.emit("kms-sync-status", "Indexing...");
+        tokio::spawn(async move {
+            let report = self.index_all_providers_detailed(&app, Some(&request_id)).await;
+            let complete_payload = KmsReindexCompleteEvent {
+                request_id: request_id.clone(),
+                indexed_total: report.indexed_total,
+                provider_failures: report.provider_failures.clone(),
+                succeeded: report.provider_failures.is_empty(),
+            };
+            if report.provider_failures.is_empty() {
+                log::info!(
+                    "[KMS] Global reindexing completed: {} items indexed. request_id={}",
+                    report.indexed_total,
+                    request_id
+                );
+            } else {
+                log::warn!(
+                    "[KMS] Global reindexing completed with provider failures ({}): request_id={} failures={}",
+                    report.provider_failures.len(),
+                    request_id,
+                    report.provider_failures.join("; ")
+                );
+            }
+            let _ = app.emit("kms-reindex-complete", &complete_payload);
+            let _ = app.emit("kms-sync-status", "Idle");
+            let _ = app.emit("kms-sync-complete", ());
+        });
+    }
+    
+    #[allow(dead_code)]
+    pub fn spawn_index_provider(
+        self: Arc<Self>,
+        app: AppHandle,
+        request_id: String,
+        provider_id: String,
+    ) {
+        let _ = app.emit("kms-sync-status", "Indexing...");
+        tokio::spawn(async move {
+            let result = self.index_provider_by_id(&app, &provider_id).await;
+            match result {
+                Ok(count) => {
+                    log::info!(
+                        "[KMS] Provider reindex completed: provider={} indexed={} request_id={}",
+                        provider_id,
+                        count,
+                        request_id
+                    );
+                }
+                Err(err) => {
+                    log::warn!(
+                        "[KMS] Provider reindex failed: provider={} request_id={} err={}",
+                        provider_id,
+                        request_id,
+                        err,
+                    );
+                }
+            }
+            let _ = app.emit("kms-sync-status", "Idle");
+            let _ = app.emit("kms-sync-complete", ());
+        });
     }
 
     /// Triggers indexing for a specific provider by ID.
@@ -96,11 +317,6 @@ impl SemanticIndexProvider for NoteIndexProvider {
     }
 
     async fn index_all(&self, app: &AppHandle) -> Result<usize, String> {
-        use crate::api;
-        // The implementation already exists in api.rs as sync_vault_files_to_db
-        // We will call it here. We'll need to expose it or move it.
-        // For now, let's assume we'll refactor api.rs to call this provider.
-        
         use std::sync::{Arc, Mutex};
         let state_handle = app.state::<Arc<Mutex<digicore_text_expander::application::app_state::AppState>>>();
         let vault_path_str = {
@@ -113,9 +329,7 @@ impl SemanticIndexProvider for NoteIndexProvider {
             return Err("Vault path does not exist".to_string());
         }
 
-        // We'll reimplement the sync logic here or call a shared function.
-        // Let's reimplement for cleaner separation.
-        api::sync_vault_files_to_db_internal(app, vault_path).await?;
+        crate::kms_sync_orchestration::sync_vault_files_to_db_internal(app, vault_path).await?;
         
         // Count how many we have indexed
         let notes = kms_repository::list_notes().map_err(|e| e.to_string())?;
@@ -123,7 +337,6 @@ impl SemanticIndexProvider for NoteIndexProvider {
     }
 
     async fn index_item(&self, app: &AppHandle, entity_id: &str) -> Result<(), String> {
-        use crate::api;
         let vault_path = kms_repository::get_vault_path().map_err(|e| e.to_string())?;
         let abs_path = std::path::Path::new(&vault_path).join(entity_id);
         
@@ -131,7 +344,7 @@ impl SemanticIndexProvider for NoteIndexProvider {
             return Err(format!("Note path does not exist: {}", entity_id));
         }
 
-        api::sync_single_note_to_db_internal(app, &abs_path).await
+        crate::kms_sync_orchestration::sync_single_note_to_db_internal(app, &abs_path).await
     }
 }
 

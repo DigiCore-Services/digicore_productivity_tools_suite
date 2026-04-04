@@ -1,5 +1,5 @@
 use std::path::Path;
-use git2::{Repository, Signature};
+use git2::{Repository, Signature, Sort};
 use crate::kms_error::{KmsError, KmsResult};
 use crate::kms_repository;
 
@@ -64,21 +64,54 @@ impl KmsGitService {
         Ok(())
     }
 
-    /// Lists history for a specific file.
-    pub fn get_history(_rel_path: &str) -> KmsResult<Vec<KmsVersion>> {
+    /// Lists history for a specific file (commits where the blob at `rel_path` changed vs first parent).
+    pub fn get_history(rel_path: &str) -> KmsResult<Vec<KmsVersion>> {
+        let rel_path = rel_path.replace('\\', "/");
+        if rel_path.is_empty() {
+            return Ok(Vec::new());
+        }
+
         let vault_path = kms_repository::get_vault_path()?;
         let repo = Repository::open(&vault_path).map_err(|e| KmsError::General(format!("Git Open Error: {}", e)))?;
-        
+
         let mut revwalk = repo.revwalk().map_err(|e| KmsError::General(format!("Git Revwalk Error: {}", e)))?;
         revwalk.push_head().map_err(|e| KmsError::General(format!("Git Push Head Error: {}", e)))?;
-        
+        revwalk
+            .set_sorting(Sort::TIME)
+            .map_err(|e| KmsError::General(format!("Git revwalk sort: {}", e)))?;
+
+        let path = Path::new(rel_path.as_str());
         let mut versions = Vec::new();
+
         for oid_res in revwalk {
             let oid = oid_res.map_err(|e| KmsError::General(format!("Git Walk Error: {}", e)))?;
             let commit = repo.find_commit(oid).map_err(|e| KmsError::General(format!("Git Find Commit Error: {}", e)))?;
-            
-            // Optimization: check if this commit modified the specific file
-            // For now, just return all commits that might contain it
+
+            let tree = match commit.tree() {
+                Ok(t) => t,
+                Err(_) => continue,
+            };
+
+            let entry = match tree.get_path(path) {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+
+            let changed = if commit.parent_count() == 0 {
+                true
+            } else {
+                let parent = commit.parent(0).map_err(|e| KmsError::General(format!("Git parent: {}", e)))?;
+                let parent_tree = parent.tree().map_err(|e| KmsError::General(format!("Git parent tree: {}", e)))?;
+                match parent_tree.get_path(path) {
+                    Ok(pe) => pe.id() != entry.id(),
+                    Err(_) => true,
+                }
+            };
+
+            if !changed {
+                continue;
+            }
+
             versions.push(KmsVersion {
                 hash: commit.id().to_string(),
                 message: commit.message().unwrap_or("").to_string(),
@@ -86,10 +119,36 @@ impl KmsGitService {
                 author: commit.author().name().unwrap_or("").to_string(),
             });
 
-            if versions.len() >= 50 { break; } // limit history for now
+            if versions.len() >= 50 {
+                break;
+            }
         }
 
         Ok(versions)
+    }
+
+    /// Text content of a file at a specific commit (for diff-before-restore).
+    pub fn get_file_content_at_revision(hash: &str, rel_path: &str) -> KmsResult<String> {
+        let rel_path = rel_path.replace('\\', "/");
+        if rel_path.is_empty() {
+            return Err(KmsError::General("Empty path for revision content".to_string()));
+        }
+
+        let vault_path = kms_repository::get_vault_path()?;
+        let repo = Repository::open(&vault_path).map_err(|e| KmsError::General(format!("Git Open Error: {}", e)))?;
+
+        let oid = git2::Oid::from_str(hash).map_err(|e| KmsError::General(format!("Invalid OID: {}", e)))?;
+        let commit = repo.find_commit(oid).map_err(|e| KmsError::General(format!("Commit not found: {}", e)))?;
+        let tree = commit.tree().map_err(|e| KmsError::General(format!("Tree not found: {}", e)))?;
+
+        let entry = tree
+            .get_path(Path::new(rel_path.as_str()))
+            .map_err(|e| KmsError::General(format!("File not found in history: {}", e)))?;
+        let blob = repo
+            .find_blob(entry.id())
+            .map_err(|e| KmsError::General(format!("Blob not found: {}", e)))?;
+
+        Ok(String::from_utf8_lossy(blob.content()).to_string())
     }
 
     /// Restores a file to a specific version.
