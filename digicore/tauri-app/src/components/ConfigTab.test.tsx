@@ -14,6 +14,11 @@ const mockTaurpc = {
   ghost_follower_set_opacity: vi.fn(),
   get_copy_to_clipboard_config: vi.fn(),
   save_copy_to_clipboard_config: vi.fn(),
+  kms_get_indexing_status: vi.fn(),
+  kms_request_note_embedding_migration: vi.fn(),
+  kms_get_embedding_policy_diagnostics: vi.fn(),
+  kms_get_embedding_diagnostic_log_path: vi.fn(),
+  kms_cancel_note_embedding_migration: vi.fn(),
 };
 
 const mockOpen = vi.fn();
@@ -39,6 +44,7 @@ vi.mock("@tauri-apps/plugin-process", () => ({
 
 vi.mock("@tauri-apps/api/event", () => ({
   emit: (...args: unknown[]) => Promise.resolve(mockEmit(...args)),
+  listen: vi.fn(() => Promise.resolve(() => {})),
 }));
 
 const defaultState = {
@@ -75,10 +81,54 @@ const defaultState = {
   clip_history_max_depth: 20,
   script_library_run_disabled: false,
   script_library_run_allowlist: "",
+  kms_graph_k_means_max_k: 10,
+  kms_graph_k_means_iterations: 15,
+  kms_graph_ai_beam_max_nodes: 400,
+  kms_graph_ai_beam_similarity_threshold: 0.9,
+  kms_graph_ai_beam_max_edges: 20,
+  kms_graph_enable_ai_beams: true,
+  kms_graph_enable_semantic_clustering: true,
+  kms_graph_enable_leiden_communities: true,
+  kms_graph_semantic_max_notes: 2500,
+  kms_graph_warn_note_threshold: 1500,
+  kms_graph_auto_paging_enabled: true,
+  kms_graph_auto_paging_note_threshold: 2000,
+  kms_graph_beam_max_pair_checks: 200000,
+  kms_graph_enable_semantic_knn_edges: true,
+  kms_graph_semantic_knn_per_note: 5,
+  kms_graph_semantic_knn_min_similarity: 0.82,
+  kms_graph_semantic_knn_max_edges: 8000,
+  kms_graph_semantic_knn_max_pair_checks: 400000,
+  kms_graph_pagerank_iterations: 48,
+  kms_graph_pagerank_local_iterations: 32,
+  kms_graph_pagerank_damping: 0.85,
+  kms_graph_pagerank_scope: "auto",
+  kms_graph_background_wiki_pagerank_enabled: true,
+  kms_graph_temporal_window_enabled: false,
+  kms_graph_temporal_default_days: 0,
+  kms_graph_temporal_include_notes_without_mtime: true,
+  kms_graph_temporal_edge_recency_enabled: false,
+  kms_graph_temporal_edge_recency_strength: 1.0,
+  kms_graph_temporal_edge_recency_half_life_days: 30.0,
+  kms_search_min_similarity: 0.0,
+  kms_search_include_embedding_diagnostics: true,
+  kms_search_default_mode: "Hybrid",
+  kms_search_default_limit: 20,
+  kms_embedding_model_id: "",
+  kms_embedding_batch_notes_per_tick: 8,
+  kms_embedding_chunk_enabled: false,
+  kms_embedding_chunk_max_chars: 2048,
+  kms_embedding_chunk_overlap_chars: 128,
+  kms_graph_sprite_label_max_dpr_scale: 2.5,
+  kms_graph_sprite_label_min_res_scale: 1.25,
+  kms_graph_webworker_layout_threshold: 800,
+  kms_graph_webworker_layout_max_ticks: 450,
+  kms_graph_webworker_layout_alpha_min: 0.02,
 } as unknown as AppState;
 
 describe("ConfigTab import/export settings", () => {
   beforeEach(() => {
+    localStorage.removeItem("digicore-config-subtab");
     mockOpen.mockReset();
     mockSave.mockReset();
     mockEmit.mockReset();
@@ -92,11 +142,34 @@ describe("ConfigTab import/export settings", () => {
     mockTaurpc.ghost_follower_set_opacity.mockReset();
     mockTaurpc.get_copy_to_clipboard_config.mockReset();
     mockTaurpc.save_copy_to_clipboard_config.mockReset();
+    mockTaurpc.kms_get_indexing_status.mockReset();
+    mockTaurpc.kms_get_indexing_status.mockResolvedValue([]);
+    mockTaurpc.kms_request_note_embedding_migration.mockReset();
+    mockTaurpc.kms_request_note_embedding_migration.mockResolvedValue(1);
+    mockTaurpc.kms_get_embedding_policy_diagnostics.mockReset();
+    mockTaurpc.kms_get_embedding_policy_diagnostics.mockResolvedValue({
+      indexed_note_count: 0,
+      stale_embedding_note_count: 0,
+      expected_policy_signature: "",
+      total_notes_in_index: 0,
+      pending_note_count: 0,
+      failed_sync_note_count: 0,
+      embedding_aligned_note_count: 0,
+      other_sync_status_note_count: 0,
+      vault_markdown_files_on_disk: 0,
+      vault_all_files_on_disk: 0,
+    });
+    mockTaurpc.kms_get_embedding_diagnostic_log_path.mockReset();
+    mockTaurpc.kms_get_embedding_diagnostic_log_path.mockResolvedValue(
+      "C:\\fake\\DigiCore\\logs\\kms_embedding.log"
+    );
+    mockTaurpc.kms_cancel_note_embedding_migration.mockReset();
+    mockTaurpc.kms_cancel_note_embedding_migration.mockResolvedValue(undefined);
     mockTaurpc.get_app_state.mockResolvedValue(defaultState);
     mockTaurpc.export_settings_bundle_to_file.mockResolvedValue(9);
     mockTaurpc.preview_settings_bundle_from_file.mockResolvedValue({
       path: "C:\\temp\\settings.json",
-      schema_version: "1.0.0",
+      schema_version: "1.1.0",
       available_groups: ["ghost_follower", "appearance"],
       warnings: [],
       valid: true,
@@ -125,32 +198,40 @@ describe("ConfigTab import/export settings", () => {
     mockTaurpc.save_copy_to_clipboard_config.mockResolvedValue(null);
   });
 
-  it("renders Appearance section and import/export section", () => {
+  it("renders Appearance section and import/export section", async () => {
+    const user = userEvent.setup();
     render(<ConfigTab appState={defaultState} onConfigLoaded={vi.fn()} />);
-    expect(screen.getAllByText("Appearance").length).toBeGreaterThan(0);
-    expect(
-      screen.getByText(
-        "NOTE: See 'Appearance' tab for detailed configurations and settings."
-      )
-    ).toBeInTheDocument();
-    expect(screen.getByText("Import/Export Settings")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Appearance" }));
+    expect(await screen.findByRole("heading", { name: "Appearance" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Import/Export" }));
+    expect(screen.getByRole("heading", { name: "Import/Export Settings" })).toBeInTheDocument();
   });
 
   it("exports settings bundle with selected groups", async () => {
+    const user = userEvent.setup();
     mockSave.mockResolvedValue("C:\\temp\\settings.json");
     render(<ConfigTab appState={defaultState} onConfigLoaded={vi.fn()} />);
 
-    await userEvent.click(screen.getByRole("radio", { name: "Selected Groups" }));
-    await userEvent.click(screen.getByRole("checkbox", { name: "Templates" }));
-    await userEvent.click(screen.getByRole("checkbox", { name: "Sync" }));
-    await userEvent.click(screen.getByRole("checkbox", { name: "Discovery" }));
-    await userEvent.click(screen.getByRole("checkbox", { name: "Ghost Suggestor" }));
-    await userEvent.click(screen.getByRole("checkbox", { name: "Clipboard History" }));
-    await userEvent.click(screen.getByRole("checkbox", { name: "Copy-to-Clipboard" }));
-    await userEvent.click(screen.getByRole("checkbox", { name: "Core" }));
-    await userEvent.click(screen.getByRole("checkbox", { name: "Script Runtime" }));
+    await user.click(screen.getByRole("button", { name: "Import/Export" }));
+    await user.click(screen.getByRole("radio", { name: "Selected Groups" }));
+    await user.click(screen.getByRole("checkbox", { name: "Templates" }));
+    await user.click(screen.getByRole("checkbox", { name: "Sync" }));
+    await user.click(screen.getByRole("checkbox", { name: "Discovery" }));
+    await user.click(screen.getByRole("checkbox", { name: "Ghost Suggestor" }));
+    await user.click(screen.getByRole("checkbox", { name: "Clipboard History" }));
+    await user.click(screen.getByRole("checkbox", { name: "Copy-to-Clipboard" }));
+    await user.click(screen.getByRole("checkbox", { name: "Text Expansion" }));
+    await user.click(screen.getByRole("checkbox", { name: "Core" }));
+    await user.click(screen.getByRole("checkbox", { name: "Script Runtime" }));
+    await user.click(screen.getByRole("checkbox", { name: "Corpus Generation" }));
+    await user.click(screen.getByRole("checkbox", { name: "Extraction Engine" }));
+    await user.click(screen.getByRole("checkbox", { name: "Statistics" }));
+    await user.click(screen.getByRole("checkbox", { name: "Log" }));
+    await user.click(screen.getByRole("checkbox", { name: "Semantic Search" }));
+    await user.click(screen.getByRole("checkbox", { name: "Knowledge Graph" }));
+    await user.click(screen.getByRole("checkbox", { name: "KMS Search and embeddings" }));
 
-    await userEvent.click(screen.getByRole("button", { name: "Export Settings JSON" }));
+    await user.click(screen.getByRole("button", { name: "Export Settings JSON" }));
 
     await waitFor(() =>
       expect(mockTaurpc.export_settings_bundle_to_file).toHaveBeenCalledWith(
@@ -163,18 +244,20 @@ describe("ConfigTab import/export settings", () => {
   });
 
   it("imports settings bundle and refreshes app state", async () => {
+    const user = userEvent.setup();
     const onConfigLoaded = vi.fn();
     mockOpen.mockResolvedValue("C:\\temp\\settings.json");
     render(<ConfigTab appState={defaultState} onConfigLoaded={onConfigLoaded} />);
 
-    await userEvent.click(screen.getByRole("radio", { name: "Import" }));
-    await userEvent.click(
+    await user.click(screen.getByRole("button", { name: "Import/Export" }));
+    await user.click(screen.getByRole("radio", { name: "Import" }));
+    await user.click(
       screen.getByRole("button", { name: "Select Import File (Preview)" })
     );
     await waitFor(() =>
       expect(mockTaurpc.preview_settings_bundle_from_file).toHaveBeenCalled()
     );
-    await userEvent.click(
+    await user.click(
       screen.getByRole("button", { name: "Apply Import from Preview" })
     );
 
@@ -186,19 +269,21 @@ describe("ConfigTab import/export settings", () => {
   });
 
   it("blocks apply until warnings are acknowledged", async () => {
+    const user = userEvent.setup();
     const onConfigLoaded = vi.fn();
     mockOpen.mockResolvedValue("C:\\temp\\settings.json");
     mockTaurpc.preview_settings_bundle_from_file.mockResolvedValue({
       path: "C:\\temp\\settings.json",
-      schema_version: "1.0.0",
+      schema_version: "1.1.0",
       available_groups: ["ghost_follower"],
       warnings: ["Unknown group 'legacy' will be ignored."],
       valid: true,
     });
     render(<ConfigTab appState={defaultState} onConfigLoaded={onConfigLoaded} />);
 
-    await userEvent.click(screen.getByRole("radio", { name: "Import" }));
-    await userEvent.click(
+    await user.click(screen.getByRole("button", { name: "Import/Export" }));
+    await user.click(screen.getByRole("radio", { name: "Import" }));
+    await user.click(
       screen.getByRole("button", { name: "Select Import File (Preview)" })
     );
     await waitFor(() =>
@@ -211,23 +296,25 @@ describe("ConfigTab import/export settings", () => {
     });
     expect(applyBtn).toBeDisabled();
 
-    await userEvent.click(
+    await user.click(
       screen.getByRole("checkbox", {
         name: "I reviewed and acknowledge the preview warnings before import.",
       })
     );
     expect(applyBtn).toBeEnabled();
 
-    await userEvent.click(applyBtn);
+    await user.click(applyBtn);
     await waitFor(() =>
       expect(mockTaurpc.import_settings_bundle_from_file).toHaveBeenCalled()
     );
   });
 
   it("saves core pause toggle via update_config", async () => {
+    const user = userEvent.setup();
     render(<ConfigTab appState={defaultState} onConfigLoaded={vi.fn()} />);
-    await userEvent.click(screen.getByRole("checkbox", { name: "Pause expansion (F7)" }));
-    await userEvent.click(screen.getByRole("button", { name: "Save All Settings" }));
+    await user.click(screen.getByRole("button", { name: "Core" }));
+    await user.click(screen.getByRole("checkbox", { name: "Pause expansion (F7)" }));
+    await user.click(screen.getByRole("button", { name: "Save All Settings" }));
 
     await waitFor(() =>
       expect(mockTaurpc.update_config).toHaveBeenCalledWith(
@@ -294,5 +381,68 @@ describe("ConfigTab import/export settings", () => {
       )
     );
     expect(screen.getByText("Note: 0 = Unlimited")).toBeInTheDocument();
+  });
+});
+
+describe("ConfigTab KMS embeddings", () => {
+  beforeEach(() => {
+    localStorage.removeItem("digicore-config-subtab");
+    localStorage.removeItem("digicore-kms-embedding-health-report-v1");
+    mockTaurpc.update_config.mockReset();
+    mockTaurpc.save_settings.mockReset();
+    mockTaurpc.get_app_state.mockReset();
+    mockTaurpc.kms_request_note_embedding_migration.mockReset();
+    mockTaurpc.kms_request_note_embedding_migration.mockResolvedValue(1);
+    mockTaurpc.kms_get_embedding_policy_diagnostics.mockReset();
+    mockTaurpc.kms_get_embedding_policy_diagnostics.mockResolvedValue({
+      indexed_note_count: 0,
+      stale_embedding_note_count: 0,
+      expected_policy_signature: "",
+      total_notes_in_index: 0,
+      pending_note_count: 0,
+      failed_sync_note_count: 0,
+      embedding_aligned_note_count: 0,
+      other_sync_status_note_count: 0,
+      vault_markdown_files_on_disk: 0,
+      vault_all_files_on_disk: 0,
+    });
+    mockTaurpc.kms_get_embedding_diagnostic_log_path.mockReset();
+    mockTaurpc.kms_get_embedding_diagnostic_log_path.mockResolvedValue(
+      "C:\\fake\\DigiCore\\logs\\kms_embedding.log"
+    );
+    mockTaurpc.kms_cancel_note_embedding_migration.mockReset();
+    mockTaurpc.kms_cancel_note_embedding_migration.mockResolvedValue(undefined);
+    mockTaurpc.get_app_state.mockResolvedValue(defaultState);
+  });
+
+  it("queues vault re-embed from KMS Search and embeddings", async () => {
+    const user = userEvent.setup();
+    render(<ConfigTab appState={defaultState} onConfigLoaded={vi.fn()} />);
+    await user.click(screen.getByRole("button", { name: "KMS Search and embeddings" }));
+    await user.click(screen.getByTestId("kms-reembed-vault-btn"));
+    await waitFor(() =>
+      expect(mockTaurpc.kms_request_note_embedding_migration).toHaveBeenCalled()
+    );
+  });
+
+  it("saves embedding model id and batch size with search settings", async () => {
+    const user = userEvent.setup();
+    const onLoaded = vi.fn();
+    render(<ConfigTab appState={defaultState} onConfigLoaded={onLoaded} />);
+    await user.click(screen.getByRole("button", { name: "KMS Search and embeddings" }));
+    const modelInput = screen.getByPlaceholderText("BGESmallENV15");
+    await user.clear(modelInput);
+    await user.type(modelInput, "CustomModel");
+    await user.click(
+      screen.getByRole("button", { name: "Save search and embedding settings" })
+    );
+    await waitFor(() =>
+      expect(mockTaurpc.update_config).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kms_embedding_model_id: "CustomModel",
+          kms_embedding_batch_notes_per_tick: 8,
+        })
+      )
+    );
   });
 });

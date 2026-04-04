@@ -13,10 +13,14 @@ import {
     CheckCircle2,
     XCircle,
     Info,
-    History
+    History,
+    Download,
 } from "lucide-react";
+import { save } from "@tauri-apps/plugin-dialog";
 import { getTaurpc } from "../../lib/taurpc";
 import { KmsDiagnosticsDto } from "../../bindings";
+import { kmsGraphLog } from "../../lib/kmsGraphLog";
+import { formatIpcOrRaw } from "../../lib/ipcError";
 import { Button } from "../ui/button";
 import { useToast } from "../ui/use-toast";
 
@@ -25,6 +29,10 @@ export default function KmsHealthDashboard() {
     const [diagnostics, setDiagnostics] = useState<KmsDiagnosticsDto | null>(null);
     const [loading, setLoading] = useState(true);
     const [pruning, setPruning] = useState(false);
+    const [exportingGraphDiag, setExportingGraphDiag] = useState(false);
+    const [exportingWikiLinks, setExportingWikiLinks] = useState(false);
+    const [exportingGraphml, setExportingGraphml] = useState(false);
+    const [exportingGraphDtoJson, setExportingGraphDtoJson] = useState(false);
     const [refreshKey, setRefreshKey] = useState(0);
 
     useEffect(() => {
@@ -34,7 +42,12 @@ export default function KmsHealthDashboard() {
                 const data = await getTaurpc().kms_get_diagnostics();
                 setDiagnostics(data);
             } catch (err) {
-                console.error("Failed to fetch diagnostics:", err);
+                kmsGraphLog.error("Failed to fetch KMS diagnostics:", err);
+                toast({
+                    title: "Diagnostics Load Failed",
+                    description: formatIpcOrRaw(err),
+                    variant: "destructive",
+                });
             } finally {
                 setLoading(false);
             }
@@ -56,11 +69,115 @@ export default function KmsHealthDashboard() {
         } catch (err) {
             toast({
                 title: "Prune Failed",
-                description: String(err),
+                description: formatIpcOrRaw(err),
                 variant: "destructive",
             });
         } finally {
             setPruning(false);
+        }
+    };
+
+    const handleExportGraphDiagnostics = async () => {
+        const path = await save({
+            title: "Export KMS graph diagnostics",
+            defaultPath: "kms_graph_diagnostics.json",
+            filters: [{ name: "JSON", extensions: ["json"] }],
+        });
+        if (!path || typeof path !== "string") return;
+        setExportingGraphDiag(true);
+        try {
+            await getTaurpc().kms_export_graph_diagnostics(path);
+            toast({
+                title: "Graph diagnostics exported",
+                description: "Includes build params, counts, and a redacted vault fingerprint for support.",
+            });
+        } catch (e) {
+            toast({
+                title: "Export failed",
+                description: formatIpcOrRaw(e),
+                variant: "destructive",
+            });
+        } finally {
+            setExportingGraphDiag(false);
+        }
+    };
+
+    const handleExportWikiLinksJson = async () => {
+        const path = await save({
+            title: "Export wiki links (JSON)",
+            defaultPath: "kms_wiki_links.json",
+            filters: [{ name: "JSON", extensions: ["json"] }],
+        });
+        if (!path || typeof path !== "string") return;
+        setExportingWikiLinks(true);
+        try {
+            await getTaurpc().kms_export_wiki_links_json(path);
+            toast({
+                title: "Wiki links exported",
+                description: "Directed edges as vault-relative paths (for Gephi, D3, etc.).",
+            });
+        } catch (e) {
+            toast({
+                title: "Export failed",
+                description: formatIpcOrRaw(e),
+                variant: "destructive",
+            });
+        } finally {
+            setExportingWikiLinks(false);
+        }
+    };
+
+    const handleExportGraphGraphml = async () => {
+        const path = await save({
+            title: "Export knowledge graph (GraphML)",
+            defaultPath: "kms_graph.graphml",
+            filters: [{ name: "GraphML", extensions: ["graphml"] }],
+        });
+        if (!path || typeof path !== "string") return;
+        setExportingGraphml(true);
+        try {
+            await getTaurpc().kms_export_graph_graphml(path);
+            toast({
+                title: "Graph exported",
+                description: "Full wiki graph as GraphML (nodes + undirected wiki edges). Large vaults may take a moment.",
+            });
+        } catch (e) {
+            toast({
+                title: "Export failed",
+                description: formatIpcOrRaw(e),
+                variant: "destructive",
+            });
+        } finally {
+            setExportingGraphml(false);
+        }
+    };
+
+    const exportBusy =
+        exportingGraphDiag || exportingWikiLinks || exportingGraphml || exportingGraphDtoJson;
+
+    const handleExportGraphDtoJson = async () => {
+        const path = await save({
+            title: "Export knowledge graph (JSON)",
+            defaultPath: "kms_graph_dto.json",
+            filters: [{ name: "JSON", extensions: ["json"] }],
+        });
+        if (!path || typeof path !== "string") return;
+        setExportingGraphDtoJson(true);
+        try {
+            await getTaurpc().kms_export_graph_dto_json(path);
+            toast({
+                title: "Graph JSON exported",
+                description:
+                    "Full unpaged build: same shape as the graph IPC DTO (nodes, edges, clusters, beams, warnings).",
+            });
+        } catch (e) {
+            toast({
+                title: "Export failed",
+                description: formatIpcOrRaw(e),
+                variant: "destructive",
+            });
+        } finally {
+            setExportingGraphDtoJson(false);
         }
     };
 
@@ -195,6 +312,74 @@ export default function KmsHealthDashboard() {
                         <Button
                             className="w-full justify-start h-14 rounded-2xl bg-dc-bg-secondary hover:bg-dc-bg-hover text-dc-text border-dc-border/40 hover:border-dc-accent/40 group transition-all"
                             variant="secondary"
+                            onClick={handleExportGraphDiagnostics}
+                            disabled={exportBusy}
+                        >
+                            <Download
+                                className={`w-5 h-5 mr-3 text-dc-blue group-hover:scale-110 transition-transform ${exportingGraphDiag ? "animate-pulse" : ""}`}
+                            />
+                            <div className="flex flex-col items-start">
+                                <span className="text-sm font-bold">Export graph diagnostics</span>
+                                <span className="text-[10px] text-dc-text-muted">
+                                    JSON for support (params, counts, vault fingerprint)
+                                </span>
+                            </div>
+                        </Button>
+
+                        <Button
+                            className="w-full justify-start h-14 rounded-2xl bg-dc-bg-secondary hover:bg-dc-bg-hover text-dc-text border-dc-border/40 hover:border-dc-accent/40 group transition-all"
+                            variant="secondary"
+                            onClick={handleExportWikiLinksJson}
+                            disabled={exportBusy}
+                        >
+                            <Download
+                                className={`w-5 h-5 mr-3 text-sky-400 group-hover:scale-110 transition-transform ${exportingWikiLinks ? "animate-pulse" : ""}`}
+                            />
+                            <div className="flex flex-col items-start">
+                                <span className="text-sm font-bold">Export wiki links (JSON)</span>
+                                <span className="text-[10px] text-dc-text-muted">
+                                    All indexed wiki edges; vault fingerprint only (no note bodies)
+                                </span>
+                            </div>
+                        </Button>
+
+                        <Button
+                            className="w-full justify-start h-14 rounded-2xl bg-dc-bg-secondary hover:bg-dc-bg-hover text-dc-text border-dc-border/40 hover:border-dc-accent/40 group transition-all"
+                            variant="secondary"
+                            onClick={handleExportGraphGraphml}
+                            disabled={exportBusy}
+                        >
+                            <Download
+                                className={`w-5 h-5 mr-3 text-emerald-400 group-hover:scale-110 transition-transform ${exportingGraphml ? "animate-pulse" : ""}`}
+                            />
+                            <div className="flex flex-col items-start">
+                                <span className="text-sm font-bold">Export graph (GraphML)</span>
+                                <span className="text-[10px] text-dc-text-muted">
+                                    Full graph build: nodes (path, title) and edges (wiki, semantic_knn, etc.) for Gephi / yEd
+                                </span>
+                            </div>
+                        </Button>
+
+                        <Button
+                            className="w-full justify-start h-14 rounded-2xl bg-dc-bg-secondary hover:bg-dc-bg-hover text-dc-text border-dc-border/40 hover:border-dc-accent/40 group transition-all"
+                            variant="secondary"
+                            onClick={handleExportGraphDtoJson}
+                            disabled={exportBusy}
+                        >
+                            <Download
+                                className={`w-5 h-5 mr-3 text-violet-400 group-hover:scale-110 transition-transform ${exportingGraphDtoJson ? "animate-pulse" : ""}`}
+                            />
+                            <div className="flex flex-col items-start">
+                                <span className="text-sm font-bold">Export graph (JSON DTO)</span>
+                                <span className="text-[10px] text-dc-text-muted">
+                                    Full unpaged payload matching kms_get_graph (clusters, kNN edges, warnings)
+                                </span>
+                            </div>
+                        </Button>
+
+                        <Button
+                            className="w-full justify-start h-14 rounded-2xl bg-dc-bg-secondary hover:bg-dc-bg-hover text-dc-text border-dc-border/40 hover:border-dc-accent/40 group transition-all"
+                            variant="secondary"
                             onClick={handlePrune}
                             disabled={pruning}
                         >
@@ -214,7 +399,7 @@ export default function KmsHealthDashboard() {
                                         await getTaurpc().kms_reindex_all();
                                         toast({ title: "Repair Started", description: "Indexing all local content." });
                                     } catch (e) {
-                                        toast({ title: "Error", description: String(e), variant: "destructive" });
+                                        toast({ title: "Error", description: formatIpcOrRaw(e), variant: "destructive" });
                                     }
                                 }
                             }}

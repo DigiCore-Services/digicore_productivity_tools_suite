@@ -5,7 +5,8 @@ import { Link2 } from "lucide-react";
 
 export interface WikiLinkOptions {
     HTMLAttributes: Record<string, any>;
-    onLinkClick?: (path: string) => void;
+    /** Second argument is the click event (Ctrl/Cmd+click can open reference pane). */
+    onLinkClick?: (path: string, event: React.MouseEvent) => void;
 }
 
 declare module "@tiptap/core" {
@@ -83,7 +84,7 @@ export const WikiLinkExtension = Node.create<WikiLinkOptions>({
                 e.preventDefault();
                 e.stopPropagation();
                 if (this.options.onLinkClick) {
-                    this.options.onLinkClick(target);
+                    this.options.onLinkClick(target, e);
                 }
             };
 
@@ -91,7 +92,7 @@ export const WikiLinkExtension = Node.create<WikiLinkOptions>({
                 <span
                     className={this.options.HTMLAttributes.class}
                     onClick={handleClick}
-                    title={`Go to ${target}`}
+                    title={`Go to ${target} (Ctrl+click: open as reference)`}
                     data-type="wiki-link"
                     data-target={target}
                 >

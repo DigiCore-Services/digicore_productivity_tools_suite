@@ -118,6 +118,64 @@ export interface AppState {
   extraction_scoring_jitter_penalty_weight: number;
   extraction_scoring_size_penalty_weight: number;
   extraction_scoring_low_confidence_threshold: number;
+
+  kms_graph_k_means_max_k: number;
+  kms_graph_k_means_iterations: number;
+  kms_graph_ai_beam_max_nodes: number;
+  kms_graph_ai_beam_similarity_threshold: number;
+  kms_graph_ai_beam_max_edges: number;
+  kms_graph_enable_ai_beams: boolean;
+  kms_graph_enable_semantic_clustering: boolean;
+  kms_graph_enable_leiden_communities: boolean;
+  kms_graph_semantic_max_notes: number;
+  kms_graph_warn_note_threshold: number;
+  kms_graph_beam_max_pair_checks: number;
+  kms_graph_enable_semantic_knn_edges: boolean;
+  kms_graph_semantic_knn_per_note: number;
+  kms_graph_semantic_knn_min_similarity: number;
+  kms_graph_semantic_knn_max_edges: number;
+  kms_graph_semantic_knn_max_pair_checks: number;
+  kms_graph_auto_paging_enabled: boolean;
+  kms_graph_auto_paging_note_threshold: number;
+  kms_graph_vault_overrides_json: string;
+
+  kms_graph_bloom_enabled: boolean;
+  kms_graph_bloom_strength: number;
+  kms_graph_bloom_radius: number;
+  kms_graph_bloom_threshold: number;
+  kms_graph_hex_cell_radius: number;
+  kms_graph_hex_layer_opacity: number;
+  kms_graph_hex_stroke_width: number;
+  kms_graph_hex_stroke_opacity: number;
+
+  kms_graph_pagerank_iterations: number;
+  kms_graph_pagerank_local_iterations: number;
+  kms_graph_pagerank_damping: number;
+  kms_graph_pagerank_scope: string;
+  kms_graph_background_wiki_pagerank_enabled: boolean;
+
+  kms_graph_temporal_window_enabled: boolean;
+  kms_graph_temporal_default_days: number;
+  kms_graph_temporal_include_notes_without_mtime: boolean;
+  kms_graph_temporal_edge_recency_enabled: boolean;
+  kms_graph_temporal_edge_recency_strength: number;
+  kms_graph_temporal_edge_recency_half_life_days: number;
+  kms_search_min_similarity: number;
+  kms_search_include_embedding_diagnostics: boolean;
+  kms_search_default_mode: string;
+  kms_search_default_limit: number;
+
+  kms_embedding_model_id: string;
+  kms_embedding_batch_notes_per_tick: number;
+  kms_embedding_chunk_enabled: boolean;
+  kms_embedding_chunk_max_chars: number;
+  kms_embedding_chunk_overlap_chars: number;
+
+  kms_graph_sprite_label_max_dpr_scale: number;
+  kms_graph_sprite_label_min_res_scale: number;
+  kms_graph_webworker_layout_threshold: number;
+  kms_graph_webworker_layout_max_ticks: number;
+  kms_graph_webworker_layout_alpha_min: number;
 }
 
 export interface ClipEntry {

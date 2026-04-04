@@ -1,11 +1,10 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import { Markdown } from "tiptap-markdown";
 import CodeMirror from "@uiw/react-codemirror";
 import { markdown } from "@codemirror/lang-markdown";
 import { Image } from "@tiptap/extension-image";
-import { convertFileSrc } from "@tauri-apps/api/core";
 import { MermaidExtension } from "./MermaidExtension";
 import { MathExtension } from "./MathExtension";
 import { AdmonitionExtension } from "./AdmonitionExtension";
@@ -14,7 +13,7 @@ import { Button } from "../ui/button";
 import {
     Eye, Code, Save, Trash2, Sparkles, ChevronRight, ChevronLeft,
     FileText, ExternalLink, Link2, Sun, Moon, Maximize2, Minimize2,
-    History, List, Globe
+    History, List, Globe, Network, Star, BookOpen, GripVertical, X,
 } from "lucide-react";
 import KmsLocalGraph3D from "./KmsLocalGraph3D";
 import { WikiLinkExtension } from "./WikiLinkExtension";
@@ -23,6 +22,9 @@ import { KmsNoteDto, SearchResultDto, KmsLinksDto, SnippetLogicTestResultDto } f
 import { Tooltip } from "../ui/tooltip";
 import { cn } from "../../lib/utils";
 import KmsSmartTemplateModal from "./KmsSmartTemplateModal";
+import KmsReferenceReadOnly from "./KmsReferenceReadOnly";
+import { prepareMarkdownForTiptap } from "../../lib/kmsEditorPrepareMarkdown";
+import { resolveMarkdownLinkAgainstNotePath } from "../../lib/kmsMarkdownLinkResolve";
 
 interface KmsEditorProps {
     path: string;
@@ -32,6 +34,9 @@ interface KmsEditorProps {
     onRename?: (newName: string) => Promise<void>;
     onSelectNote?: (path: string) => void;
     onOpenSkillEditor?: () => void;
+    /** When set with `onFavoriteChange`, shows a star toggle in the toolbar. */
+    isFavorite?: boolean;
+    onFavoriteChange?: (next: boolean) => Promise<void>;
     isZenMode?: boolean;
     onToggleZenMode?: () => void;
     onToggleTheme?: () => void;
@@ -39,9 +44,59 @@ interface KmsEditorProps {
     isHistoryOpen?: boolean;
     currentTheme?: "light" | "dark";
     vaultPath?: string | null;
+    /** Exposes latest markdown (editor state) for history diff / other tools. */
+    workingCopyMarkdownRef?: React.MutableRefObject<(() => string) | null>;
+    /** Open full KMS knowledge graph focused on this note (parent switches view). */
+    onOpenGlobalGraph?: () => void;
+    referenceNote?: { path: string; title: string } | null;
+    referenceContent?: string | null;
+    onClearReference?: () => void;
+    onOpenReferenceWikiTarget?: (wikiTarget: string) => void;
+    /** When `id` changes, inserts markdown at the cursor (WYSIWYG) or appends in source mode. */
+    pendingMarkdownInsert?: { id: number; text: string } | null;
+    onPendingMarkdownInsertConsumed?: () => void;
 }
 
-export default function KmsEditor({ path, initialContent, onSave, onDelete, onRename, onSelectNote, onOpenSkillEditor, isZenMode, onToggleZenMode, onToggleHistory, isHistoryOpen, onToggleTheme, currentTheme, vaultPath }: KmsEditorProps) {
+const REF_PANE_WIDTH_LS = "kms-reference-pane-width-v1";
+
+function readReferencePaneWidth(): number {
+    try {
+        const raw = localStorage.getItem(REF_PANE_WIDTH_LS);
+        if (!raw) return 340;
+        const n = Number.parseInt(raw, 10);
+        if (Number.isFinite(n) && n >= 240 && n <= 720) return n;
+    } catch {
+        /* ignore */
+    }
+    return 340;
+}
+
+export default function KmsEditor({
+    path,
+    initialContent,
+    onSave,
+    onDelete,
+    onRename,
+    onSelectNote,
+    onOpenSkillEditor,
+    isFavorite,
+    onFavoriteChange,
+    isZenMode,
+    onToggleZenMode,
+    onToggleHistory,
+    isHistoryOpen,
+    onToggleTheme,
+    currentTheme,
+    vaultPath,
+    workingCopyMarkdownRef,
+    onOpenGlobalGraph,
+    referenceNote,
+    referenceContent,
+    onClearReference,
+    onOpenReferenceWikiTarget,
+    pendingMarkdownInsert,
+    onPendingMarkdownInsertConsumed,
+}: KmsEditorProps) {
     const [mode, setMode] = useState<"wysiwyg" | "source">("wysiwyg");
     const [content, setContent] = useState(initialContent);
     const [isDirty, setIsDirty] = useState(false);
@@ -60,6 +115,17 @@ export default function KmsEditor({ path, initialContent, onSave, onDelete, onRe
     const [activeHeading, setActiveHeading] = useState<number>(-1);
     const [sidebarWidth, setSidebarWidth] = useState(380);
     const [isResizing, setIsResizing] = useState(false);
+    const [favoriteBusy, setFavoriteBusy] = useState(false);
+    const [referencePaneWidth, setReferencePaneWidth] = useState(readReferencePaneWidth);
+    const [isResizingReference, setIsResizingReference] = useState(false);
+
+    useEffect(() => {
+        if (!workingCopyMarkdownRef) return;
+        workingCopyMarkdownRef.current = () => content;
+        return () => {
+            workingCopyMarkdownRef.current = null;
+        };
+    }, [content, workingCopyMarkdownRef]);
 
     const startResizing = useCallback((e: React.MouseEvent) => {
         e.preventDefault();
@@ -90,7 +156,52 @@ export default function KmsEditor({ path, initialContent, onSave, onDelete, onRe
         };
     }, [isResizing, resize, stopResizing]);
 
+    const stopResizingReference = useCallback(() => {
+        setIsResizingReference(false);
+    }, []);
+
+    const resizeReference = useCallback((e: MouseEvent) => {
+        if (!isResizingReference) return;
+        const root = document.querySelector("[data-kms-editor-split-root]");
+        const rect = root?.getBoundingClientRect();
+        if (!rect) return;
+        const newRefWidth = rect.right - e.clientX;
+        if (newRefWidth >= 240 && newRefWidth <= 720) {
+            setReferencePaneWidth(newRefWidth);
+            try {
+                localStorage.setItem(REF_PANE_WIDTH_LS, String(newRefWidth));
+            } catch {
+                /* ignore */
+            }
+        }
+    }, [isResizingReference]);
+
+    useEffect(() => {
+        if (isResizingReference) {
+            window.addEventListener("mousemove", resizeReference);
+            window.addEventListener("mouseup", stopResizingReference);
+        }
+        return () => {
+            window.removeEventListener("mousemove", resizeReference);
+            window.removeEventListener("mouseup", stopResizingReference);
+        };
+    }, [isResizingReference, resizeReference, stopResizingReference]);
+
+    const startResizingReference = useCallback((e: React.MouseEvent) => {
+        e.preventDefault();
+        setIsResizingReference(true);
+    }, []);
+
     const filename = path.split(/[\\/]/).pop() || "";
+
+    const onSelectNoteRef = useRef(onSelectNote);
+    const onOpenReferenceWikiTargetRef = useRef(onOpenReferenceWikiTarget);
+    const pathRef = useRef(path);
+    useEffect(() => {
+        onSelectNoteRef.current = onSelectNote;
+        onOpenReferenceWikiTargetRef.current = onOpenReferenceWikiTarget;
+        pathRef.current = path;
+    }, [onSelectNote, onOpenReferenceWikiTarget, path]);
 
     const editor = useEditor({
         extensions: [
@@ -102,9 +213,11 @@ export default function KmsEditor({ path, initialContent, onSave, onDelete, onRe
             MathExtension,
             AdmonitionExtension,
             WikiLinkExtension.configure({
-                onLinkClick: (target) => {
-                    if (onSelectNote) {
-                        onSelectNote(target);
+                onLinkClick: (target, e) => {
+                    if (e.ctrlKey || e.metaKey) {
+                        onOpenReferenceWikiTargetRef.current?.(target);
+                    } else {
+                        onSelectNoteRef.current?.(target);
                     }
                 },
             }),
@@ -128,6 +241,30 @@ export default function KmsEditor({ path, initialContent, onSave, onDelete, onRe
             attributes: {
                 class: "prose dark:prose-invert prose-sm sm:prose-base lg:prose-lg focus:outline-none max-w-none min-h-[500px] p-8 bg-dc-bg",
             },
+            handleDOMEvents: {
+                click: (_view, event) => {
+                    const e = event as MouseEvent;
+                    const t = e.target;
+                    if (!(t instanceof Element)) return false;
+                    const a = t.closest("a");
+                    if (!a) return false;
+                    const hrefRaw = a.getAttribute("href");
+                    if (!hrefRaw) return false;
+
+                    const resolved = resolveMarkdownLinkAgainstNotePath(pathRef.current, hrefRaw);
+                    if (!resolved || !/\.md$/i.test(resolved)) return false;
+
+                    e.preventDefault();
+                    e.stopPropagation();
+
+                    if (e.ctrlKey || e.metaKey) {
+                        onOpenReferenceWikiTargetRef.current?.(resolved);
+                    } else {
+                        onSelectNoteRef.current?.(resolved);
+                    }
+                    return true;
+                },
+            },
         },
         onUpdate: ({ editor }) => {
             const md = (editor.storage as any).markdown.getMarkdown();
@@ -145,12 +282,7 @@ export default function KmsEditor({ path, initialContent, onSave, onDelete, onRe
 
     useEffect(() => {
         if (editor && initialContent !== content) {
-            // Pre-process: detect specialized blocks and wrap them for Tiptap extensions
-            let processed = wrapFrontmatter(initialContent);
-            processed = wrapMath(processed);
-            processed = wrapAdmonitions(processed);
-            processed = wrapWikiLinks(processed);
-            processed = wrapImages(processed, vaultPath);
+            const processed = prepareMarkdownForTiptap(initialContent, vaultPath);
 
             // Defer setContent to avoid flushSync warning during React lifecycle
             setTimeout(() => {
@@ -162,6 +294,19 @@ export default function KmsEditor({ path, initialContent, onSave, onDelete, onRe
             }, 0);
         }
     }, [path, initialContent, editor]);
+
+    useEffect(() => {
+        const p = pendingMarkdownInsert;
+        if (!p || !editor) return;
+        const { text } = p;
+        if (mode === "wysiwyg") {
+            editor.chain().focus().insertContent(text).run();
+        } else {
+            setContent((prev) => `${prev}${prev && !prev.endsWith("\n") ? "\n" : ""}${text}\n`);
+            setIsDirty(true);
+        }
+        onPendingMarkdownInsertConsumed?.();
+    }, [pendingMarkdownInsert, editor, mode, onPendingMarkdownInsertConsumed]);
 
     useEffect(() => {
         const fetchLinks = async () => {
@@ -374,13 +519,17 @@ export default function KmsEditor({ path, initialContent, onSave, onDelete, onRe
             setMode("source");
         } else {
             // When switching back to WYSIWYG, content from CodeMirror is already in 'content' state
-            editor?.commands.setContent(content);
+            editor?.commands.setContent(prepareMarkdownForTiptap(content, vaultPath));
             setMode("wysiwyg");
         }
     };
 
+    const showReference = Boolean(
+        referenceNote && referenceContent != null && !isZenMode
+    );
+
     return (
-        <div className="flex flex-col h-full overflow-hidden bg-dc-bg">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-dc-bg">
             {/* Editor Toolbar */}
             <header className={cn(
                 "flex items-center justify-between px-6 py-3 border-b border-dc-border bg-dc-bg-secondary/30 backdrop-blur-sm transition-all",
@@ -457,6 +606,31 @@ export default function KmsEditor({ path, initialContent, onSave, onDelete, onRe
                 <div className="flex items-center gap-4">
 
                     <div className="flex items-center gap-1 border-r border-dc-border pr-3 mr-1">
+                        {onFavoriteChange && (
+                            <Tooltip content={isFavorite ? "Remove from favorites" : "Add to favorites"}>
+                                <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className={cn(
+                                        "h-8 w-8 p-0",
+                                        isFavorite
+                                            ? "text-dc-accent hover:bg-dc-accent/10"
+                                            : "text-dc-text-muted hover:text-dc-accent hover:bg-dc-accent/10"
+                                    )}
+                                    disabled={favoriteBusy}
+                                    onClick={async () => {
+                                        setFavoriteBusy(true);
+                                        try {
+                                            await onFavoriteChange(!isFavorite);
+                                        } finally {
+                                            setFavoriteBusy(false);
+                                        }
+                                    }}
+                                >
+                                    <Star size={16} className={isFavorite ? "fill-dc-accent" : ""} />
+                                </Button>
+                            </Tooltip>
+                        )}
                         <Tooltip content="Delete Note">
                             <Button
                                 variant="ghost"
@@ -573,6 +747,11 @@ export default function KmsEditor({ path, initialContent, onSave, onDelete, onRe
                 </div>
             </header>
 
+            <div
+                className="flex min-h-0 min-w-0 flex-1 flex-row"
+                data-kms-editor-split-root
+            >
+                <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
             {/* Editor Area */}
             <div className="flex-1 overflow-y-auto scrollbar-thin scrollbar-thumb-dc-border scrollbar-track-transparent bg-dc-bg editor-scroll-area">
                 {mode === "wysiwyg" ? (
@@ -740,6 +919,7 @@ export default function KmsEditor({ path, initialContent, onSave, onDelete, onRe
                             <div className="h-[500px] min-h-[500px] w-full rounded-2xl overflow-hidden border border-white/5 bg-black/20 shadow-inner relative">
                                 <KmsLocalGraph3D
                                     path={path}
+                                    toolsShortcutActive={sidebarTab === "spatial"}
                                     onSelectNote={(p) => {
                                         if (onSelectNote) onSelectNote(p);
                                     }}
@@ -810,6 +990,64 @@ export default function KmsEditor({ path, initialContent, onSave, onDelete, onRe
                 </div>
             )}
 
+                </div>
+
+                {showReference && referenceNote && referenceContent != null && (
+                    <>
+                        <div
+                            role="separator"
+                            aria-orientation="vertical"
+                            aria-label="Resize reference pane"
+                            title="Drag to resize reference pane"
+                            onMouseDown={startResizingReference}
+                            className={cn(
+                                "relative flex w-2 shrink-0 cursor-col-resize items-center justify-center border-l border-dc-border bg-dc-bg-secondary/20",
+                                isResizingReference && "bg-dc-accent/15"
+                            )}
+                        >
+                            <GripVertical className="pointer-events-none h-8 w-4 text-dc-text-muted opacity-70" />
+                        </div>
+                        <div
+                            className="flex min-h-0 min-w-0 shrink-0 flex-col border-l border-dc-border bg-dc-bg/50"
+                            style={{ width: referencePaneWidth }}
+                        >
+                            <div className="flex items-center justify-between gap-2 border-b border-dc-border bg-dc-bg-secondary/40 px-3 py-2">
+                                <div className="flex min-w-0 items-center gap-2">
+                                    <BookOpen className="h-4 w-4 shrink-0 text-dc-accent" />
+                                    <span className="text-[10px] font-bold uppercase tracking-wider text-dc-text-muted">
+                                        Reference
+                                    </span>
+                                    <span
+                                        className="truncate text-xs font-medium text-dc-text"
+                                        title={referenceNote.path}
+                                    >
+                                        {referenceNote.title ||
+                                            referenceNote.path.split(/[\\/]/).pop()}
+                                    </span>
+                                </div>
+                                <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className="h-8 w-8 p-0"
+                                    onClick={onClearReference}
+                                    title="Close reference pane"
+                                >
+                                    <X size={16} />
+                                </Button>
+                            </div>
+                            <KmsReferenceReadOnly
+                                path={referenceNote.path}
+                                markdownContent={referenceContent}
+                                vaultPath={vaultPath}
+                                currentTheme={currentTheme}
+                                onSelectNote={onSelectNote}
+                                onOpenReferenceWikiTarget={onOpenReferenceWikiTarget}
+                            />
+                        </div>
+                    </>
+                )}
+            </div>
+
             {/* Bottom Status bar */}
             {!isZenMode && (
                 <footer className="px-6 py-2 border-t border-dc-border bg-dc-bg-secondary/40 flex justify-between items-center text-[10px] text-dc-text-muted">
@@ -839,50 +1077,12 @@ export default function KmsEditor({ path, initialContent, onSave, onDelete, onRe
 
 // --- Helper Functions for Wiki-link Handling ---
 
-function wrapWikiLinks(md: string): string {
-    return wrapExceptCodeBlocks(md, /\[\[([^\]]+)\]\]/g, (match, target) => {
-        return `<span data-type="wiki-link" data-target="${target}">[[${target}]]</span>`;
-    });
-}
-
 function unwrapWikiLinks(md: string): string {
     if (!md) return md;
     return md.replace(/<span\s+[^>]*data-type="wiki-link"[^>]*data-target="([^"]+)"[^>]*>\[\[.*?\]\]<\/span>/g, '[[$1]]');
 }
 
 // --- Helper Functions for Image Handling ---
-
-function wrapImages(md: string, vaultPath: string | null | undefined): string {
-    if (!md) return md;
-    // Look for ![alt](src) but NOT inside code blocks
-    return wrapExceptCodeBlocks(md, /!\[([^\]]*)\]\(([^)]+)\)/g, (match, alt, src) => {
-        if (src.startsWith('http') || src.startsWith('data:')) {
-            return match;
-        }
-
-        // It's a local path. If we have a vaultPath, try to resolve it.
-        if (vaultPath) {
-            // Normalize path (handle relative to vault root)
-            let fullPath = src;
-            if (!src.includes(':') && !src.startsWith('/') && !src.startsWith('\\')) {
-                // Assume relative to vault root for now, or we could resolve relative to the current note
-                // For simplicity, let's assume all vault images are relative to vault root
-                fullPath = vaultPath + (vaultPath.endsWith('/') || vaultPath.endsWith('\\') ? '' : '/') + src;
-            } else if (src.startsWith('/') || src.startsWith('\\')) {
-                fullPath = vaultPath + src;
-            }
-
-            try {
-                const assetUrl = convertFileSrc(fullPath);
-                return `<img src="${assetUrl}" alt="${alt}" data-path="${src}" data-type="vault-image" />`;
-            } catch (e) {
-                console.error("Failed to convert image path:", e);
-                return match;
-            }
-        }
-        return match;
-    });
-}
 
 function unwrapImages(md: string): string {
     if (!md) return md;
@@ -891,21 +1091,6 @@ function unwrapImages(md: string): string {
 }
 
 // --- Helper Functions for Frontmatter Handling ---
-
-function wrapFrontmatter(md: string): string {
-    if (!md) return md;
-    const trimmed = md.trim();
-    if (trimmed.startsWith('---')) {
-        const parts = trimmed.split('---');
-        if (parts.length >= 3) {
-            const frontmatter = parts[1].trim();
-            const remainder = parts.slice(2).join('---').trim();
-            // Use PRE tag to preserve whitespace during Tiptap parsing
-            return `<pre data-type="frontmatter">${frontmatter}</pre>\n\n${remainder}`;
-        }
-    }
-    return md;
-}
 
 function unwrapFrontmatter(md: string): string {
     if (!md) return md;
@@ -922,14 +1107,6 @@ function unwrapFrontmatter(md: string): string {
     return md;
 }
 
-function wrapMath(md: string): string {
-    // Replace block math $$ ... $$
-    let processed = wrapExceptCodeBlocks(md, /\$\$([\s\S]+?)\$\$/g, '<div data-type="math" data-display="true">$1</div>');
-    // Replace inline math $ ... $
-    processed = wrapExceptCodeBlocks(processed, /\$([^$]+?)\$/g, '<span data-type="math" data-display="false">$1</span>');
-    return processed;
-}
-
 function unwrapMath(md: string): string {
     if (!md) return md;
     // Reverse display math
@@ -937,21 +1114,6 @@ function unwrapMath(md: string): string {
     // Reverse inline math
     processed = processed.replace(/<span data-type="math" data-display="false">([\s\S]+?)<\/span>/g, '$$$1$$');
     return processed;
-}
-
-function wrapAdmonitions(md: string): string {
-    // Support ::: type ... ::: blocks
-    return wrapExceptCodeBlocks(md, /:::(\w+)\n?([\s\S]+?)\n?:::/g, '<div data-type="admonition" data-admonition-type="$1">$2</div>');
-}
-
-function wrapExceptCodeBlocks(text: string, regex: RegExp, replacement: string | ((substring: string, ...args: any[]) => string)): string {
-    if (!text) return text;
-    // Split by code blocks (triple backticks OR tildes)
-    const parts = text.split(/(```[\s\S]*?```|~~~[\s\S]*?~~~)/g);
-    return parts.map(part => {
-        if (part.startsWith('```') || part.startsWith('~~~')) return part;
-        return part.replace(regex, replacement as any);
-    }).join('');
 }
 
 function unwrapAdmonitions(md: string): string {

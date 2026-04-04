@@ -1,11 +1,11 @@
-import React, { useState, useEffect, useRef, lazy, Suspense, useCallback } from "react";
+import React, { useState, useEffect, useRef, lazy, Suspense, useCallback, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { listen } from "@tauri-apps/api/event";
 import { getTaurpc } from "./lib/taurpc";
 import { resolveTheme, applyThemeToDocument } from "./lib/theme";
 import { Toaster } from "./components/ui/toaster";
 import { useToast } from "./components/ui/use-toast";
-import { Book, FolderOpen, Search, Settings, Plus, Star, FileText, Sun, Moon, AlertCircle, RefreshCw, Check, Terminal, Activity, Cpu, Maximize2, Minimize2, Network } from "lucide-react";
+import { Book, FolderOpen, Search, Settings, Plus, Star, FileText, Sun, Moon, AlertCircle, RefreshCw, Check, Terminal, Activity, Cpu, Maximize2, Minimize2, Network, PanelLeft, Clock, GripVertical, Filter, LayoutTemplate } from "lucide-react";
 import { Button } from "./components/ui/button";
 import KmsEditor from "./components/kms/KmsEditor";
 import KmsLogViewer from "./components/kms/KmsLogViewer";
@@ -16,12 +16,51 @@ const ImageViewerModal = lazy(() =>
     import("./components/modals/ImageViewerModal").then((m) => ({ default: m.ImageViewerModal }))
 );
 import FileExplorer from "./components/kms/FileExplorer";
+import KmsTemplateGalleryModal from "./components/kms/KmsTemplateGalleryModal";
+import KmsAssetTray from "./components/kms/KmsAssetTray";
+import KmsCommandPalette, { type KmsCommandPaletteView } from "./components/kms/KmsCommandPalette";
 import SkillHub from "./components/kms/SkillHub";
 import SkillEditor from "./components/kms/SkillEditor";
+import KmsReindexProgressBadge from "./components/kms/KmsReindexProgressBadge";
 const KmsGraph = lazy(() => import("./components/kms/KmsGraph"));
 const KmsGraph3D = lazy(() => import("./components/kms/KmsGraph3D"));
-import { KmsNoteDto, KmsFileSystemItemDto, KmsLogDto, SkillDto } from "./bindings";
+import { KmsNoteDto, KmsFileSystemItemDto, KmsLogDto, SkillDto, AppStateDto, SearchResultDto } from "./bindings";
 import { ClipEntry } from "./types";
+import { formatIpcOrRaw } from "./lib/ipcError";
+import {
+    estimateWeightedEtaMs,
+    loadProviderDurationHistory,
+    recordProviderDuration,
+    vaultSizeTierFromNoteCount,
+} from "./lib/kmsReindexEta";
+import {
+    readLegacyRecentNotePathsFromLocalStorage,
+    clearLegacyRecentNotePathsFromLocalStorage,
+    recordRecentNotePath,
+    normalizeKmsNotePathForLookup,
+    KMS_RECENT_NOTES_MAX,
+} from "./lib/kmsRecentNotes";
+import {
+    readLegacyFavoritePathOrderFromLocalStorage,
+    clearLegacyFavoritePathOrderFromLocalStorage,
+    sortFavoriteNotes,
+    pruneFavoriteOrder,
+} from "./lib/kmsFavoriteManualOrder";
+import {
+    fetchKmsRecentPathsFromDb,
+    fetchKmsFavoritePathOrderFromDb,
+    persistKmsRecentPaths,
+    persistKmsFavoritePathOrder,
+} from "./lib/kmsSidebarStateDb";
+import {
+    defaultKmsSearchClientFilters,
+    filterSearchResults,
+    parseInputDateToDay,
+    searchEmbeddingDiagFromResults,
+    type KmsSearchClientFilters,
+} from "./lib/kmsSearchResultFilter";
+import { kmsVaultRelativePath } from "./lib/kmsVaultRelPath";
+import { resolveNoteFromWikiTarget } from "./lib/kmsWikiResolve";
 
 export default function KmsApp() {
     const { toast } = useToast();
@@ -30,17 +69,27 @@ export default function KmsApp() {
     const [notes, setNotes] = useState<KmsNoteDto[]>([]);
     const [activeNote, setActiveNote] = useState<KmsNoteDto | null>(null);
     const [activeContent, setActiveContent] = useState<string>("");
+    /** Read-only split pane: second note while editing the active one. */
+    const [referenceNote, setReferenceNote] = useState<KmsNoteDto | null>(null);
+    const [referenceContent, setReferenceContent] = useState<string | null>(null);
     const [theme, setTheme] = useState<"light" | "dark">("light");
     const [themeOverride, setThemeOverride] = useState<"light" | "dark" | null>(null);
-    const [view, setView] = useState<"explorer" | "search" | "favorites" | "logs" | "skills" | "graph">("explorer");
+    const [view, setView] = useState<"explorer" | "search" | "favorites" | "recents" | "logs" | "skills" | "graph">("explorer");
     const [activeSkill, setActiveSkill] = useState<SkillDto | null>(null);
     const [isSkillEditorOpen, setIsSkillEditorOpen] = useState(false);
     const [isSkillDirty, setIsSkillDirty] = useState(false);
     const [skillRefreshKey, setSkillRefreshKey] = useState(0);
     const [searchQuery, setSearchQuery] = useState("");
-    const [searchResults, setSearchResults] = useState<any[]>([]); // SearchResultDto
+    const [searchResults, setSearchResults] = useState<SearchResultDto[]>([]);
     const [searchLoading, setSearchLoading] = useState(false);
     const [searchMode, setSearchMode] = useState<"Hybrid" | "Semantic" | "Keyword">("Hybrid");
+    const [kmsSearchDefaultLimit, setKmsSearchDefaultLimit] = useState(20);
+    const [kmsSearchIncludeEmbeddingDiagnostics, setKmsSearchIncludeEmbeddingDiagnostics] = useState(false);
+    const [searchClientFilters, setSearchClientFilters] = useState<KmsSearchClientFilters>(() =>
+        defaultKmsSearchClientFilters()
+    );
+    const [searchDateFromInput, setSearchDateFromInput] = useState("");
+    const [searchDateToInput, setSearchDateToInput] = useState("");
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
     const [syncStatus, setSyncStatus] = useState<string>("Idle");
     const [viewFullVisible, setViewFullVisible] = useState(false);
@@ -51,7 +100,18 @@ export default function KmsApp() {
     const [imageViewerCurrent, setImageViewerCurrent] = useState<ClipEntry | null>(null);
     const [imageViewerContext, setImageViewerContext] = useState<ClipEntry[]>([]);
     const searchAbortController = useRef<AbortController | null>(null);
+    const indexedNoteCountRef = useRef(0);
     const [vaultStructure, setVaultStructure] = useState<KmsFileSystemItemDto | null>(null);
+    const [explorerTreeFilter, setExplorerTreeFilter] = useState("");
+    const [explorerTagFilter, setExplorerTagFilter] = useState("");
+    const [templateGalleryOpen, setTemplateGalleryOpen] = useState(false);
+    const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+    const [explorerBulkMode, setExplorerBulkMode] = useState(false);
+    const [explorerBulkPaths, setExplorerBulkPaths] = useState<Set<string>>(() => new Set());
+    const editorInsertTokenRef = useRef(0);
+    const [editorMarkdownInsert, setEditorMarkdownInsert] = useState<{ id: number; text: string } | null>(null);
+    const [recentPaths, setRecentPaths] = useState<string[]>([]);
+    const [favoritePathOrder, setFavoritePathOrder] = useState<string[]>([]);
     const [sidebarWidth, setSidebarWidth] = useState(() => {
         const saved = localStorage.getItem("kms-sidebar-width");
         return saved ? Number.parseInt(saved) : 280;
@@ -62,10 +122,54 @@ export default function KmsApp() {
         return saved === "true";
     });
     const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+    const [historyPanelWidth, setHistoryPanelWidth] = useState(() => {
+        const saved = localStorage.getItem("kms-history-panel-width");
+        const n = saved ? Number.parseInt(saved, 10) : 320;
+        return Number.isFinite(n) ? Math.max(260, Math.min(920, n)) : 320;
+    });
+    const [isResizingHistory, setIsResizingHistory] = useState(false);
     const [graphMode, setGraphMode] = useState<"2d" | "3d">("3d");
     const [graphResetKey, setGraphResetKey] = useState(0);
+    const [graphNavigateRequest, setGraphNavigateRequest] = useState<{ token: number; path: string } | null>(null);
+    const graphNavigateTokenRef = useRef(0);
+    const editorWorkingCopyMarkdownRef = useRef<(() => string) | null>(null);
+    const [indexedNoteCount, setIndexedNoteCount] = useState(0);
+    const [reindexProgress, setReindexProgress] = useState<{
+        requestId: string;
+        providerId: string;
+        phase: "start" | "progress" | "end";
+        startedAtMs: number;
+        emittedAtMs: number;
+        elapsedMs: number;
+        etaRemainingMs: number | null;
+        providerIndex: number;
+        providerTotal: number;
+        providerIndexedCount: number;
+        indexedTotalSoFar: number;
+        succeeded: boolean | null;
+        error: string | null;
+    } | null>(null);
+    const providerStartElapsedRef = useRef<Record<string, number>>({});
+
+    const applyKmsSearchDefaultsFromDto = useCallback((app: AppStateDto) => {
+        const rawMode = (app.kms_search_default_mode ?? "Hybrid").trim();
+        if (rawMode === "Semantic" || rawMode === "Keyword") {
+            setSearchMode(rawMode);
+        } else {
+            setSearchMode("Hybrid");
+        }
+        setKmsSearchDefaultLimit(
+            Math.min(200, Math.max(1, app.kms_search_default_limit ?? 20))
+        );
+        setKmsSearchIncludeEmbeddingDiagnostics(Boolean(app.kms_search_include_embedding_diagnostics));
+    }, []);
 
     const currentTheme = themeOverride || theme;
+    const formatKmsError = useCallback((error: unknown) => formatIpcOrRaw(error), []);
+
+    useEffect(() => {
+        indexedNoteCountRef.current = indexedNoteCount;
+    }, [indexedNoteCount]);
 
     const toggleTheme = useCallback(() => {
         setThemeOverride(currentTheme === "dark" ? "light" : "dark");
@@ -86,6 +190,45 @@ export default function KmsApp() {
                 setVaultPath(path);
                 refreshNotes();
                 refreshStructure();
+                refreshIndexedNoteCount();
+
+                try {
+                    const app = await getTaurpc().get_app_state();
+                    applyKmsSearchDefaultsFromDto(app);
+                } catch {
+                    /* keep defaults */
+                }
+
+                try {
+                    const [recentFromDb, favoriteOrderFromDb] = await Promise.all([
+                        fetchKmsRecentPathsFromDb(),
+                        fetchKmsFavoritePathOrderFromDb(),
+                    ]);
+
+                    let recentInit = recentFromDb;
+                    if (recentInit.length === 0) {
+                        const legacy = readLegacyRecentNotePathsFromLocalStorage();
+                        if (legacy.length > 0) {
+                            recentInit = legacy.slice(0, KMS_RECENT_NOTES_MAX);
+                            await persistKmsRecentPaths(recentInit);
+                            clearLegacyRecentNotePathsFromLocalStorage();
+                        }
+                    }
+                    setRecentPaths(recentInit);
+
+                    let favInit = favoriteOrderFromDb;
+                    if (favInit.length === 0) {
+                        const legacyFav = readLegacyFavoritePathOrderFromLocalStorage();
+                        if (legacyFav.length > 0) {
+                            favInit = legacyFav;
+                            await persistKmsFavoritePathOrder(favInit);
+                            clearLegacyFavoritePathOrderFromLocalStorage();
+                        }
+                    }
+                    setFavoritePathOrder(favInit);
+                } catch {
+                    /* keep empty sidebar lists */
+                }
 
                 // Initialize theme from global settings
                 const globalThemePref = localStorage.getItem("digicore-theme") || "light";
@@ -93,7 +236,7 @@ export default function KmsApp() {
             } catch (error) {
                 toast({
                     title: "KMS Initialization Error",
-                    description: String(error),
+                    description: formatKmsError(error),
                     variant: "destructive",
                 });
             } finally {
@@ -117,14 +260,139 @@ export default function KmsApp() {
         const unlistenSyncComplete = listen("kms-sync-complete", () => {
             refreshNotes();
             refreshStructure();
+            refreshIndexedNoteCount();
+            setReindexProgress(null);
+        });
+        const unlistenReindexProviderProgress = listen("kms-reindex-provider-progress", (event: any) => {
+            const payload = (event.payload ?? {}) as {
+                request_id?: string;
+                provider_id?: string;
+                phase?: string;
+                started_at_ms?: number;
+                emitted_at_ms?: number;
+                elapsed_ms?: number;
+                eta_remaining_ms?: number | null;
+                provider_index?: number;
+                provider_total?: number;
+                provider_indexed_count?: number;
+                indexed_total_so_far?: number;
+                succeeded?: boolean | null;
+                error?: string | null;
+            };
+            const phase = payload.phase === "start" || payload.phase === "progress" || payload.phase === "end"
+                ? payload.phase
+                : "progress";
+            const providerId = payload.provider_id ?? "unknown";
+            const runElapsedMs = typeof payload.elapsed_ms === "number" ? payload.elapsed_ms : 0;
+            if (phase === "start") {
+                providerStartElapsedRef.current[providerId] = runElapsedMs;
+            }
+            const providerStartElapsed = providerStartElapsedRef.current[providerId] ?? runElapsedMs;
+            const providerElapsedMs = Math.max(0, runElapsedMs - providerStartElapsed);
+            let history = loadProviderDurationHistory();
+            const tier = vaultSizeTierFromNoteCount(indexedNoteCountRef.current);
+            if (phase === "end") {
+                history = recordProviderDuration(providerId, providerElapsedMs, tier);
+                delete providerStartElapsedRef.current[providerId];
+            }
+            const weightedEtaMs = estimateWeightedEtaMs(
+                {
+                    providerId,
+                    phase,
+                    providerIndex: typeof payload.provider_index === "number" ? payload.provider_index : 0,
+                    providerTotal: typeof payload.provider_total === "number" ? payload.provider_total : 0,
+                    elapsedMs: runElapsedMs,
+                },
+                providerElapsedMs,
+                history,
+                tier
+            );
+            setReindexProgress({
+                requestId: payload.request_id ?? "",
+                providerId,
+                phase,
+                startedAtMs: typeof payload.started_at_ms === "number" ? payload.started_at_ms : 0,
+                emittedAtMs: typeof payload.emitted_at_ms === "number" ? payload.emitted_at_ms : 0,
+                elapsedMs: typeof payload.elapsed_ms === "number" ? payload.elapsed_ms : 0,
+                etaRemainingMs: weightedEtaMs,
+                providerIndex: typeof payload.provider_index === "number" ? payload.provider_index : 0,
+                providerTotal: typeof payload.provider_total === "number" ? payload.provider_total : 0,
+                providerIndexedCount:
+                    typeof payload.provider_indexed_count === "number" ? payload.provider_indexed_count : 0,
+                indexedTotalSoFar:
+                    typeof payload.indexed_total_so_far === "number" ? payload.indexed_total_so_far : 0,
+                succeeded:
+                    typeof payload.succeeded === "boolean" ? payload.succeeded : null,
+                error: typeof payload.error === "string" ? payload.error : null,
+            });
+        });
+        const unlistenReindexComplete = listen("kms-reindex-complete", (event: any) => {
+            const payload = (event.payload ?? {}) as {
+                request_id?: string;
+                indexed_total?: number;
+                provider_failures?: string[];
+                succeeded?: boolean;
+            };
+            const failures = Array.isArray(payload.provider_failures) ? payload.provider_failures : [];
+            const indexed = typeof payload.indexed_total === "number" ? payload.indexed_total : 0;
+            if (payload.succeeded) {
+                toast({
+                    title: "Reindex Complete",
+                    description: `Indexed ${indexed} items.`,
+                });
+            } else {
+                toast({
+                    title: "Reindex Completed with Warnings",
+                    description:
+                        failures.length > 0
+                            ? `Indexed ${indexed} items. Failures: ${failures.join("; ")}`
+                            : `Indexed ${indexed} items with one or more provider issues.`,
+                    variant: "destructive",
+                });
+            }
+            refreshNotes();
+            refreshStructure();
+            refreshIndexedNoteCount();
+            providerStartElapsedRef.current = {};
+            setReindexProgress(null);
+        });
+        const unlistenWikiPr = listen("kms-wiki-pagerank-ready", (event) => {
+            window.dispatchEvent(new Event("kms-wiki-pagerank-ready"));
+            const raw = (event as { payload?: unknown }).payload;
+            const n =
+                typeof raw === "number"
+                    ? raw
+                    : typeof raw === "bigint"
+                      ? Number(raw)
+                      : typeof raw === "string"
+                        ? parseInt(raw, 10)
+                        : NaN;
+            toast({
+                title: "Wiki PageRank ready",
+                description:
+                    Number.isFinite(n) && n > 0
+                        ? `Updated materialized scores for ${n} notes.`
+                        : "Materialized link centrality is up to date.",
+            });
+        });
+
+        const unlistenAppState = listen("digicore-app-state-changed", () => {
+            getTaurpc()
+                .get_app_state()
+                .then(applyKmsSearchDefaultsFromDto)
+                .catch(() => {});
         });
 
         return () => {
             unlistenPromise.then(f => f());
             unlistenSyncStatus.then(f => f());
             unlistenSyncComplete.then(f => f());
+            unlistenReindexProviderProgress.then(f => f());
+            unlistenReindexComplete.then(f => f());
+            unlistenWikiPr.then(f => f());
+            unlistenAppState.then(f => f());
         };
-    }, [toast]);
+    }, [toast, applyKmsSearchDefaultsFromDto, formatKmsError]);
 
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
@@ -143,6 +411,144 @@ export default function KmsApp() {
             setNotes(list);
         } catch (error) {
             console.error("Failed to list notes:", error);
+        }
+    };
+
+    const favoriteNotes = useMemo(
+        () => sortFavoriteNotes(notes, favoritePathOrder),
+        [notes, favoritePathOrder]
+    );
+
+    const recentNotes = useMemo(() => {
+        const byKey = new Map(notes.map((n) => [normalizeKmsNotePathForLookup(n.path), n]));
+        const out: KmsNoteDto[] = [];
+        const seen = new Set<string>();
+        for (const p of recentPaths) {
+            const n = byKey.get(normalizeKmsNotePathForLookup(p));
+            if (n && !seen.has(n.path)) {
+                seen.add(n.path);
+                out.push(n);
+            }
+        }
+        return out;
+    }, [recentPaths, notes]);
+
+    const noteByPathForSearch = useMemo(() => new Map(notes.map((n) => [n.path, n])), [notes]);
+
+    const mergedSearchFilters = useMemo(
+        () => ({
+            ...searchClientFilters,
+            dateFromDay: parseInputDateToDay(searchDateFromInput),
+            dateToDay: parseInputDateToDay(searchDateToInput),
+        }),
+        [searchClientFilters, searchDateFromInput, searchDateToInput]
+    );
+
+    const filteredSearchResults = useMemo(
+        () => filterSearchResults(searchResults, mergedSearchFilters, noteByPathForSearch),
+        [searchResults, mergedSearchFilters, noteByPathForSearch]
+    );
+
+    const searchEmbeddingDiagBanner = useMemo(() => {
+        if (!kmsSearchIncludeEmbeddingDiagnostics) return null;
+        return searchEmbeddingDiagFromResults(searchResults);
+    }, [kmsSearchIncludeEmbeddingDiagnostics, searchResults]);
+
+    useEffect(() => {
+        if (notes.length === 0) return;
+        const byKey = new Map(
+            notes.map((n) => [normalizeKmsNotePathForLookup(n.path), n.path])
+        );
+        setRecentPaths((prev) => {
+            const next = prev
+                .map((p) => byKey.get(normalizeKmsNotePathForLookup(p)))
+                .filter((p): p is string => p != null);
+            if (next.length !== prev.length) void persistKmsRecentPaths(next);
+            return next;
+        });
+    }, [notes]);
+
+    useEffect(() => {
+        if (notes.length === 0) return;
+        const favSet = new Set(notes.filter((n) => n.is_favorite).map((n) => n.path));
+        setFavoritePathOrder((prev) => {
+            const next = pruneFavoriteOrder(prev, favSet);
+            if (next.length !== prev.length) void persistKmsFavoritePathOrder(next);
+            return next;
+        });
+    }, [notes]);
+
+    useEffect(() => {
+        if (view !== "favorites" && view !== "recents") return;
+        void (async () => {
+            try {
+                const list = await getTaurpc().kms_list_notes();
+                setNotes(list);
+            } catch (error) {
+                console.error("Failed to list notes for sidebar list view:", error);
+            }
+        })();
+    }, [view]);
+
+    const applyNoteFavoriteAtPath = useCallback(
+        async (path: string, wantFavorite: boolean) => {
+            try {
+                await getTaurpc().kms_set_note_favorite(path, wantFavorite);
+                const list = await getTaurpc().kms_list_notes();
+                setNotes(list);
+                setFavoritePathOrder((prev) => {
+                    let nextOrder: string[];
+                    if (wantFavorite) {
+                        nextOrder = prev.includes(path) ? prev : [...prev, path];
+                    } else {
+                        nextOrder = prev.filter((p) => p !== path);
+                    }
+                    void persistKmsFavoritePathOrder(nextOrder);
+                    return nextOrder;
+                });
+                setActiveNote((prev) => {
+                    if (!prev || prev.path !== path) return prev;
+                    const updated = list.find((n) => n.path === path);
+                    return updated ?? { ...prev, is_favorite: wantFavorite };
+                });
+            } catch (err) {
+                toast({
+                    title: "Favorite update failed",
+                    description: formatKmsError(err),
+                    variant: "destructive",
+                });
+            }
+        },
+        [formatKmsError, toast]
+    );
+
+    const handleFavoriteReorder = useCallback(
+        (fromIndex: number, toIndex: number) => {
+            if (fromIndex === toIndex) return;
+            const paths = sortFavoriteNotes(notes, favoritePathOrder).map((n) => n.path);
+            const next = [...paths];
+            const [removed] = next.splice(fromIndex, 1);
+            next.splice(toIndex, 0, removed);
+            setFavoritePathOrder(next);
+            void persistKmsFavoritePathOrder(next);
+        },
+        [notes, favoritePathOrder]
+    );
+
+    const handleNoteFavoriteChange = useCallback(
+        async (next: boolean) => {
+            if (!activeNote) return;
+            await applyNoteFavoriteAtPath(activeNote.path, next);
+        },
+        [activeNote, applyNoteFavoriteAtPath]
+    );
+
+    const refreshIndexedNoteCount = async () => {
+        try {
+            const diag = await getTaurpc().kms_get_diagnostics();
+            setIndexedNoteCount(diag.note_count);
+        } catch (error) {
+            console.error("Failed to load KMS diagnostics for note count:", error);
         }
     };
 
@@ -167,6 +573,109 @@ export default function KmsApp() {
         };
     }, [isResizing, sidebarWidth]);
 
+    const historyPanelWidthRef = useRef(historyPanelWidth);
+    historyPanelWidthRef.current = historyPanelWidth;
+
+    const endHistoryPanelResize = useCallback(() => {
+        setIsResizingHistory(false);
+        document.body.style.cursor = "";
+        document.body.style.userSelect = "";
+        localStorage.setItem("kms-history-panel-width", String(historyPanelWidthRef.current));
+    }, []);
+
+    const applyHistoryPanelWidth = useCallback((w: number) => {
+        const n = Math.round(Number(w));
+        const clamped = Number.isFinite(n) ? Math.max(260, Math.min(920, n)) : historyPanelWidthRef.current;
+        setHistoryPanelWidth(clamped);
+        historyPanelWidthRef.current = clamped;
+    }, []);
+
+    const persistHistoryPanelWidth = useCallback(
+        (w: number) => {
+            applyHistoryPanelWidth(w);
+            localStorage.setItem("kms-history-panel-width", String(historyPanelWidthRef.current));
+        },
+        [applyHistoryPanelWidth]
+    );
+
+    /**
+     * React onPointerDown only (no useLayoutEffect): effect cleanup was removing listeners mid-drag and
+     * historyResizeHandleRef was never attached to the DOM, so node was always null. Native listeners
+     * added from pointerdown use applyHistoryPanelWidth (not persist) until pointerup.
+     */
+    const handleHistoryResizePointerDown = useCallback(
+        (e: React.PointerEvent<HTMLDivElement>) => {
+            if (e.button !== 0) return;
+            e.preventDefault();
+            e.stopPropagation();
+
+            const node = e.currentTarget;
+            const startX = e.clientX;
+            const startW = historyPanelWidthRef.current;
+            if (!Number.isFinite(startX) || !Number.isFinite(startW)) return;
+
+            const attachWindowDrag = () => {
+                setIsResizingHistory(true);
+                document.body.style.cursor = "col-resize";
+                document.body.style.userSelect = "none";
+                const onMove = (ev: MouseEvent) => {
+                    ev.preventDefault();
+                    const delta = startX - ev.clientX;
+                    applyHistoryPanelWidth(startW + delta);
+                };
+                const onUp = () => {
+                    window.removeEventListener("mousemove", onMove, true);
+                    window.removeEventListener("mouseup", onUp, true);
+                    endHistoryPanelResize();
+                };
+                window.addEventListener("mousemove", onMove, true);
+                window.addEventListener("mouseup", onUp, true);
+            };
+
+            let captureOk = false;
+            try {
+                node.setPointerCapture(e.pointerId);
+                captureOk = true;
+            } catch {
+                captureOk = false;
+            }
+
+            if (!captureOk) {
+                attachWindowDrag();
+                return;
+            }
+
+            setIsResizingHistory(true);
+            document.body.style.cursor = "col-resize";
+            document.body.style.userSelect = "none";
+
+            const onPointerMove = (ev: PointerEvent) => {
+                ev.preventDefault();
+                const delta = startX - ev.clientX;
+                applyHistoryPanelWidth(startW + delta);
+            };
+
+            const onPointerEnd = (ev: PointerEvent) => {
+                node.removeEventListener("pointermove", onPointerMove);
+                node.removeEventListener("pointerup", onPointerEnd);
+                node.removeEventListener("pointercancel", onPointerEnd);
+                try {
+                    if (node.hasPointerCapture(ev.pointerId)) {
+                        node.releasePointerCapture(ev.pointerId);
+                    }
+                } catch {
+                    /* ignore */
+                }
+                endHistoryPanelResize();
+            };
+
+            node.addEventListener("pointermove", onPointerMove);
+            node.addEventListener("pointerup", onPointerEnd);
+            node.addEventListener("pointercancel", onPointerEnd);
+        },
+        [applyHistoryPanelWidth, endHistoryPanelResize]
+    );
+
     const refreshStructure = async () => {
         try {
             const structure = await getTaurpc().kms_get_vault_structure();
@@ -176,12 +685,40 @@ export default function KmsApp() {
         }
     };
 
+    useEffect(() => {
+        if (notes.length > indexedNoteCount) {
+            setIndexedNoteCount(notes.length);
+        }
+    }, [notes, indexedNoteCount]);
+
     const checkUnsavedSkillChanges = () => {
         if (isSkillEditorOpen && isSkillDirty) {
             return window.confirm("You have unsaved changes in the Skill Editor. Discard changes and continue?");
         }
         return true;
     };
+
+    const handleCommandPaletteJump = (v: KmsCommandPaletteView) => {
+        if (!checkUnsavedSkillChanges()) return;
+        setIsSkillEditorOpen(false);
+        setActiveNote(null);
+        setView(v);
+    };
+
+    useEffect(() => {
+        const onKey = (e: KeyboardEvent) => {
+            if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+                const t = e.target as HTMLElement | null;
+                if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) {
+                    return;
+                }
+                e.preventDefault();
+                setCommandPaletteOpen(true);
+            }
+        };
+        window.addEventListener("keydown", onKey);
+        return () => window.removeEventListener("keydown", onKey);
+    }, []);
 
     const handleSelectNote = async (note: KmsNoteDto) => {
         if (!checkUnsavedSkillChanges()) return;
@@ -190,14 +727,105 @@ export default function KmsApp() {
             setActiveContent(content);
             setActiveNote(note);
             setIsSkillEditorOpen(false);
+            setRecentPaths((prev) => {
+                const next = recordRecentNotePath(prev, note.path);
+                void persistKmsRecentPaths(next);
+                return next;
+            });
         } catch (error) {
             toast({
                 title: "Error Loading Note",
-                description: String(error),
+                description: formatKmsError(error),
                 variant: "destructive",
             });
         }
     };
+
+    const resolveNoteForWikiTarget = async (wikiTarget: string): Promise<KmsNoteDto | null> => {
+        let note = resolveNoteFromWikiTarget(notes, wikiTarget);
+        if (!note) {
+            try {
+                const latest = await getTaurpc().kms_list_notes();
+                setNotes(latest);
+                note = resolveNoteFromWikiTarget(latest, wikiTarget);
+            } catch {
+                /* ignore */
+            }
+        }
+        if (note) return note;
+        const title =
+            wikiTarget.split(/[\\/]/).pop()?.replace(/\.md$/i, "") || wikiTarget;
+        return { path: wikiTarget, title, tags: [] } as unknown as KmsNoteDto;
+    };
+
+    const handleWikiNavigateFromEditor = async (target: string) => {
+        const note = await resolveNoteForWikiTarget(target);
+        if (note) await handleSelectNote(note);
+    };
+
+    const handleOpenReferenceFromWiki = async (wikiTarget: string) => {
+        const note = await resolveNoteForWikiTarget(wikiTarget);
+        if (!note) return;
+        if (activeNote && note.path === activeNote.path) {
+            toast({
+                title: "Already editing",
+                description: "This note is already open in the editor.",
+            });
+            return;
+        }
+        try {
+            const content = await getTaurpc().kms_load_note(note.path);
+            setReferenceNote(note);
+            setReferenceContent(content);
+        } catch (error) {
+            toast({
+                title: "Reference note failed to load",
+                description: formatKmsError(error),
+                variant: "destructive",
+            });
+        }
+    };
+
+    const handleClearReferenceNote = () => {
+        setReferenceNote(null);
+        setReferenceContent(null);
+    };
+
+    const handleOpenNoteAsReference = async (note: KmsNoteDto) => {
+        if (activeNote && note.path === activeNote.path) {
+            toast({
+                title: "Already editing",
+                description: "Pick a different note for the reference pane.",
+            });
+            return;
+        }
+        try {
+            const content = await getTaurpc().kms_load_note(note.path);
+            setReferenceNote(note);
+            setReferenceContent(content);
+        } catch (error) {
+            toast({
+                title: "Reference note failed to load",
+                description: formatKmsError(error),
+                variant: "destructive",
+            });
+        }
+    };
+
+    useEffect(() => {
+        if (!activeNote || !referenceNote) return;
+        if (activeNote.path === referenceNote.path) {
+            setReferenceNote(null);
+            setReferenceContent(null);
+        }
+    }, [activeNote, referenceNote]);
+
+    const openGlobalGraphForActiveNote = useCallback(() => {
+        if (!activeNote) return;
+        graphNavigateTokenRef.current += 1;
+        setGraphNavigateRequest({ token: graphNavigateTokenRef.current, path: activeNote.path });
+        setView("graph");
+    }, [activeNote]);
 
     const handleOpenSkillEditor = async (filePath: string) => {
         // Path should be like .../skills/skill-name/SKILL.md
@@ -260,7 +888,7 @@ export default function KmsApp() {
         } catch (error) {
             toast({
                 title: "Error Creating Note",
-                description: String(error),
+                description: formatKmsError(error),
                 variant: "destructive",
             });
         }
@@ -275,7 +903,7 @@ export default function KmsApp() {
 
         const path = `${targetParent}\\${name}`;
         try {
-            await (getTaurpc() as any).kms_create_folder(path);
+            await getTaurpc().kms_create_folder(path);
             refreshStructure();
             toast({
                 title: "Folder Created",
@@ -284,7 +912,7 @@ export default function KmsApp() {
         } catch (error) {
             toast({
                 title: "Error Creating Folder",
-                description: String(error),
+                description: formatKmsError(error),
                 variant: "destructive",
             });
         }
@@ -304,24 +932,30 @@ export default function KmsApp() {
         } catch (error) {
             toast({
                 title: "Save Failed",
-                description: String(error),
+                description: formatKmsError(error),
                 variant: "destructive",
             });
         }
     };
 
-    const handleDeleteNote = async (path?: string) => {
+    const handleDeleteNote = async (path?: string, options?: { skipConfirm?: boolean }) => {
         const targetPath = path || activeNote?.path;
         if (!targetPath) return;
 
-        const confirmed = await window.confirm(`Are you sure you want to delete this note?`);
-        if (!confirmed) return;
+        if (!options?.skipConfirm) {
+            const confirmed = window.confirm(`Are you sure you want to delete this note?`);
+            if (!confirmed) return;
+        }
 
         try {
             await getTaurpc().kms_delete_note(targetPath);
             if (activeNote?.path === targetPath) {
                 setActiveNote(null);
                 setActiveContent("");
+            }
+            if (referenceNote?.path === targetPath) {
+                setReferenceNote(null);
+                setReferenceContent(null);
             }
             refreshNotes();
             refreshStructure();
@@ -332,7 +966,7 @@ export default function KmsApp() {
         } catch (error) {
             toast({
                 title: "Delete Failed",
-                description: String(error),
+                description: formatKmsError(error),
                 variant: "destructive",
             });
         }
@@ -348,6 +982,13 @@ export default function KmsApp() {
                 const updatedNote = { ...activeNote, path: newPath, title: newName.replace(/\.md$/i, "") };
                 setActiveNote(updatedNote);
             }
+            if (referenceNote?.path === targetPath) {
+                setReferenceNote({
+                    ...referenceNote,
+                    path: newPath,
+                    title: newName.replace(/\.md$/i, ""),
+                });
+            }
             await refreshNotes();
             await refreshStructure();
             toast({
@@ -358,7 +999,7 @@ export default function KmsApp() {
         } catch (error) {
             toast({
                 title: "Rename Failed",
-                description: String(error),
+                description: formatKmsError(error),
                 variant: "destructive",
             });
             throw error;
@@ -379,14 +1020,19 @@ export default function KmsApp() {
 
         setSearchLoading(true);
         try {
-            const results = await getTaurpc().kms_search_semantic(searchQuery, "text", 15, searchMode);
+            const results = await getTaurpc().kms_search_semantic(
+                searchQuery,
+                "text",
+                kmsSearchDefaultLimit,
+                searchMode
+            );
             if (abortController.signal.aborted) return;
             setSearchResults(results);
         } catch (error) {
             if (abortController.signal.aborted) return;
             toast({
                 title: "Search Failed",
-                description: String(error),
+                description: formatKmsError(error),
                 variant: "destructive",
             });
         } finally {
@@ -414,12 +1060,12 @@ export default function KmsApp() {
         }
 
         try {
-            await (getTaurpc() as any).kms_rename_folder(oldPath, newName);
+            await getTaurpc().kms_rename_folder(oldPath, newName);
             toast({ title: "Folder Renamed", description: `Renamed to ${newName}` });
             refreshStructure();
             refreshNotes();
-        } catch (err: any) {
-            toast({ title: "Rename Failed", description: String(err), variant: "destructive" });
+        } catch (err) {
+            toast({ title: "Rename Failed", description: formatKmsError(err), variant: "destructive" });
         }
     };
 
@@ -430,15 +1076,15 @@ export default function KmsApp() {
         }
 
         try {
-            await (getTaurpc() as any).kms_delete_folder(path);
+            await getTaurpc().kms_delete_folder(path);
             toast({ title: "Folder Deleted", description: name });
             refreshStructure();
             refreshNotes();
             if (activeNote && activeNote.path.startsWith(path)) {
                 setActiveNote(null);
             }
-        } catch (err: any) {
-            toast({ title: "Delete Failed", description: String(err), variant: "destructive" });
+        } catch (err) {
+            toast({ title: "Delete Failed", description: formatKmsError(err), variant: "destructive" });
         }
     };
 
@@ -451,14 +1097,59 @@ export default function KmsApp() {
         }
 
         try {
-            await (getTaurpc() as any).kms_move_item(path, newParentPath);
+            await getTaurpc().kms_move_item(path, newParentPath);
             toast({ title: "Item Moved", description: `Moved ${itemName} to ${folderName}` });
             refreshStructure();
             refreshNotes();
-        } catch (err: any) {
-            toast({ title: "Move Failed", description: String(err), variant: "destructive" });
+        } catch (err) {
+            toast({ title: "Move Failed", description: formatKmsError(err), variant: "destructive" });
         }
     };
+
+    const toggleExplorerBulkPath = useCallback((path: string) => {
+        setExplorerBulkPaths((prev) => {
+            const next = new Set(prev);
+            if (next.has(path)) next.delete(path);
+            else next.add(path);
+            return next;
+        });
+    }, []);
+
+    const handleExplorerBulkDelete = async () => {
+        const paths = [...explorerBulkPaths];
+        if (paths.length === 0) return;
+        if (!window.confirm(`Delete ${paths.length} note(s)? This cannot be undone.`)) return;
+        for (const p of paths) {
+            await handleDeleteNote(p, { skipConfirm: true });
+        }
+        setExplorerBulkPaths(new Set());
+        setExplorerBulkMode(false);
+    };
+
+    const handleExplorerBulkMove = async () => {
+        const paths = [...explorerBulkPaths];
+        if (paths.length === 0) return;
+        const dest = window.prompt("Move selected notes into this folder (full path):");
+        if (!dest?.trim()) return;
+        const target = dest.trim();
+        try {
+            for (const p of paths) {
+                await getTaurpc().kms_move_item(p, target);
+            }
+            toast({ title: "Bulk move complete", description: `${paths.length} item(s) moved.` });
+            refreshStructure();
+            refreshNotes();
+            setExplorerBulkPaths(new Set());
+            setExplorerBulkMode(false);
+        } catch (err) {
+            toast({ title: "Bulk move failed", description: formatKmsError(err), variant: "destructive" });
+        }
+    };
+
+    const queueEditorMarkdownInsert = useCallback((text: string) => {
+        editorInsertTokenRef.current += 1;
+        setEditorMarkdownInsert({ id: editorInsertTokenRef.current, text });
+    }, []);
 
     const handleNavigateToResult = async (result: any) => {
         if (!checkUnsavedSkillChanges()) return;
@@ -529,7 +1220,7 @@ export default function KmsApp() {
             return;
         }
         try {
-            await (getTaurpc() as any).kms_repair_database();
+            await getTaurpc().kms_repair_database();
             toast({
                 title: "KMS Index Reset",
                 description: "AI tables cleared. Please RESTART the app now to finish the repair.",
@@ -537,12 +1228,32 @@ export default function KmsApp() {
         } catch (error) {
             toast({
                 title: "Repair Failed",
-                description: String(error),
+                description: formatKmsError(error),
                 variant: "destructive",
             });
         }
     };
 
+    const handleSelectGraphNode = async (path: string) => {
+        let note = notes.find((n) => n.path === path);
+        if (!note) {
+            try {
+                const latest = await getTaurpc().kms_list_notes();
+                setNotes(latest);
+                note = latest.find((n) => n.path === path);
+            } catch (error) {
+                console.warn("Failed to refresh note list before graph navigation:", error);
+            }
+        }
+
+        if (note) {
+            await handleSelectNote(note);
+        } else {
+            const title = path.split(/[\\/]/).pop()?.replace(".md", "") || path;
+            await handleSelectNote({ path, title, tags: [] } as unknown as KmsNoteDto);
+        }
+        setView("explorer");
+    };
 
     useEffect(() => {
         applyThemeToDocument(currentTheme);
@@ -581,6 +1292,34 @@ export default function KmsApp() {
                             </span>
                         </div>
                     </div>
+                    {reindexProgress && (
+                        <div className="px-4 pb-2">
+                            <KmsReindexProgressBadge
+                                variant="panel"
+                                providerId={reindexProgress.providerId}
+                                providerIndex={reindexProgress.providerIndex}
+                                providerTotal={reindexProgress.providerTotal}
+                                elapsedMs={reindexProgress.elapsedMs}
+                                etaRemainingMs={reindexProgress.etaRemainingMs}
+                                indexedTotalSoFar={reindexProgress.indexedTotalSoFar}
+                            />
+                            {(reindexProgress.phase !== "start" || reindexProgress.error) && (
+                                <div className="mt-1 px-1 text-[10px] text-dc-text-muted">
+                                    {reindexProgress.phase !== "start" && (
+                                        <span>
+                                            Provider indexed: {reindexProgress.providerIndexedCount.toLocaleString()}
+                                            {reindexProgress.succeeded === false ? " (with errors)" : ""}
+                                        </span>
+                                    )}
+                                    {reindexProgress.error && (
+                                        <div className="text-dc-red mt-1 truncate" title={reindexProgress.error}>
+                                            {reindexProgress.error}
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+                    )}
 
                     <div className="flex-1 overflow-y-auto p-4 space-y-6">
                         <div>
@@ -625,6 +1364,19 @@ export default function KmsApp() {
                                 >
                                     <Star size={16} className={view === "favorites" ? "text-dc-accent" : "text-dc-text-muted"} />
                                     <span className="text-sm">Favorites</span>
+                                </Button>
+                                <Button
+                                    variant={view === "recents" ? "secondary" : "ghost"}
+                                    size="sm"
+                                    className={`w-full justify-start gap-2 h-9 px-2 ${view === "recents" ? "bg-dc-bg-hover text-dc-accent font-medium" : "text-dc-text-muted hover:bg-dc-bg-hover"}`}
+                                    onClick={() => {
+                                        if (!checkUnsavedSkillChanges()) return;
+                                        setView("recents");
+                                        setIsSkillEditorOpen(false);
+                                    }}
+                                >
+                                    <Clock size={16} className={view === "recents" ? "text-dc-accent" : "text-dc-text-muted"} />
+                                    <span className="text-sm">Recents</span>
                                 </Button>
                                 <Button
                                     variant={view === "graph" ? "secondary" : "ghost"}
@@ -701,19 +1453,84 @@ export default function KmsApp() {
                                                                 refreshNotes();
                                                                 refreshStructure();
                                                                 toast({ title: "Reindex Triggered", description: "Indexing vault contents." });
-                                                            } catch (err: any) {
-                                                                toast({ title: "Reindex Failed", description: String(err), variant: "destructive" });
+                                                            } catch (err) {
+                                                                toast({ title: "Reindex Failed", description: formatKmsError(err), variant: "destructive" });
                                                             }
                                                         }}
                                                     />
                                                 </div>
+                                                <div title="Template gallery">
+                                                    <LayoutTemplate
+                                                        size={14}
+                                                        className="cursor-pointer hover:text-dc-accent transition-colors"
+                                                        onClick={() => setTemplateGalleryOpen(true)}
+                                                    />
+                                                </div>
                                             </div>
+                                        </div>
+                                        <div className="flex flex-wrap items-center gap-2 px-1 mb-2">
+                                            <Button
+                                                type="button"
+                                                variant={explorerBulkMode ? "secondary" : "ghost"}
+                                                size="sm"
+                                                className="h-7 text-[10px]"
+                                                onClick={() => {
+                                                    setExplorerBulkMode((v) => !v);
+                                                    setExplorerBulkPaths(new Set());
+                                                }}
+                                            >
+                                                Bulk select
+                                            </Button>
+                                            {explorerBulkMode ? (
+                                                <>
+                                                    <Button
+                                                        type="button"
+                                                        variant="secondary"
+                                                        size="sm"
+                                                        className="h-7 text-[10px]"
+                                                        disabled={explorerBulkPaths.size === 0}
+                                                        onClick={() => void handleExplorerBulkMove()}
+                                                    >
+                                                        Move ({explorerBulkPaths.size})
+                                                    </Button>
+                                                    <Button
+                                                        type="button"
+                                                        variant="destructive"
+                                                        size="sm"
+                                                        className="h-7 text-[10px]"
+                                                        disabled={explorerBulkPaths.size === 0}
+                                                        onClick={() => void handleExplorerBulkDelete()}
+                                                    >
+                                                        Delete ({explorerBulkPaths.size})
+                                                    </Button>
+                                                </>
+                                            ) : null}
+                                        </div>
+                                        <div className="relative group px-1 mb-2 space-y-2">
+                                            <div className="relative">
+                                                <Filter size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-dc-text-muted group-focus-within:text-dc-accent transition-colors pointer-events-none" />
+                                                <input
+                                                    placeholder="Filter tree by name or path..."
+                                                    className="w-full bg-dc-bg-secondary text-dc-text border border-dc-border rounded-lg py-1.5 pl-9 pr-3 text-xs focus:outline-none focus:border-dc-accent/50 focus:bg-dc-bg-hover/50 transition-all placeholder:text-dc-text-muted/50"
+                                                    value={explorerTreeFilter}
+                                                    onChange={(e) => setExplorerTreeFilter(e.target.value)}
+                                                />
+                                            </div>
+                                            <input
+                                                placeholder="Filter by tag (comma or space)..."
+                                                title="Uses indexed YAML tags from frontmatter. Any token matches any tag."
+                                                className="w-full bg-dc-bg-secondary text-dc-text border border-dc-border rounded-lg py-1.5 px-3 text-xs focus:outline-none focus:border-dc-accent/50 focus:bg-dc-bg-hover/50 transition-all placeholder:text-dc-text-muted/50"
+                                                value={explorerTagFilter}
+                                                onChange={(e) => setExplorerTagFilter(e.target.value)}
+                                            />
                                         </div>
                                         <div className="flex-1 overflow-y-auto min-h-0">
                                             <FileExplorer
                                                 structure={vaultStructure}
+                                                notes={notes}
                                                 activeNote={activeNote}
                                                 onSelectNote={handleSelectNote}
+                                                onOpenNoteAsReference={handleOpenNoteAsReference}
                                                 onCreateNote={handleCreateNote}
                                                 onCreateFolder={handleCreateFolder}
                                                 onRenameNote={async (oldPath: string, newName: string) => {
@@ -729,6 +1546,12 @@ export default function KmsApp() {
                                                 onRenameFolder={handleRenameFolder}
                                                 onDeleteFolder={handleDeleteFolder}
                                                 onMoveItem={handleMoveItem}
+                                                onSetNoteFavorite={applyNoteFavoriteAtPath}
+                                                filterQuery={explorerTreeFilter}
+                                                tagFilter={explorerTagFilter}
+                                                bulkSelectMode={explorerBulkMode}
+                                                bulkSelectedPaths={explorerBulkPaths}
+                                                onToggleBulkPath={toggleExplorerBulkPath}
                                             />
                                         </div>
                                     </div>
@@ -769,6 +1592,151 @@ export default function KmsApp() {
                                         ))}
                                     </div>
 
+                                    <details className="mx-1 mt-2 border border-dc-border rounded-lg bg-dc-bg-secondary/30 group">
+                                        <summary className="px-3 py-2 text-[10px] font-bold text-dc-text-muted cursor-pointer select-none uppercase tracking-wider list-none flex items-center justify-between">
+                                            <span>Scope and filters</span>
+                                            <span className="text-[9px] opacity-60 normal-case font-normal">Client-side</span>
+                                        </summary>
+                                        <div className="px-3 pb-3 pt-1 space-y-3 border-t border-dc-border/40">
+                                            <div>
+                                                <label className="text-[9px] text-dc-text-muted uppercase font-bold block mb-1">Path contains</label>
+                                                <input
+                                                    placeholder="e.g. notes/project"
+                                                    className="w-full bg-dc-bg-secondary text-dc-text border border-dc-border rounded-lg py-1.5 px-2 text-xs"
+                                                    value={searchClientFilters.pathPrefix}
+                                                    onChange={(e) =>
+                                                        setSearchClientFilters((f) => ({ ...f, pathPrefix: e.target.value }))
+                                                    }
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="text-[9px] text-dc-text-muted uppercase font-bold block mb-1">Note tags</label>
+                                                <input
+                                                    placeholder="e.g. project, review"
+                                                    title="Indexed YAML tags. Any token matches any tag (substring)."
+                                                    className="w-full bg-dc-bg-secondary text-dc-text border border-dc-border rounded-lg py-1.5 px-2 text-xs"
+                                                    value={searchClientFilters.tagsFilter}
+                                                    onChange={(e) =>
+                                                        setSearchClientFilters((f) => ({ ...f, tagsFilter: e.target.value }))
+                                                    }
+                                                />
+                                            </div>
+                                            <div className="grid grid-cols-2 gap-2">
+                                                <div>
+                                                    <label className="text-[9px] text-dc-text-muted uppercase font-bold block mb-1">Modified from</label>
+                                                    <input
+                                                        type="date"
+                                                        className="w-full bg-dc-bg-secondary text-dc-text border border-dc-border rounded-lg py-1.5 px-2 text-[10px]"
+                                                        value={searchDateFromInput}
+                                                        onChange={(e) => setSearchDateFromInput(e.target.value)}
+                                                    />
+                                                </div>
+                                                <div>
+                                                    <label className="text-[9px] text-dc-text-muted uppercase font-bold block mb-1">Modified to</label>
+                                                    <input
+                                                        type="date"
+                                                        className="w-full bg-dc-bg-secondary text-dc-text border border-dc-border rounded-lg py-1.5 px-2 text-[10px]"
+                                                        value={searchDateToInput}
+                                                        onChange={(e) => setSearchDateToInput(e.target.value)}
+                                                    />
+                                                </div>
+                                            </div>
+                                            <p className="text-[9px] text-dc-text-muted leading-snug">
+                                                Date range applies to indexed notes only (uses note last modified from the vault index).
+                                            </p>
+                                            <div>
+                                                <label className="text-[9px] text-dc-text-muted uppercase font-bold block mb-1">Notes</label>
+                                                <select
+                                                    className="w-full bg-dc-bg-secondary text-dc-text border border-dc-border rounded-lg py-1.5 px-2 text-xs"
+                                                    value={searchClientFilters.noteScope}
+                                                    onChange={(e) =>
+                                                        setSearchClientFilters((f) => ({
+                                                            ...f,
+                                                            noteScope: e.target.value as KmsSearchClientFilters["noteScope"],
+                                                        }))
+                                                    }
+                                                >
+                                                    <option value="all">All note files</option>
+                                                    <option value="standard_only">Hide skill files</option>
+                                                    <option value="skills_only">Skills only</option>
+                                                </select>
+                                            </div>
+                                            <div className="flex flex-wrap gap-x-4 gap-y-2 text-[10px] text-dc-text">
+                                                <label className="flex items-center gap-2 cursor-pointer">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={searchClientFilters.includeNotes}
+                                                        onChange={(e) =>
+                                                            setSearchClientFilters((f) => ({
+                                                                ...f,
+                                                                includeNotes: e.target.checked,
+                                                            }))
+                                                        }
+                                                    />
+                                                    Notes
+                                                </label>
+                                                <label className="flex items-center gap-2 cursor-pointer">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={searchClientFilters.includeSnippets}
+                                                        onChange={(e) =>
+                                                            setSearchClientFilters((f) => ({
+                                                                ...f,
+                                                                includeSnippets: e.target.checked,
+                                                            }))
+                                                        }
+                                                    />
+                                                    Snippets
+                                                </label>
+                                                <label className="flex items-center gap-2 cursor-pointer">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={searchClientFilters.includeClipboard}
+                                                        onChange={(e) =>
+                                                            setSearchClientFilters((f) => ({
+                                                                ...f,
+                                                                includeClipboard: e.target.checked,
+                                                            }))
+                                                        }
+                                                    />
+                                                    Clipboard
+                                                </label>
+                                                <label className="flex items-center gap-2 cursor-pointer">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={searchClientFilters.includeImages}
+                                                        onChange={(e) =>
+                                                            setSearchClientFilters((f) => ({
+                                                                ...f,
+                                                                includeImages: e.target.checked,
+                                                            }))
+                                                        }
+                                                    />
+                                                    Images
+                                                </label>
+                                            </div>
+                                            <Button
+                                                type="button"
+                                                variant="ghost"
+                                                size="sm"
+                                                className="h-7 text-[10px] border border-dc-border"
+                                                onClick={() => {
+                                                    setSearchClientFilters(defaultKmsSearchClientFilters());
+                                                    setSearchDateFromInput("");
+                                                    setSearchDateToInput("");
+                                                }}
+                                            >
+                                                Reset filters
+                                            </Button>
+                                        </div>
+                                    </details>
+
+                                    {!kmsSearchIncludeEmbeddingDiagnostics && (
+                                        <p className="text-[9px] text-dc-text-muted px-2 leading-snug">
+                                            Turn on &quot;Include embedding diagnostics in KMS search&quot; in Config to see query embed time and model id here.
+                                        </p>
+                                    )}
+
                                     <div className="space-y-1 pb-10">
                                         {searchLoading ? (
                                             <div className="flex flex-col items-center justify-center py-12 gap-3 opacity-50">
@@ -785,8 +1753,26 @@ export default function KmsApp() {
                                                 </div>
                                                 <p className="text-[10px] text-dc-text-muted italic leading-relaxed">We couldn't find any direct or semantic matches for your query.</p>
                                             </div>
+                                        ) : searchResults.length > 0 && filteredSearchResults.length === 0 ? (
+                                            <div className="text-center py-12 px-6">
+                                                <p className="text-[10px] text-dc-text-muted leading-relaxed">
+                                                    {searchResults.length} hit(s) from search, but none match your filters. Adjust scope and filters or reset.
+                                                </p>
+                                            </div>
                                         ) : (
-                                            searchResults.map((result, idx) => (
+                                            <>
+                                                {searchEmbeddingDiagBanner ? (
+                                                    <div
+                                                        className="mx-1 mb-2 px-2 py-1.5 rounded-md bg-dc-bg-secondary/50 border border-dc-border text-[9px] text-dc-text-muted font-mono break-all"
+                                                        title={searchEmbeddingDiagBanner.modelId}
+                                                    >
+                                                        Query embedding: {searchEmbeddingDiagBanner.ms.toFixed(1)} ms |{" "}
+                                                        {searchEmbeddingDiagBanner.modelId.length > 56
+                                                            ? `${searchEmbeddingDiagBanner.modelId.slice(0, 54)}...`
+                                                            : searchEmbeddingDiagBanner.modelId}
+                                                    </div>
+                                                ) : null}
+                                                {filteredSearchResults.map((result, idx) => (
                                                 <Button
                                                     key={`${result.entity_id}-${idx}`}
                                                     variant="ghost"
@@ -850,21 +1836,125 @@ export default function KmsApp() {
                                                         )}
                                                     </div>
                                                 </Button>
-                                            ))
+                                                ))}
+                                            </>
                                         )}
                                     </div>
                                 </div>
                             ) : view === "skills" ? (
                                 null
 
+                            ) : view === "favorites" ? (
+                                <div className="p-4 space-y-2 flex-1 flex flex-col min-h-0">
+                                    <div className="text-[10px] font-bold text-dc-text-muted uppercase tracking-wider mb-1 px-2 shrink-0">
+                                        Favorites
+                                    </div>
+                                    <p className="text-[9px] text-dc-text-muted px-2 leading-snug">
+                                        Drag the grip to reorder. Order is saved in this browser only.
+                                    </p>
+                                    <div className="flex-1 overflow-y-auto space-y-1 min-h-0">
+                                        {favoriteNotes.length === 0 ? (
+                                            <div className="text-center py-12 px-4 text-[10px] text-dc-text-muted leading-relaxed">
+                                                No starred notes yet. Open a note and use the star in the editor toolbar.
+                                            </div>
+                                        ) : (
+                                            favoriteNotes.map((note, favIndex) => (
+                                                <div
+                                                    key={note.path}
+                                                    className="flex items-stretch gap-0.5 rounded-lg border border-transparent hover:border-dc-accent/15"
+                                                    onDragOver={(e) => {
+                                                        e.preventDefault();
+                                                        e.dataTransfer.dropEffect = "move";
+                                                    }}
+                                                    onDrop={(e) => {
+                                                        e.preventDefault();
+                                                        const from = Number.parseInt(
+                                                            e.dataTransfer.getData("application/x-kms-fav-idx"),
+                                                            10
+                                                        );
+                                                        if (Number.isNaN(from)) return;
+                                                        handleFavoriteReorder(from, favIndex);
+                                                    }}
+                                                >
+                                                    <button
+                                                        type="button"
+                                                        title="Drag to reorder favorites"
+                                                        draggable
+                                                        onDragStart={(e) => {
+                                                            e.dataTransfer.setData(
+                                                                "application/x-kms-fav-idx",
+                                                                String(favIndex)
+                                                            );
+                                                            e.dataTransfer.effectAllowed = "move";
+                                                        }}
+                                                        className="shrink-0 px-1 flex items-center text-dc-text-muted hover:text-dc-accent cursor-grab active:cursor-grabbing rounded-l-lg hover:bg-dc-bg-hover/80"
+                                                    >
+                                                        <GripVertical size={14} />
+                                                    </button>
+                                                    <Button
+                                                        variant="ghost"
+                                                        size="sm"
+                                                        className={`flex-1 justify-start gap-2 py-2 px-2 h-auto hover:bg-dc-bg-hover rounded-r-lg rounded-l-none ${activeNote?.path === note.path ? "bg-dc-bg-hover border-dc-accent/30" : ""}`}
+                                                        onClick={() => handleSelectNote(note)}
+                                                    >
+                                                        <Star size={14} className="shrink-0 text-dc-accent fill-dc-accent" />
+                                                        <div className="flex flex-col items-start text-left min-w-0">
+                                                            <span className="text-sm font-medium text-dc-text truncate w-full">
+                                                                {note.title || note.path.split(/[\\/]/).pop()}
+                                                            </span>
+                                                            {note.folder_path ? (
+                                                                <span className="text-[9px] text-dc-text-muted truncate w-full font-mono opacity-70">
+                                                                    {note.folder_path}
+                                                                </span>
+                                                            ) : null}
+                                                        </div>
+                                                    </Button>
+                                                </div>
+                                            ))
+                                        )}
+                                    </div>
+                                </div>
+                            ) : view === "recents" ? (
+                                <div className="p-4 space-y-2 flex-1 flex flex-col min-h-0">
+                                    <div className="text-[10px] font-bold text-dc-text-muted uppercase tracking-wider mb-1 px-2 shrink-0">
+                                        Recent notes
+                                    </div>
+                                    <p className="text-[9px] text-dc-text-muted px-2 leading-snug">
+                                        Last {KMS_RECENT_NOTES_MAX} opened notes on this device.
+                                    </p>
+                                    <div className="flex-1 overflow-y-auto space-y-1 min-h-0">
+                                        {recentNotes.length === 0 ? (
+                                            <div className="text-center py-12 px-4 text-[10px] text-dc-text-muted leading-relaxed">
+                                                Open a note from Explorer or Search to build your recent list.
+                                            </div>
+                                        ) : (
+                                            recentNotes.map((note) => (
+                                                <Button
+                                                    key={note.path}
+                                                    variant="ghost"
+                                                    size="sm"
+                                                    className={`w-full justify-start gap-2 py-2 px-3 h-auto hover:bg-dc-bg-hover rounded-lg border border-transparent hover:border-dc-accent/20 ${activeNote?.path === note.path ? "bg-dc-bg-hover border-dc-accent/30" : ""}`}
+                                                    onClick={() => handleSelectNote(note)}
+                                                >
+                                                    <Clock size={14} className="shrink-0 text-dc-text-muted" />
+                                                    <div className="flex flex-col items-start text-left min-w-0">
+                                                        <span className="text-sm font-medium text-dc-text truncate w-full">
+                                                            {note.title || note.path.split(/[\\/]/).pop()}
+                                                        </span>
+                                                        {note.folder_path ? (
+                                                            <span className="text-[9px] text-dc-text-muted truncate w-full font-mono opacity-70">
+                                                                {note.folder_path}
+                                                            </span>
+                                                        ) : null}
+                                                    </div>
+                                                </Button>
+                                            ))
+                                        )}
+                                    </div>
+                                </div>
                             ) : view === "logs" ? (
                                 <KmsLogViewer />
-                            ) : (
-                                <div className="p-4 flex flex-col items-center justify-center py-20 opacity-30 text-center">
-                                    <Star size={32} className="mb-4" />
-                                    <span className="text-xs">Favorites placeholder</span>
-                                </div>
-                            )}
+                            ) : null}
                         </div>
                     </div >
 
@@ -941,6 +2031,17 @@ export default function KmsApp() {
                 >
                     <Suspense fallback={<div className="flex-1 flex items-center justify-center bg-dc-bg"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-dc-accent" /></div>}>
                         <div className="absolute top-6 right-20 z-10 flex items-center gap-2">
+                            {reindexProgress && (
+                                <KmsReindexProgressBadge
+                                    variant="toolbar"
+                                    providerId={reindexProgress.providerId}
+                                    providerIndex={reindexProgress.providerIndex}
+                                    providerTotal={reindexProgress.providerTotal}
+                                    elapsedMs={reindexProgress.elapsedMs}
+                                    etaRemainingMs={reindexProgress.etaRemainingMs}
+                                    indexedTotalSoFar={reindexProgress.indexedTotalSoFar}
+                                />
+                            )}
                             <div className="flex bg-dc-bg-secondary/40 backdrop-blur-md rounded-xl p-0.5 border border-dc-border">
                                 <button
                                     onClick={() => setGraphMode("2d")}
@@ -966,92 +2067,134 @@ export default function KmsApp() {
                                 <Maximize2 size={14} />
                                 <span className="text-[10px] font-bold uppercase tracking-widest hidden sm:inline">Reset</span>
                             </Button>
+
+                            <Button
+                                variant="secondary"
+                                size="sm"
+                                onClick={() => window.dispatchEvent(new Event("kms-graph-toggle-tools-dock"))}
+                                className="h-[34px] rounded-xl bg-dc-bg-secondary/40 backdrop-blur-md border-dc-border text-dc-text-muted hover:text-dc-accent hover:border-dc-accent transition-all gap-2 px-3"
+                                title="Toggle graph tools dock (legend, search, shortest path). Same as the Tools tab on the left. Shortcut: Ctrl+Shift+G."
+                            >
+                                <PanelLeft size={14} />
+                                <span className="text-[10px] font-bold uppercase tracking-widest hidden sm:inline">Tools</span>
+                            </Button>
                         </div>
 
                         {graphMode === "2d" ? (
                             <KmsGraph
-                                onSelectNote={async (path: string) => {
-                                    const note = notes.find(n => n.path === path);
-                                    if (note) {
-                                        handleSelectNote(note);
-                                    } else {
-                                        const title = path.split(/[\\/]/).pop()?.replace('.md', '') || path;
-                                        handleSelectNote({ path, title } as KmsNoteDto);
-                                    }
-                                    setView("explorer");
-                                }}
+                                indexedNoteCount={indexedNoteCount}
+                                indexedNotes={notes}
+                                onSelectNote={handleSelectGraphNode}
                                 activeNotePath={activeNote?.path}
                                 isVisible={view === "graph"}
                                 resetKey={graphResetKey}
+                                graphNavigateRequest={graphNavigateRequest}
                             />
                         ) : (
                             <KmsGraph3D
-                                onSelectNote={async (path: string) => {
-                                    const note = notes.find(n => n.path === path);
-                                    if (note) {
-                                        handleSelectNote(note);
-                                    } else {
-                                        const title = path.split(/[\\/]/).pop()?.replace('.md', '') || path;
-                                        handleSelectNote({ path, title } as KmsNoteDto);
-                                    }
-                                    setView("explorer");
-                                }}
+                                indexedNoteCount={indexedNoteCount}
+                                indexedNotes={notes}
+                                onSelectNote={handleSelectGraphNode}
                                 activeNotePath={activeNote?.path}
                                 isVisible={view === "graph"}
                                 resetKey={graphResetKey}
+                                graphNavigateRequest={graphNavigateRequest}
                             />
                         )}
                     </Suspense>
                 </div>
 
-                {/* Explorer / Editor View */}
-                {(view === "explorer" || view === "logs") && (
+                {/* Explorer / Favorites / Recents / Editor View */}
+                {(view === "explorer" || view === "favorites" || view === "recents" || view === "logs") && (
                     <div className="flex-1 h-full overflow-hidden flex flex-col">
                         {view === "logs" ? (
                             <KmsLogViewer />
                         ) : activeNote ? (
-                            <div className="flex-1 flex overflow-hidden">
-                                <KmsEditor
-                                    path={activeNote.path}
-                                    initialContent={activeContent}
-                                    onSave={handleSaveNote}
-                                    onDelete={handleDeleteNote}
-                                    onRename={(newName) => handleRenameNote(newName).then(() => { })}
-                                    onSelectNote={(path: string) => {
-                                        const note = notes.find(n => n.path === path);
-                                        if (note) handleSelectNote(note);
-                                    }}
-                                    onOpenSkillEditor={() => handleOpenSkillEditor(activeNote.path)}
-                                    isZenMode={isZenMode}
-                                    onToggleZenMode={toggleZenMode}
-                                    onToggleHistory={() => setIsHistoryOpen(!isHistoryOpen)}
-                                    isHistoryOpen={isHistoryOpen}
-                                    onToggleTheme={toggleTheme}
-                                    currentTheme={currentTheme}
-                                    vaultPath={vaultPath}
-                                />
-                                <AnimatePresence>
-                                    {isHistoryOpen && (
-                                        <motion.aside
-                                            initial={{ width: 0, opacity: 0 }}
-                                            animate={{ width: 320, opacity: 1 }}
-                                            exit={{ width: 0, opacity: 0 }}
-                                            transition={{ duration: 0.2, ease: "easeOut" }}
-                                            className="border-l border-dc-border h-full bg-dc-bg-secondary/30 backdrop-blur-sm shadow-2xl z-20"
+                            <div
+                                className="flex-1 min-h-0 min-w-0 grid h-full overflow-hidden [grid-template-rows:minmax(0,1fr)]"
+                                style={{
+                                    gridTemplateColumns: isHistoryOpen
+                                        ? `minmax(0, 1fr) ${historyPanelWidth}px`
+                                        : `minmax(0, 1fr)`,
+                                }}
+                            >
+                                <div className="min-h-0 min-w-0 h-full overflow-hidden flex flex-col">
+                                    <KmsEditor
+                                        path={activeNote.path}
+                                        initialContent={activeContent}
+                                        onSave={handleSaveNote}
+                                        onDelete={handleDeleteNote}
+                                        onRename={(newName) => handleRenameNote(newName).then(() => { })}
+                                        onSelectNote={handleWikiNavigateFromEditor}
+                                        onOpenReferenceWikiTarget={handleOpenReferenceFromWiki}
+                                        referenceNote={
+                                            referenceNote
+                                                ? { path: referenceNote.path, title: referenceNote.title }
+                                                : null
+                                        }
+                                        referenceContent={referenceContent}
+                                        onClearReference={handleClearReferenceNote}
+                                        onOpenSkillEditor={() => handleOpenSkillEditor(activeNote.path)}
+                                        isFavorite={activeNote.is_favorite}
+                                        onFavoriteChange={handleNoteFavoriteChange}
+                                        isZenMode={isZenMode}
+                                        onToggleZenMode={toggleZenMode}
+                                        onToggleHistory={() => setIsHistoryOpen(!isHistoryOpen)}
+                                        isHistoryOpen={isHistoryOpen}
+                                        onToggleTheme={toggleTheme}
+                                        currentTheme={currentTheme}
+                                        vaultPath={vaultPath}
+                                        workingCopyMarkdownRef={editorWorkingCopyMarkdownRef}
+                                        onOpenGlobalGraph={openGlobalGraphForActiveNote}
+                                    />
+                                </div>
+                                {isHistoryOpen && (
+                                    <div className="flex h-full min-h-0 min-w-0 flex-row border-l border-dc-border bg-dc-bg-secondary/30 backdrop-blur-sm shadow-2xl z-40 overflow-hidden">
+                                        <div
+                                            role="separator"
+                                            aria-orientation="vertical"
+                                            aria-label="Resize version history panel"
+                                            title="Drag left or right to resize version history"
+                                            draggable={false}
+                                            onDragStart={(ev) => ev.preventDefault()}
+                                            onPointerDown={handleHistoryResizePointerDown}
+                                            className={`relative shrink-0 w-4 flex items-center justify-center cursor-col-resize z-[60] touch-none select-none border-0 pointer-events-auto ${
+                                                isResizingHistory ? "bg-dc-accent/25" : "hover:bg-dc-accent/15"
+                                            }`}
                                         >
+                                            <div
+                                                className="absolute inset-y-2 left-1/2 w-1 -translate-x-1/2 rounded-full bg-dc-border border border-dc-border/80 shadow-sm pointer-events-none"
+                                                aria-hidden
+                                            />
+                                            <GripVertical
+                                                className="relative h-10 w-4 text-dc-text-muted opacity-70 pointer-events-none"
+                                                strokeWidth={2}
+                                                aria-hidden
+                                            />
+                                        </div>
+                                        <div className="flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden">
                                             <KmsHistoryBrowser
-                                                relPath={activeNote.path}
+                                                vaultRelPath={kmsVaultRelativePath(vaultPath, activeNote.path)}
+                                                absoluteNotePath={activeNote.path}
+                                                panelWidthPx={historyPanelWidth}
+                                                onPanelWidthPxChange={persistHistoryPanelWidth}
+                                                getWorkingCopyMarkdown={() =>
+                                                    editorWorkingCopyMarkdownRef.current?.() ?? ""
+                                                }
                                                 onRestore={() => {
-                                                    handleSelectNote(activeNote);
-                                                    toast({
-                                                        title: "Version Restored",
-                                                        description: "The selected version has been restored and loaded.",
-                                                    });
+                                                    void (async () => {
+                                                        const content = await getTaurpc().kms_load_note(activeNote.path);
+                                                        setActiveContent(content);
+                                                        toast({
+                                                            title: "Version Restored",
+                                                            description: "The selected version has been restored and loaded.",
+                                                        });
+                                                    })();
                                                 }}
                                             />
-                                        </motion.aside>
-                                    )}
-                                </AnimatePresence>
+                                        </div>
+                                    </div>
+                                )}
                             </div>
                         ) : (
                             <div className="flex-1 flex flex-col items-center justify-center p-8">
@@ -1061,10 +2204,33 @@ export default function KmsApp() {
                                     </div>
                                     <h2 className="text-2xl font-bold tracking-tight text-dc-text">Select a note to get started</h2>
                                     <p className="text-dc-text-muted text-sm leading-relaxed">
-                                        Every note you create is a local Markdown file stored securely in your vault.
-                                        Use the sidebar to explore your knowledge graph.
+                                        {isZenMode ? (
+                                            <>
+                                                Zen mode is hiding the navigation sidebar (Explorer, Recents, Favorites, Knowledge Graph, Search). Use{" "}
+                                                <span className="text-dc-text font-medium">Show sidebar</span> (bottom-left) or press{" "}
+                                                <kbd className="px-1.5 py-0.5 rounded bg-dc-bg-secondary border border-dc-border text-[11px] font-mono">Alt+Z</kbd>{" "}
+                                                to restore the full Knowledge Hub.
+                                            </>
+                                        ) : (
+                                            <>
+                                                Every note you create is a local Markdown file stored securely in your vault.
+                                                Use the sidebar to explore your knowledge graph.
+                                            </>
+                                        )}
                                     </p>
-                                    <div className="pt-6 flex justify-center gap-3">
+                                    <div className="pt-6 flex justify-center flex-wrap gap-3">
+                                        {isZenMode && (
+                                            <Button
+                                                size="sm"
+                                                variant="secondary"
+                                                className="gap-2 px-6 border border-dc-border"
+                                                onClick={toggleZenMode}
+                                                title="Exit Zen mode (Alt+Z)"
+                                            >
+                                                <PanelLeft size={16} />
+                                                Show sidebar
+                                            </Button>
+                                        )}
                                         <Button
                                             size="sm"
                                             className="bg-dc-accent hover:bg-dc-accent/90 text-white gap-2 px-6"
@@ -1106,9 +2272,51 @@ export default function KmsApp() {
                         <div className="absolute bottom-0 left-0 w-96 h-96 bg-dc-accent/5 blur-[160px] pointer-events-none rounded-full" />
                     </>
                 )}
+
+                {isZenMode && (
+                    <div className="fixed bottom-5 left-5 z-[200] pointer-events-auto">
+                        <Button
+                            type="button"
+                            variant="secondary"
+                            size="sm"
+                            className="shadow-lg border border-dc-border bg-dc-bg-secondary/95 backdrop-blur-md gap-2"
+                            onClick={toggleZenMode}
+                            title="Exit Zen mode (Alt+Z)"
+                        >
+                            <PanelLeft size={16} />
+                            Show sidebar
+                        </Button>
+                    </div>
+                )}
             </main>
 
             <Toaster />
+            {vaultPath ? (
+                <KmsTemplateGalleryModal
+                    open={templateGalleryOpen}
+                    onOpenChange={setTemplateGalleryOpen}
+                    vaultPath={vaultPath}
+                    onCreate={async (absolutePath, content) => {
+                        await getTaurpc().kms_save_note(absolutePath, content);
+                        await refreshStructure();
+                        await refreshNotes();
+                        const list = await getTaurpc().kms_list_notes();
+                        const note = list.find((n) => n.path === absolutePath);
+                        if (note) await handleSelectNote(note);
+                        toast({
+                            title: "Note created",
+                            description: note?.title ?? absolutePath,
+                        });
+                    }}
+                />
+            ) : null}
+            <KmsCommandPalette
+                open={commandPaletteOpen}
+                onOpenChange={setCommandPaletteOpen}
+                notes={notes}
+                onSelectNote={handleSelectNote}
+                onJumpView={handleCommandPaletteJump}
+            />
             <VaultSettingsModal
                 isOpen={isSettingsOpen}
                 onClose={() => setIsSettingsOpen(false)}
