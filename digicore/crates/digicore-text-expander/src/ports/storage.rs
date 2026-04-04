@@ -134,6 +134,82 @@ pub mod keys {
 
     pub const LIBRARY_PATH: &str = "library_path";
     pub const KMS_VAULT_PATH: &str = "kms_vault_path";
+
+    // KMS Knowledge Graph (semantic clustering + AI beams)
+    pub const KMS_GRAPH_K_MEANS_MAX_K: &str = "kms_graph_k_means_max_k";
+    pub const KMS_GRAPH_K_MEANS_ITERATIONS: &str = "kms_graph_k_means_iterations";
+    pub const KMS_GRAPH_AI_BEAM_MAX_NODES: &str = "kms_graph_ai_beam_max_nodes";
+    pub const KMS_GRAPH_AI_BEAM_SIMILARITY_THRESHOLD: &str = "kms_graph_ai_beam_similarity_threshold";
+    pub const KMS_GRAPH_AI_BEAM_MAX_EDGES: &str = "kms_graph_ai_beam_max_edges";
+    pub const KMS_GRAPH_ENABLE_AI_BEAMS: &str = "kms_graph_enable_ai_beams";
+    pub const KMS_GRAPH_ENABLE_SEMANTIC_CLUSTERING: &str = "kms_graph_enable_semantic_clustering";
+    pub const KMS_GRAPH_ENABLE_LEIDEN_COMMUNITIES: &str = "kms_graph_enable_leiden_communities";
+    /// Skip k-means and beams when indexed note count exceeds this (0 = no cap).
+    pub const KMS_GRAPH_SEMANTIC_MAX_NOTES: &str = "kms_graph_semantic_max_notes";
+    /// Show a soft UI warning when note count is at or above this (0 = off).
+    pub const KMS_GRAPH_WARN_NOTE_THRESHOLD: &str = "kms_graph_warn_note_threshold";
+    /// Max cosine pair checks for AI beams (approximate search; 0 = unlimited).
+    pub const KMS_GRAPH_BEAM_MAX_PAIR_CHECKS: &str = "kms_graph_beam_max_pair_checks";
+    pub const KMS_GRAPH_ENABLE_SEMANTIC_KNN_EDGES: &str = "kms_graph_enable_semantic_knn_edges";
+    pub const KMS_GRAPH_SEMANTIC_KNN_PER_NOTE: &str = "kms_graph_semantic_knn_per_note";
+    pub const KMS_GRAPH_SEMANTIC_KNN_MIN_SIMILARITY: &str = "kms_graph_semantic_knn_min_similarity";
+    pub const KMS_GRAPH_SEMANTIC_KNN_MAX_EDGES: &str = "kms_graph_semantic_knn_max_edges";
+    pub const KMS_GRAPH_SEMANTIC_KNN_MAX_PAIR_CHECKS: &str = "kms_graph_semantic_knn_max_pair_checks";
+    pub const KMS_GRAPH_AUTO_PAGING_ENABLED: &str = "kms_graph_auto_paging_enabled";
+    pub const KMS_GRAPH_AUTO_PAGING_NOTE_THRESHOLD: &str = "kms_graph_auto_paging_note_threshold";
+    pub const KMS_GRAPH_VAULT_OVERRIDES_JSON: &str = "kms_graph_vault_overrides_json";
+
+    /// 3D graph UnrealBloomPass (react-force-graph postprocessing).
+    pub const KMS_GRAPH_BLOOM_ENABLED: &str = "kms_graph_bloom_enabled";
+    pub const KMS_GRAPH_BLOOM_STRENGTH: &str = "kms_graph_bloom_strength";
+    pub const KMS_GRAPH_BLOOM_RADIUS: &str = "kms_graph_bloom_radius";
+    pub const KMS_GRAPH_BLOOM_THRESHOLD: &str = "kms_graph_bloom_threshold";
+    /// Constellation backdrop hex mesh (SVG pattern units).
+    pub const KMS_GRAPH_HEX_CELL_RADIUS: &str = "kms_graph_hex_cell_radius";
+    pub const KMS_GRAPH_HEX_LAYER_OPACITY: &str = "kms_graph_hex_layer_opacity";
+    pub const KMS_GRAPH_HEX_STROKE_WIDTH: &str = "kms_graph_hex_stroke_width";
+    pub const KMS_GRAPH_HEX_STROKE_OPACITY: &str = "kms_graph_hex_stroke_opacity";
+
+    pub const KMS_GRAPH_PAGERANK_ITERATIONS: &str = "kms_graph_pagerank_iterations";
+    pub const KMS_GRAPH_PAGERANK_LOCAL_ITERATIONS: &str = "kms_graph_pagerank_local_iterations";
+    pub const KMS_GRAPH_PAGERANK_DAMPING: &str = "kms_graph_pagerank_damping";
+    /// `auto` | `full_vault` | `page_subgraph` | `off` (global graph PageRank scope).
+    pub const KMS_GRAPH_PAGERANK_SCOPE: &str = "kms_graph_pagerank_scope";
+    /// When false, skip background materialized wiki PageRank after vault sync.
+    pub const KMS_GRAPH_BACKGROUND_WIKI_PAGERANK_ENABLED: &str =
+        "kms_graph_background_wiki_pagerank_enabled";
+
+    pub const KMS_GRAPH_TEMPORAL_WINDOW_ENABLED: &str = "kms_graph_temporal_window_enabled";
+    pub const KMS_GRAPH_TEMPORAL_DEFAULT_DAYS: &str = "kms_graph_temporal_default_days";
+    pub const KMS_GRAPH_TEMPORAL_INCLUDE_NOTES_WITHOUT_MTIME: &str =
+        "kms_graph_temporal_include_notes_without_mtime";
+    pub const KMS_GRAPH_TEMPORAL_EDGE_RECENCY_ENABLED: &str =
+        "kms_graph_temporal_edge_recency_enabled";
+    pub const KMS_GRAPH_TEMPORAL_EDGE_RECENCY_STRENGTH: &str =
+        "kms_graph_temporal_edge_recency_strength";
+    pub const KMS_GRAPH_TEMPORAL_EDGE_RECENCY_HALF_LIFE_DAYS: &str =
+        "kms_graph_temporal_edge_recency_half_life_days";
+
+    pub const KMS_SEARCH_MIN_SIMILARITY: &str = "kms_search_min_similarity";
+
+    pub const KMS_EMBEDDING_MODEL_ID: &str = "kms_embedding_model_id";
+    pub const KMS_EMBEDDING_BATCH_NOTES_PER_TICK: &str = "kms_embedding_batch_notes_per_tick";
+    pub const KMS_EMBEDDING_CHUNK_ENABLED: &str = "kms_embedding_chunk_enabled";
+    pub const KMS_EMBEDDING_CHUNK_MAX_CHARS: &str = "kms_embedding_chunk_max_chars";
+    pub const KMS_EMBEDDING_CHUNK_OVERLAP_CHARS: &str = "kms_embedding_chunk_overlap_chars";
+    /// When false, semantic search results omit query-embed timing and model id (privacy / slimmer payloads).
+    pub const KMS_SEARCH_INCLUDE_EMBEDDING_DIAGNOSTICS: &str = "kms_search_include_embedding_diagnostics";
+    pub const KMS_SEARCH_DEFAULT_MODE: &str = "kms_search_default_mode";
+    pub const KMS_SEARCH_DEFAULT_LIMIT: &str = "kms_search_default_limit";
+
+    /// Cap for `min(devicePixelRatio, max_dpr_scale)` when rasterizing 3D graph labels (three-spritetext).
+    pub const KMS_GRAPH_SPRITE_LABEL_MAX_DPR_SCALE: &str = "kms_graph_sprite_label_max_dpr_scale";
+    /// Floor scale so low-DPI displays still get extra label texture resolution when zooming.
+    pub const KMS_GRAPH_SPRITE_LABEL_MIN_RES_SCALE: &str = "kms_graph_sprite_label_min_res_scale";
+    /// 2D graph WebWorker layout: 0 = off.
+    pub const KMS_GRAPH_WEBWORKER_LAYOUT_THRESHOLD: &str = "kms_graph_webworker_layout_threshold";
+    pub const KMS_GRAPH_WEBWORKER_LAYOUT_MAX_TICKS: &str = "kms_graph_webworker_layout_max_ticks";
+    pub const KMS_GRAPH_WEBWORKER_LAYOUT_ALPHA_MIN: &str = "kms_graph_webworker_layout_alpha_min";
 }
 
 /// Port for key-value persistence (user preferences, window state).

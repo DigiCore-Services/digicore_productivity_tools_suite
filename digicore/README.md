@@ -19,12 +19,13 @@ Cross-platform text expansion application built with Rust and Tauri. Migrated fr
 ```powershell
 # From digicore directory
 cd digicore
-.\scripts\build.ps1 -Target Tauri          # Build (debug)
-.\scripts\build.ps1 -Target Tauri -Release  # Build (release)
+.\scripts\build.ps1 -Target Tauri              # Build (debug)
+.\scripts\build.ps1 -Target Tauri -NoInstall   # Same, skip npm install if deps are current
+.\scripts\build.ps1 -Target Tauri -Release     # Build (release)
 
-# Run in dev mode
+# Run in dev mode (from digicore\tauri-app)
 cd tauri-app
-npm run tauri dev
+npm run tauri -- dev
 ```
 
 ### Installer Output
@@ -77,22 +78,70 @@ digicore/
 │   ├── src/                 # React components, App.tsx
 │   └── src-tauri/           # Rust backend, lib.rs, api.rs
 ├── docs/
-└── scripts/
+└── scripts/                 # build.ps1, dev-tauri-kms-debug.ps1, test.ps1
 ```
 
 ---
 
 ## Development
 
+### Tauri dev (hot reload)
+
 ```powershell
-# Tauri dev (hot reload)
 cd tauri-app
-npm run tauri dev
+npm run tauri -- dev
+```
 
-# With logging
-$env:RUST_LOG="info"; npm run tauri dev
+Use `npm run tauri -- dev` (note the `--`) so `dev` is passed to the Tauri CLI.
 
-# egui GUI (alternative)
+### Build script vs KMS debug dev script
+
+| Command | What it does |
+|--------|----------------|
+| `.\scripts\build.ps1 -Target Tauri [-NoInstall]` | **Compiles / packages** the Tauri app (Rust + frontend steps). Produces binaries/installer inputs, then **exits**. Does **not** start interactive dev or set `RUST_LOG`. |
+| `.\scripts\dev-tauri-kms-debug.ps1` | **Runs** `npm run tauri -- dev` from `tauri-app` with **`RUST_LOG` set for KMS embedding diagnostics**. Keeps the normal dev loop (Vite + Tauri). Does **not** replace a full build when you need a clean compile. |
+
+Typical flow: run **`build.ps1`** when you need to verify or refresh a **build**; run **`dev-tauri-kms-debug.ps1`** when you are **troubleshooting KMS note embedding / “Re-embed vault” (D6)** and want structured logs without drowning in unrelated `TRACE` noise.
+
+### KMS embedding logs (`kms_embed` target)
+
+Rust code logs KMS text embedding details under the log target **`kms_embed`** (see `tauri-app/src-tauri/src/embedding_service.rs`). Failures also emit **`WARN`** on that target.
+
+From **`digicore`** (recommended):
+
+```powershell
+.\scripts\dev-tauri-kms-debug.ps1
+```
+
+Default `RUST_LOG` is `info,kms_embed=debug` (general **info** plus **debug** for `kms_embed`). For more detail on that target only:
+
+```powershell
+.\scripts\dev-tauri-kms-debug.ps1 -RustLog "info,kms_embed=trace"
+```
+
+From **`digicore\tauri-app`** (one-liner):
+
+```powershell
+$env:RUST_LOG = "info,kms_embed=debug"; npm run tauri -- dev
+```
+
+### KMS embedding diagnostic log file
+
+Embedding **WARN** / **ERROR** lines (D6 migration, file read, fastembed init/embed, sqlite vector upsert, pipeline stages) are also **appended** to a UTF-8 text file for offline review:
+
+- **Path:** `%APPDATA%\DigiCore\logs\kms_embedding.log` (same as `dirs::config_dir()/DigiCore/logs/` on your OS).
+- **Session markers:** Each D6 / re-embed job writes an **INFO** header block (generation, vault, model, chunk policy, full path to this file).
+- **Optional file DEBUG:** Set `KMS_EMBED_LOG_FILE_DEBUG=1` before starting the app to append per-note **embed_start** and context lines to that file (console still uses `RUST_LOG`).
+
+The in-app path is shown under **Configurations and Settings** > **KMS Search and embeddings**. The backend exposes `kms_get_embedding_diagnostic_log_path` if you need it from the UI or scripts.
+
+### Other logging and egui
+
+```powershell
+# Broader Rust logging (all modules at info)
+$env:RUST_LOG = "info"; npm run tauri -- dev
+
+# egui GUI (alternative to Tauri)
 cargo run -p digicore-text-expander
 ```
 

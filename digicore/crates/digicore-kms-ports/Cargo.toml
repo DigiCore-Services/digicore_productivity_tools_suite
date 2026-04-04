@@ -1,0 +1,9 @@
+[package]
+name = "digicore-kms-ports"
+version = "0.1.0"
+edition = "2021"
+description = "Hexagonal ports for DigiCore KMS graph and embeddings (no Tauri/SQLite)"
+license = "Proprietary"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }

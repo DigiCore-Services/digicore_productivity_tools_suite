@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/digicore-core",
+    "crates/digicore-kms-ports",
     "crates/digicore-text-expander",
     "tauri-app/src-tauri",
 ]

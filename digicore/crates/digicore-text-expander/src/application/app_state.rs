@@ -9,6 +9,10 @@ use digicore_core::domain::Snippet;
 use std::collections::HashMap;
 use std::sync::mpsc;
 
+fn default_kms_graph_pagerank_scope() -> String {
+    "auto".to_string()
+}
+
 /// Active tab index.
 #[derive(Clone, Copy, PartialEq)]
 pub enum Tab {
@@ -174,6 +178,99 @@ pub struct AppState {
     pub extraction_scoring_size_penalty_weight: f32,
     pub extraction_scoring_low_confidence_threshold: f32,
 
+    /// KMS Knowledge Graph: max k for k-means (cap on sqrt(n) heuristic).
+    pub kms_graph_k_means_max_k: u32,
+    pub kms_graph_k_means_iterations: u32,
+    pub kms_graph_ai_beam_max_nodes: u32,
+    pub kms_graph_ai_beam_similarity_threshold: f32,
+    pub kms_graph_ai_beam_max_edges: u32,
+    pub kms_graph_enable_ai_beams: bool,
+    pub kms_graph_enable_semantic_clustering: bool,
+    /// Prototype kNN + Leiden community layer (default on for smoke testing; toggled in Settings).
+    pub kms_graph_enable_leiden_communities: bool,
+    /// 0 = no cap (always run semantics when enabled).
+    pub kms_graph_semantic_max_notes: u32,
+    /// 0 = never show large-vault warning.
+    pub kms_graph_warn_note_threshold: u32,
+    /// 0 = unlimited pair checks for beam search.
+    pub kms_graph_beam_max_pair_checks: u32,
+    /// Embedding k-nearest-neighbor edges (`semantic_knn` in DTO); PageRank still uses wiki links only.
+    pub kms_graph_enable_semantic_knn_edges: bool,
+    pub kms_graph_semantic_knn_per_note: u32,
+    pub kms_graph_semantic_knn_min_similarity: f32,
+    pub kms_graph_semantic_knn_max_edges: u32,
+    /// 0 = unlimited cosine comparisons while building kNN edges (risky on huge vaults).
+    pub kms_graph_semantic_knn_max_pair_checks: u32,
+    /// When true, KMS graph view may default to paged mode when note count >= threshold.
+    pub kms_graph_auto_paging_enabled: bool,
+    /// Indexed note count at or above which auto-paged mode applies (if auto_paging_enabled).
+    pub kms_graph_auto_paging_note_threshold: u32,
+    /// JSON map: vault_graph_settings_key -> partial kms_graph_* overrides.
+    pub kms_graph_vault_overrides_json: String,
+
+    /// Screen-space bloom on 3D KMS graphs (UnrealBloomPass).
+    pub kms_graph_bloom_enabled: bool,
+    pub kms_graph_bloom_strength: f32,
+    pub kms_graph_bloom_radius: f32,
+    pub kms_graph_bloom_threshold: f32,
+    /// Hex constellation backdrop tuning (2D/3D graph chrome).
+    pub kms_graph_hex_cell_radius: f32,
+    pub kms_graph_hex_layer_opacity: f32,
+    pub kms_graph_hex_stroke_width: f32,
+    pub kms_graph_hex_stroke_opacity: f32,
+
+    /// Undirected PageRank iterations for the global full-graph build.
+    pub kms_graph_pagerank_iterations: u32,
+    /// Undirected PageRank iterations for the local neighborhood graph.
+    pub kms_graph_pagerank_local_iterations: u32,
+    /// PageRank damping factor (typical 0.85).
+    pub kms_graph_pagerank_damping: f32,
+    /// Global graph: `auto` (paged => page subgraph, else full vault), `full_vault`, `page_subgraph`, `off`.
+    pub kms_graph_pagerank_scope: String,
+    /// When true, after bulk vault sync the app may run a background job to refresh materialized wiki PageRank (`wiki_pagerank`). Independent of `pagerank_scope` (scope still controls in-request PR).
+    pub kms_graph_background_wiki_pagerank_enabled: bool,
+
+    /// Seq 12 Option A: enable default time window (`temporal_default_days`) on graph builds.
+    pub kms_graph_temporal_window_enabled: bool,
+    /// Default window length in days ending at UTC now when Option A is enabled (0 = no default until RPC sends bounds).
+    pub kms_graph_temporal_default_days: u32,
+    pub kms_graph_temporal_include_notes_without_mtime: bool,
+    /// Seq 12 Option B: expose `edge_recency` on wiki edges in graph DTOs.
+    pub kms_graph_temporal_edge_recency_enabled: bool,
+    pub kms_graph_temporal_edge_recency_strength: f32,
+    pub kms_graph_temporal_edge_recency_half_life_days: f32,
+
+    /// Hybrid/semantic search: drop vector hits below this cosine similarity (0 = disabled).
+    pub kms_search_min_similarity: f32,
+    /// When true, `kms_search_semantic` includes per-row query embedding timing and effective model id.
+    pub kms_search_include_embedding_diagnostics: bool,
+    /// Default search mode for KMS Explorer (`Hybrid`, `Semantic`, or `Keyword`).
+    pub kms_search_default_mode: String,
+    /// Default result limit for KMS hybrid/semantic search (clamped when saving).
+    pub kms_search_default_limit: u32,
+
+    /// KMS note text embedding model id (empty string = default fastembed model id).
+    pub kms_embedding_model_id: String,
+    /// D6: how many notes to re-embed per migration tick (backpressure).
+    pub kms_embedding_batch_notes_per_tick: u32,
+    /// When true, long note/query text is split into overlapping character chunks; chunk vectors are mean-pooled and L2-normalized into one stored vector per note.
+    pub kms_embedding_chunk_enabled: bool,
+    /// Maximum characters per chunk (clamped at runtime, typically 256-8192).
+    pub kms_embedding_chunk_max_chars: u32,
+    /// Overlap between consecutive chunks (clamped to at most half of max chunk size).
+    pub kms_embedding_chunk_overlap_chars: u32,
+
+    /// three-spritetext label sharpness: upper cap on devicePixelRatio multiplier (3D graphs).
+    pub kms_graph_sprite_label_max_dpr_scale: f32,
+    /// Minimum texture scale vs default canvas (helps 1x displays when zooming in).
+    pub kms_graph_sprite_label_min_res_scale: f32,
+    /// 2D graph: run initial d3-force layout in a WebWorker when node count is at or above this value. 0 = always main thread.
+    pub kms_graph_webworker_layout_threshold: u32,
+    /// WebWorker simulation: maximum tick budget (capped vs a scaled minimum from node count on the client).
+    pub kms_graph_webworker_layout_max_ticks: u32,
+    /// WebWorker simulation: stop when alpha falls below this (d3-force alphaMin).
+    pub kms_graph_webworker_layout_alpha_min: f32,
+
     // Templates (F16-F20)
     pub template_date_format: String,
     pub template_time_format: String,
@@ -331,6 +428,65 @@ impl Default for AppState {
             extraction_scoring_jitter_penalty_weight: 0.4,
             extraction_scoring_size_penalty_weight: 0.1,
             extraction_scoring_low_confidence_threshold: 0.6,
+
+            kms_graph_k_means_max_k: 10,
+            kms_graph_k_means_iterations: 15,
+            kms_graph_ai_beam_max_nodes: 400,
+            kms_graph_ai_beam_similarity_threshold: 0.90,
+            kms_graph_ai_beam_max_edges: 20,
+            kms_graph_enable_ai_beams: true,
+            kms_graph_enable_semantic_clustering: true,
+            kms_graph_enable_leiden_communities: true,
+            kms_graph_semantic_max_notes: 2500,
+            kms_graph_warn_note_threshold: 1500,
+            kms_graph_beam_max_pair_checks: 200_000,
+            kms_graph_enable_semantic_knn_edges: true,
+            kms_graph_semantic_knn_per_note: 5,
+            kms_graph_semantic_knn_min_similarity: 0.82,
+            kms_graph_semantic_knn_max_edges: 8000,
+            kms_graph_semantic_knn_max_pair_checks: 400_000,
+            kms_graph_auto_paging_enabled: true,
+            kms_graph_auto_paging_note_threshold: 2000,
+            kms_graph_vault_overrides_json: "{}".to_string(),
+
+            kms_graph_bloom_enabled: true,
+            kms_graph_bloom_strength: 0.48,
+            kms_graph_bloom_radius: 0.4,
+            kms_graph_bloom_threshold: 0.22,
+            kms_graph_hex_cell_radius: 2.35,
+            kms_graph_hex_layer_opacity: 0.22,
+            kms_graph_hex_stroke_width: 0.11,
+            kms_graph_hex_stroke_opacity: 0.38,
+
+            kms_graph_pagerank_iterations: 48,
+            kms_graph_pagerank_local_iterations: 32,
+            kms_graph_pagerank_damping: 0.85,
+            kms_graph_pagerank_scope: default_kms_graph_pagerank_scope(),
+            kms_graph_background_wiki_pagerank_enabled: true,
+
+            kms_graph_temporal_window_enabled: false,
+            kms_graph_temporal_default_days: 0,
+            kms_graph_temporal_include_notes_without_mtime: true,
+            kms_graph_temporal_edge_recency_enabled: false,
+            kms_graph_temporal_edge_recency_strength: 1.0,
+            kms_graph_temporal_edge_recency_half_life_days: 30.0,
+
+            kms_search_min_similarity: 0.0,
+            kms_search_include_embedding_diagnostics: true,
+            kms_search_default_mode: "Hybrid".to_string(),
+            kms_search_default_limit: 20,
+
+            kms_embedding_model_id: String::new(),
+            kms_embedding_batch_notes_per_tick: 8,
+            kms_embedding_chunk_enabled: false,
+            kms_embedding_chunk_max_chars: 2048,
+            kms_embedding_chunk_overlap_chars: 128,
+
+            kms_graph_sprite_label_max_dpr_scale: 2.5,
+            kms_graph_sprite_label_min_res_scale: 1.25,
+            kms_graph_webworker_layout_threshold: 800,
+            kms_graph_webworker_layout_max_ticks: 450,
+            kms_graph_webworker_layout_alpha_min: 0.02,
 
             template_date_format: "%Y-%m-%d".to_string(),
             template_time_format: "%H:%M".to_string(),
