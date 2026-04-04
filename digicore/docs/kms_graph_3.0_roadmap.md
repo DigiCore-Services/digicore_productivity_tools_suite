@@ -1,5 +1,9 @@
 # KMS Graph 3.0: Intelligence & Immersion
 
+> Doc governance status: Vision/ideas reference (non-canonical for implementation status)
+> Prefer canonical sources: `knowledge-graph-comprehensive-audit-and-roadmap-2026-03.md`, `kms-notebook-capabilities-audit-and-implementation-plan-2026-04.md`
+> Governance map: `kms-graph-doc-governance-map-2026-04.md`
+
 To take the Knowledge Graph to a "whole new level," we can move beyond simple 2D force-directed lines into a highly interactive, intelligent, and visually stunning data environment.
 
 ## 🚀 Vision: "The Knowledge Constellation"
@@ -14,7 +18,7 @@ To take the Knowledge Graph to a "whole new level," we can move beyond simple 2D
 ### 2. High-End UI/UX (GUI)
 - **3D Exploration**: Transition to a 3D force-directed graph using React Three Fiber. Users can literally "fly" through their knowledge base.
 - **Glassmorphic Hover Previews**: Hovering over a node shows a floating, translucent card with the note's first 200 characters and metadata.
-- **Interactive Legend**: A floating control panel to toggle visibility of folders, filter by date, or search for specific "islands" of notes.
+- **Interactive Legend**: A floating control panel to toggle visibility of folders, filter by date, or search for specific "islands" of notes. (Follow-up scope for **islands** and richer legend interactions: `digicore/docs/kms-graph-island-legend-followup-scope.md`.)
 - **Pulse Effects**: Recently saved notes "pulse" or glow brighter, creating a sense of a living, breathing system.
 
 ### 3. Functional Power-Ups

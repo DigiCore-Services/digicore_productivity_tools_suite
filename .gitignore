@@ -8,6 +8,9 @@
 # Local scratch (not versioned)
 digicore/tmp/
 
+# Large generated KMS stress-test vault (local only)
+digicore/kms-test-vault/
+
 # Caches and internal data
 **/.fastembed_cache/
 **/.vite/
